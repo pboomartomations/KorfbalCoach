@@ -297,14 +297,19 @@ export default function App() {
   // UI ----------------------------------------------------------------------
   return (
     <div className="p-3 md:p-6 max-w-5xl mx-auto">
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
-        <h1 className="text-2xl font-bold">Korfbal Coach</h1>
-        <div className="flex flex-wrap gap-2">
-          <button className="px-3 py-2 border rounded-xl" onClick={exportCSV}>Export CSV</button>
-          <button className="px-3 py-2 border rounded-xl" onClick={leegLog}>Log leegmaken</button>
-          <button className="px-3 py-2 border rounded-xl" onClick={resetAlles}>Reset alles</button>
-        </div>
-      </header>
+    {/* ✅ tijdelijke test: moet grijs+rood tonen als Tailwind actief is */}
+    <div className="p-3 bg-gray-100 rounded-xl text-red-500 mb-4">
+      Tailwind actief?
+    </div>
+
+    <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+      <h1 className="text-2xl font-bold">Korfbal Coach</h1>
+      <div className="flex flex-wrap gap-2">
+        <button className="px-3 py-2 border rounded-xl" onClick={exportCSV}>Export CSV</button>
+        <button className="px-3 py-2 border rounded-xl" onClick={leegLog}>Log leegmaken</button>
+        <button className="px-3 py-2 border rounded-xl" onClick={resetAlles}>Reset alles</button>
+      </div>
+    </header>
 
       {/* Tabs */}
       <div className="flex gap-2 mb-4">
