@@ -1,5 +1,38 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+// --- Herbruikbare Button component -----------------------------------------
+type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "secondary" | "ghost" | "danger";
+  size?: "sm" | "md";
+};
+
+function Button({
+  variant = "secondary",
+  size = "md",
+  className = "",
+  ...props
+}: ButtonProps) {
+  const base =
+    "inline-flex items-center justify-center rounded-xl font-medium transition active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-offset-2";
+  const sizes = {
+    sm: "px-2 py-1 text-sm",
+    md: "px-3 py-2 text-base",
+  } as const;
+  const variants = {
+    primary:
+      "bg-blue-600 text-white hover:bg-blue-700 border border-transparent focus:ring-blue-600",
+    secondary:
+      "bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 focus:ring-gray-300",
+    ghost:
+      "border border-transparent text-gray-700 hover:bg-gray-100 focus:ring-gray-300",
+    danger:
+      "bg-red-600 text-white hover:bg-red-700 border border-transparent focus:ring-red-600",
+  } as const;
+
+  const cls = `${base} ${sizes[size]} ${variants[variant]} ${className}`;
+  return <button className={cls} {...props} />;
+}
+
 // =============================================================
 // Korfbal Coach – volledige TSX app (tabs + vakindeling + wedstrijd)
 // =============================================================
@@ -78,6 +111,34 @@ function uid(prefix = "id") {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function encodeStateForShare(s: AppState): string {
+  const json = JSON.stringify(s);
+  // veilig encoden voor in een URL
+  return encodeURIComponent(btoa(json));
+}
+
+function decodeStateFromShare(encoded: string): AppState | null {
+  try {
+    const json = atob(decodeURIComponent(encoded));
+    const raw = JSON.parse(json);
+    return sanitizeState(raw);
+  } catch {
+    return null;
+  }
+}
+
+function getSharedStateFromUrl(): AppState | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const encoded = params.get("s");
+    if (!encoded) return null;
+    return decodeStateFromShare(encoded);
+  } catch {
+    return null;
+  }
+}
+
+
 // -- Hydration/migratie helper: maak opgeslagen state veilig en compleet
 function sanitizeState(raw: any): AppState {
   const s: Partial<AppState> = typeof raw === "object" && raw ? raw : {};
@@ -103,10 +164,17 @@ function sanitizeState(raw: any): AppState {
 // --- Main component --------------------------------------------------------
 export default function App() {
   const [state, setState] = useState<AppState>(() => {
+    // 1. eerst kijken of er een gedeelde state in de URL zit
+    const shared = getSharedStateFromUrl();
+    if (shared) return shared;
+  
+    // 2. anders uit localStorage
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) return sanitizeState(JSON.parse(raw));
     } catch {}
+  
+    // 3. anders default
     return { ...DEFAULT_STATE };
   });
 
@@ -298,14 +366,43 @@ export default function App() {
   return (
     <div className="p-3 md:p-6 max-w-5xl mx-auto">
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+        <img
+        src="/korbis.png"
+        alt="Korfbal Coach logo"
+        className="h-10 w-10 rounded-xl object-contain"
+        />
         <h1 className="text-2xl font-bold">Korfbal Coach</h1>
         <div className="flex flex-wrap gap-2">
-          <button className="px-3 py-2 border rounded-xl" onClick={exportCSV}>Export CSV</button>
-          <button className="px-3 py-2 border rounded-xl" onClick={leegLog}>Log leegmaken</button>
-          <button className="px-3 py-2 border rounded-xl" onClick={resetAlles}>Reset alles</button>
-        </div>
-      </header>
+        <div className="flex flex-wrap gap-2">
+      <Button
+        variant="secondary"
+        onClick={() => {
+          try {
+            const encoded = encodeStateForShare(state);
+            const url = `${window.location.origin}${window.location.pathname}?s=${encoded}`;
+            if (navigator.clipboard?.writeText) {
+              navigator.clipboard.writeText(url);
+              alert("Deel-link gekopieerd naar je klembord ✅");
+            } else {
+              // fallback: toon link in prompt
+              prompt("Kopieer deze link:", url);
+            }
+          } catch (e) {
+            console.error(e);
+            alert("Het lukt niet om een deel-link te maken 😅");
+          }
+        }}
+      >
+        Deel wedstrijd
+      </Button>
+    
+      <Button variant="secondary" onClick={exportCSV}>Export CSV</Button>
+      <Button variant="danger" onClick={leegLog}>Log leegmaken</Button>
+      <Button variant="danger" onClick={resetAlles}>Reset alles</Button>
+    </div>
+    </div>
 
+      </header>
       {/* Tabs */}
       <div className="flex gap-2 mb-4">
         {([
@@ -315,7 +412,7 @@ export default function App() {
         ] as const).map((t) => (
           <button
             key={t.id}
-            className={`px-3 py-2 rounded-xl border ${tab === t.id ? "bg-gray-100" : ""}`}
+            className={`px-3 py-2 rounded-xl border ${tab === t.id ? "bg-blue-100" : ""}`}
             onClick={() => setTab(t.id)}
           >
             {t.label}
@@ -432,8 +529,8 @@ function VakindelingTab({ spelers, toegewezen, aanval, verdediging, setVakPos, w
   const beschikbare = spelers.filter((s) => !toegewezen.has(s.id));
   return (
     <div className="grid md:grid-cols-2 gap-4">
-      <VakBox titel="Aanvallend vak" vak="aanvallend" posities={aanval} setVakPos={setVakPos} spelers={spelers} />
-      <VakBox titel="Verdedigend vak" vak="verdedigend" posities={verdediging} setVakPos={setVakPos} spelers={spelers} />
+      <VakBox titel="Aanvallend vak" vak="aanvallend" posities={aanval} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
+      <VakBox titel="Verdedigend vak" vak="verdedigend" posities={verdediging} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
       <div className="md:col-span-2 flex items-center justify-between mt-2">
         <div className="text-sm text-gray-600">Bank: {beschikbare.map((s) => s.naam).join(", ") || "—"}</div>
         <button className="px-3 py-2 border rounded-xl" onClick={wisselVakken}>Vakken wisselen</button>
@@ -442,32 +539,73 @@ function VakindelingTab({ spelers, toegewezen, aanval, verdediging, setVakPos, w
   );
 }
 
-function VakBox({ titel, vak, posities, setVakPos, spelers }: {
+function VakBox({
+  titel,
+  vak,
+  posities,
+  setVakPos,
+  spelers,
+  toegewezen,
+}: {
   titel: string;
   vak: VakSide;
   posities: (string | null)[];
   setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
   spelers: Player[];
+  toegewezen: Set<string>;
 }) {
+  // bepaal welke spelers in dit vak staan
+  const spelersInVak = posities
+    .map((id) => spelers.find((s) => s.id === id))
+    .filter((x): x is Player => Boolean(x));
+
+  const dames = spelersInVak.filter((p) => p.geslacht === "Dame").length;
+  const heren = spelersInVak.filter((p) => p.geslacht === "Heer").length;
+
+  const isValid = dames === 2 && heren === 2;
+  const boxBorder = isValid ? "border-gray-200" : "border-red-500";
+  const titleColor = isValid ? "text-gray-900" : "text-red-600";
+
   return (
-    <div className="border rounded-2xl p-4">
-      <div className="font-semibold mb-3">{titel}</div>
+    <div className={`border rounded-2xl p-4 ${boxBorder}`}>
+      <div className={`font-semibold mb-1 ${titleColor}`}>{titel}</div>
+      {!isValid && (
+        <div className="text-xs text-red-600 mb-2">
+          Let op: dit vak heeft geen 2 dames en 2 heren (nu {dames} dames, {heren} heren).
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {posities.map((spelerId, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className="w-8 text-sm text-gray-500">{i + 1}.</div>
-            <select className="w-full border rounded-lg p-2" value={spelerId || ""} onChange={(e) => setVakPos(vak, i, e.target.value || null)}>
-              <option value="">— Kies speler —</option>
-              {spelers.map((s) => (
-                <option key={s.id} value={s.id}>{s.naam} ({s.geslacht})</option>
-              ))}
-            </select>
-          </div>
-        ))}
+        {posities.map((spelerId, i) => {
+          const currentId = spelerId || undefined;
+          const opties = spelers.filter(
+            (s) => !toegewezen.has(s.id) || s.id === currentId
+          );
+          return (
+            <div key={i} className="flex items-center gap-2">
+              <div className="w-8 text-sm text-gray-500">{i + 1}.</div>
+              <select
+                className={`w-full border rounded-lg p-2 ${
+                  isValid ? "" : "border-red-400"
+                }`}
+                value={spelerId || ""}
+                onChange={(e) => setVakPos(vak, i, e.target.value || null)}
+              >
+                <option value="">— Kies speler —</option>
+                {opties.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.naam} ({s.geslacht})
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
+
 
 // --- Wedstrijd Tab ---------------------------------------------------------
 function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, bank, setVakPos, toggleKlok, resetKlok }: {
@@ -483,6 +621,7 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
 }) {
   const circle = (id: string | null, vak: VakSide, i: number) => {
     const p = id ? spelersMap.get(id) : undefined;
+    const detailsRef = useRef<HTMLDetailsElement | null>(null);
     return (
       <div key={`${vak}-${i}`} className="flex items-center gap-2">
         <div className="w-12 h-12 rounded-full border overflow-hidden flex items-center justify-center bg-gray-50">
@@ -498,15 +637,31 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
         </div>
         {/* Wisselknop */}
         <div className="relative">
-          <details className="cursor-pointer">
+        <details className="cursor-pointer" ref={detailsRef}>
             <summary className="list-none px-2 py-1 border rounded-lg text-sm">⇄ Wissel</summary>
             <div className="absolute right-0 mt-1 z-10 bg-white border rounded-xl p-2 w-56 max-h-64 overflow-auto shadow">
-              <button className="w-full text-left text-sm p-1 hover:bg-gray-50 rounded" onClick={() => setVakPos(vak, i, null)}>Leeg maken</button>
+              <button
+                className="w-full text-left text-sm p-1 hover:bg-gray-50 rounded"
+                onClick={() => {
+                  setVakPos(vak, i, null);
+                  detailsRef.current?.removeAttribute("open");
+                }}
+>
+                Leeg maken
+              </button>
+
               {bank.map((b) => (
-                <button key={b.id} className="w-full text-left text-sm p-1 hover:bg-gray-50 rounded" onClick={() => setVakPos(vak, i, b.id)}>
-                  {b.naam}
-                </button>
-              ))}
+                <button
+                  key={b.id}
+                  className="w-full text-left text-sm p-1 hover:bg-gray-50 rounded"
+                  onClick={() => {
+                  setVakPos(vak, i, b.id);
+                  detailsRef.current?.removeAttribute("open");
+                }}
+  >
+                {b.naam}
+              </button>
+            ))}
             </div>
           </details>
         </div>
@@ -514,74 +669,196 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
     );
   };
 
+  const countGeslachtInVak = (ids: (string | null)[]) => {
+    let dames = 0;
+    let heren = 0;
+    ids.forEach((id) => {
+      if (!id) return;
+      const p = spelersMap.get(id);
+      if (!p) return;
+      if (p.geslacht === "Dame") dames++;
+      if (p.geslacht === "Heer") heren++;
+    });
+    return { dames, heren };
+  };
+
+  const aanvCounts = countGeslachtInVak(state.aanval);
+  const verdCounts = countGeslachtInVak(state.verdediging);
+  const aanvValid = aanvCounts.dames === 2 && aanvCounts.heren === 2;
+  const verdValid = verdCounts.dames === 2 && verdCounts.heren === 2;
+
   const resterend = Math.max(((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) - state.tijdSeconden, 0);
 
   return (
     <div className="space-y-4">
       {/* Score + tijd + controls */}
       <div className="border rounded-2xl p-4">
-        <div className="flex flex-wrap items-center gap-3 justify-between">
-          <div>
-            <div className="text-2xl font-bold">{formatTime(resterend)}</div>
-            <div className="text-xs text-gray-500">Verstreken: {formatTime(state.tijdSeconden)}</div>
-          </div>
-          <div className="flex gap-2 items-center">
-            {!state.klokLoopt ? (
-              <button className="px-3 py-2 border rounded-xl" onClick={() => toggleKlok(true)}>Start</button>
-            ) : (
-              <button className="px-3 py-2 border rounded-xl" onClick={() => toggleKlok(false)}>Pauze</button>
-            )}
-            <button className="px-3 py-2 border rounded-xl" onClick={resetKlok}>Reset</button>
-            <div className="flex items-center gap-1 ml-2">
-              <span className="text-sm text-gray-600">Duur:</span>
-              <button className="px-2 py-1 border rounded" disabled={state.klokLoopt} onClick={() => setState(s => { const hm = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten; return {...s, halfMinuten: Math.max(1, hm - 1)}; })}>−</button>
-              <div className="w-10 text-center">{Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten}</div>
-              <button className="px-2 py-1 border rounded" disabled={state.klokLoopt} onClick={() => setState(s => { const hm = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten; return {...s, halfMinuten: Math.min(60, hm + 1)}; })}>+</button>
-              <span className="text-sm text-gray-600">min</span>
+        {/* Kolomlayout: tijd/duur boven, score eronder */}
+        <div className="flex flex-col gap-4">
+  
+          {/* Tijd + duur + start/pauze */}
+          <div className="flex flex-wrap items-center gap-3 justify-between">
+            <div>
+              <div className="text-2xl font-bold">{formatTime(resterend)}</div>
+              <div className="text-xs text-gray-500">
+                Verstreken: {formatTime(state.tijdSeconden)}
+              </div>
+            </div>
+  
+            <div className="flex gap-2 items-center">
+              {!state.klokLoopt ? (
+                <Button variant="primary" onClick={() => toggleKlok(true)}>
+                  Start
+                </Button>
+              ) : (
+                <Button variant="primary" onClick={() => toggleKlok(false)}>
+                  Pauze
+                </Button>
+              )}
+              <Button variant="secondary" onClick={resetKlok}>Reset</Button>
+  
+              <div className="flex items-center gap-2 ml-2">
+                <div className="text-lg">Duur</div>
+                <Button
+                  size="md"
+                  disabled={state.klokLoopt}
+                  onClick={() => setState(s => {
+                    const hm = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten;
+                    return { ...s, halfMinuten: Math.max(1, hm - 1) };
+                  })}
+                >−</Button>
+                <div className="w-10 text-center">
+                  {Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten}
+                </div>
+                <Button
+                  size="md"
+                  disabled={state.klokLoopt}
+                  onClick={() => setState(s => {
+                    const hm = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten;
+                    return { ...s, halfMinuten: Math.min(60, hm + 1) };
+                  })}
+                >+</Button>
+                <div className="text-lg">Minuten</div>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="text-lg">Thuis</div>
-            <button className="px-2 py-1 border rounded-lg" onClick={() => setState((s) => ({ ...s, scoreThuis: Math.max(0, s.scoreThuis - 1) }))}>-</button>
-            <div className="text-2xl font-bold w-10 text-center">{state.scoreThuis}</div>
-            <button className="px-2 py-1 border rounded-lg" onClick={() => setState((s) => ({ ...s, scoreThuis: s.scoreThuis + 1 }))}>+</button>
+  
+          {/* Scoresectie (gekleurde kaarten) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* THUIS */}
+            <div className="rounded-2xl border bg-blue-50 p-4">
+              <div className="flex items-center gap-3 justify-between">
+                <div className="text-lg font-semibold text-blue-800">Thuis</div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="md"
+                    onClick={() => setState(s => ({ ...s, scoreThuis: Math.max(0, s.scoreThuis - 1) }))}
+                  >-</Button>
+                  <div className="text-3xl font-extrabold w-12 text-center text-blue-900">
+                    {state.scoreThuis}
+                  </div>
+                  <Button
+                    size="md"
+                    onClick={() => setState(s => ({ ...s, scoreThuis: s.scoreThuis + 1 }))}
+                  >+</Button>
+                </div>
+              </div>
+            </div>
+  
+            {/* UIT */}
+            <div className="rounded-2xl border bg-amber-50 p-4">
+              <div className="flex items-center gap-3 justify-between">
+                <div className="text-lg font-semibold text-amber-800">Uit</div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="md"
+                    onClick={() => setState(s => ({ ...s, scoreUit: Math.max(0, s.scoreUit - 1) }))}
+                  >-</Button>
+                  <div className="text-3xl font-extrabold w-12 text-center text-amber-900">
+                    {state.scoreUit}
+                  </div>
+                  <Button
+                    size="md"
+                    onClick={() => setState(s => ({ ...s, scoreUit: s.scoreUit + 1 }))}
+                  >+</Button>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="text-lg">Uit</div>
-            <button className="px-2 py-1 border rounded-lg" onClick={() => setState((s) => ({ ...s, scoreUit: Math.max(0, s.scoreUit - 1) }))}>-</button>
-            <div className="text-2xl font-bold w-10 text-center">{state.scoreUit}</div>
-            <button className="px-2 py-1 border rounded-lg" onClick={() => setState((s) => ({ ...s, scoreUit: s.scoreUit + 1 }))}>+</button>
-          </div>
+  
         </div>
       </div>
+  
 
       {/* Vakken */}
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="border rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="font-semibold">Aanvallend vak</div>
-            <div className="flex gap-2">
-              <button className="px-3 py-1 border rounded-lg" onClick={() => setPopup({ vak: "aanvallend", soort: "Gemis" })}>Gemis</button>
-              <button className="px-3 py-1 border rounded-lg" onClick={() => setPopup({ vak: "aanvallend", soort: "Kans" })}>Kans</button>
+          <div className={`rounded-2xl p-4 border ${aanvValid ? "border-gray-200" : "border-red-500"}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`font-semibold ${aanvValid ? "" : "text-red-600"}`}>
+                Aanvallend vak
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="md"
+                  variant={aanvValid ? "secondary" : "danger"}
+                  onClick={() => setPopup({ vak: "aanvallend", soort: "Gemis" })}
+                >
+                  Gemis
+                </Button>
+                <Button
+                  size="md"
+                  variant={aanvValid ? "secondary" : "danger"}
+                  onClick={() => setPopup({ vak: "aanvallend", soort: "Kans" })}
+                >
+                  Kans
+                </Button>
+              </div>
+            </div>
+        
+            {!aanvValid && (
+              <div className="text-xs text-red-600 mb-2">
+                Let op: dit vak heeft geen 2 dames en 2 heren (nu {aanvCounts.dames} dames, {aanvCounts.heren} heren).
+              </div>
+            )}
+        
+            <div className="space-y-3">
+              {state.aanval.map((id, i) => circle(id, "aanvallend", i))}
             </div>
           </div>
-          <div className="space-y-3">
-            {state.aanval.map((id, i) => circle(id, "aanvallend", i))}
-          </div>
-        </div>
 
-        <div className="border rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="font-semibold">Verdedigend vak</div>
-            <div className="flex gap-2">
-              <button className="px-3 py-1 border rounded-lg" onClick={() => setPopup({ vak: "verdedigend", soort: "Gemis" })}>Gemis</button>
-              <button className="px-3 py-1 border rounded-lg" onClick={() => setPopup({ vak: "verdedigend", soort: "Kans" })}>Kans</button>
-            </div>
+          <div className={`rounded-2xl p-4 border ${verdValid ? "border-gray-200" : "border-red-500"}`}>
+        <div className="flex items-center justify-between mb-2">
+          <div className={`font-semibold ${verdValid ? "" : "text-red-600"}`}>
+            Verdedigend vak
           </div>
-          <div className="space-y-3">
-            {state.verdediging.map((id, i) => circle(id, "verdedigend", i))}
+          <div className="flex gap-2">
+            <Button
+              size="md"
+              variant={verdValid ? "secondary" : "danger"}
+              onClick={() => setPopup({ vak: "verdedigend", soort: "Gemis" })}
+            >
+              Gemis
+            </Button>
+            <Button
+              size="md"
+              variant={verdValid ? "secondary" : "danger"}
+              onClick={() => setPopup({ vak: "verdedigend", soort: "Kans" })}
+            >
+              Kans
+            </Button>
           </div>
         </div>
+      
+        {!verdValid && (
+          <div className="text-xs text-red-600 mb-2">
+            Let op: dit vak heeft geen 2 dames en 2 heren (nu {verdCounts.dames} dames, {verdCounts.heren} heren).
+          </div>
+        )}
+      
+        <div className="space-y-3">
+          {state.verdediging.map((id, i) => circle(id, "verdedigend", i))}
+        </div>
+      </div>
       </div>
 
       <div className="flex items-center justify-between">
