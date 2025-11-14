@@ -413,6 +413,7 @@ export default function App() {
       spelerId,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
+      team, 
       // vak bewust leeg
     };
 
