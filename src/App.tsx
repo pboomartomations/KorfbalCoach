@@ -72,6 +72,7 @@ type LogEvent = {
   vak?: VakSide;
   soort: "Gemis" | "Kans" | "Wissel" | "Balbezit";
   reden: LogReden;
+  team?: "thuis" | "uit";   // 🔵 voeg deze toe
   spelerId?: string;
   resterendSeconden?: number;
   wedstrijdMinuut?: number; // ceil(verstreken_s / 60), min 1
