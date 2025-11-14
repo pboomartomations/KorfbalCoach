@@ -54,19 +54,23 @@ type Player = { id: string; naam: string; geslacht: Geslacht; foto?: string };
 type VakSide = "aanvallend" | "verdedigend";
 
 type LogReden =
-  | "Bal onderschept"
-  | "Bal uit"
-  | "overtreding"
-  | "Doorgelaten"
-  | "Gescoord"
-  | "Wissel in"
-  | "Wissel uit";
+| "Bal onderschept"
+| "Bal uit"
+| "overtreding"
+| "Doorgelaten"
+| "Gescoord"
+| "Wissel in"
+| "Wissel uit"
+| "Onderschept"
+| "Doelpunt tegen"
+| "Vrijebal"
+| "Strafworp";
 
 type LogEvent = {
   id: string;
   tijdSeconden: number; // verstreken tijd
-  vak: VakSide;
-  soort: "Gemis" | "Kans" | "Wissel";
+  vak?: VakSide;
+  soort: "Gemis" | "Kans" | "Wissel" | "Balbezit";
   reden: LogReden;
   spelerId?: string;
   resterendSeconden?: number;
@@ -84,6 +88,11 @@ type AppState = {
   klokLoopt: boolean;
   halfMinuten: number; // duur helft in minuten
   log: LogEvent[];
+
+  // ✅ nieuw:
+  possessionOwner: "thuis" | "uit" | null;
+  possessionThuisSeconden: number;
+  possessionUitSeconden: number;
 };
 
 const DEFAULT_STATE: AppState = {
@@ -96,6 +105,11 @@ const DEFAULT_STATE: AppState = {
   klokLoopt: false,
   halfMinuten: 25,
   log: [],
+
+  // ✅ nieuw:
+  possessionOwner: null,
+  possessionThuisSeconden: 0,
+  possessionUitSeconden: 0,
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
@@ -158,46 +172,81 @@ function sanitizeState(raw: any): AppState {
     klokLoopt: bool((s as any).klokLoopt, DEFAULT_STATE.klokLoopt),
     halfMinuten: num((s as any).halfMinuten, DEFAULT_STATE.halfMinuten),
     log: Array.isArray((s as any).log) ? ((s as any).log as LogEvent[]) : [],
+
+
+    // ✅ nieuw:
+    possessionOwner:
+      (s as any).possessionOwner === "thuis" || (s as any).possessionOwner === "uit"
+        ? (s as any).possessionOwner
+        : null,
+    possessionThuisSeconden: num(
+      (s as any).possessionThuisSeconden,
+      DEFAULT_STATE.possessionThuisSeconden
+    ),
+    possessionUitSeconden: num(
+      (s as any).possessionUitSeconden,
+      DEFAULT_STATE.possessionUitSeconden
+    ),
   };
 }
 
 // --- Main component --------------------------------------------------------
+
 export default function App() {
   const [state, setState] = useState<AppState>(() => {
     // 1. eerst kijken of er een gedeelde state in de URL zit
     const shared = getSharedStateFromUrl();
     if (shared) return shared;
-  
+
     // 2. anders uit localStorage
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) return sanitizeState(JSON.parse(raw));
     } catch {}
-  
+
     // 3. anders default
     return { ...DEFAULT_STATE };
   });
 
   const [tab, setTab] = useState<"spelers" | "vakken" | "wedstrijd">("spelers");
   const [popup, setPopup] = useState<null | { vak: VakSide; soort: "Gemis" | "Kans" }>(null);
+  const [possPopup, setPossPopup] = useState<null | { team: "thuis" | "uit" }>(null);
 
   // Persist
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {}
   }, [state]);
 
-  // Timer (intern: op-tellen; UI toont resterend)
+  // Timer (intern: op-tellen; UI toont resterend) + balbezit
   const intervalRef = useRef<number | null>(null);
   useEffect(() => {
     if (state.klokLoopt && intervalRef.current === null) {
       intervalRef.current = window.setInterval(() => {
         setState((s) => {
-          const total = (Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
+          const total =
+            (Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
           const next = s.tijdSeconden + 1;
+
+          const updated: AppState = { ...s };
+
+          // tijd bijwerken
           if (next >= total) {
-            return { ...s, tijdSeconden: total, klokLoopt: false };
+            updated.tijdSeconden = total;
+            updated.klokLoopt = false;
+          } else {
+            updated.tijdSeconden = next;
           }
-          return { ...s, tijdSeconden: next };
+
+          // balbezit-tijd ophogen
+          if (s.possessionOwner === "thuis") {
+            updated.possessionThuisSeconden = (updated.possessionThuisSeconden ?? 0) + 1;
+          } else if (s.possessionOwner === "uit") {
+            updated.possessionUitSeconden = (updated.possessionUitSeconden ?? 0) + 1;
+          }
+
+          return updated;
         });
       }, 1000) as unknown as number;
     }
@@ -215,6 +264,13 @@ export default function App() {
     state.spelers.forEach((p) => m.set(p.id, p));
     return m;
   }, [state.spelers]);
+
+  const veldSpelers = useMemo(() => {
+    const ids = new Set<string>();
+    state.aanval.forEach((id) => id && ids.add(id));
+    state.verdediging.forEach((id) => id && ids.add(id));
+    return state.spelers.filter((p) => ids.has(p.id));
+  }, [state.spelers, state.aanval, state.verdediging]);
 
   const toegewezenIds = useMemo(
     () =>
@@ -249,8 +305,13 @@ export default function App() {
       arr[pos] = spelerId;
 
       const logs: LogEvent[] = [];
-      const resterend = Math.max(((Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) - s.tijdSeconden, 0);
+      const resterend = Math.max(
+        ((Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) -
+          s.tijdSeconden,
+        0
+      );
       const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
+
       if (prevId && prevId !== spelerId) {
         logs.push({
           id: uid("ev"),
@@ -283,13 +344,33 @@ export default function App() {
     });
   };
 
-  const wisselVakken = () => setState((s) => ({ ...s, aanval: s.verdediging, verdediging: s.aanval }));
+  const wisselVakken = () =>
+    setState((s) => ({ ...s, aanval: s.verdediging, verdediging: s.aanval }));
 
   const toggleKlok = (aan: boolean) => setState((s) => ({ ...s, klokLoopt: aan }));
-  const resetKlok = () => setState((s) => ({ ...s, tijdSeconden: 0, klokLoopt: false }));
 
-  const logEvent = (vak: VakSide, soort: "Gemis" | "Kans" | "Wissel", reden: LogReden, spelerId?: string) => {
-    const resterend = Math.max(((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) - state.tijdSeconden, 0);
+  const resetKlok = () =>
+    setState((s) => ({
+      ...s,
+      tijdSeconden: 0,
+      klokLoopt: false,
+      possessionOwner: null,
+      possessionThuisSeconden: 0,
+      possessionUitSeconden: 0,
+    }));
+
+  // 🔹 LOSSE functie voor gewone Gemis/Kans/Wissel events
+  const logEvent = (
+    vak: VakSide,
+    soort: "Gemis" | "Kans" | "Wissel",
+    reden: LogReden,
+    spelerId?: string
+  ) => {
+    const resterend = Math.max(
+      ((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) -
+        state.tijdSeconden,
+      0
+    );
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
     const e: LogEvent = {
       id: uid("ev"),
@@ -304,10 +385,40 @@ export default function App() {
 
     setState((s) => {
       const next: AppState = { ...s, log: [e, ...s.log] };
-      if (soort === "Kans" && vak === "aanvallend" && reden === "Gescoord") next.scoreThuis = s.scoreThuis + 1;
-      if (soort === "Gemis" && vak === "verdedigend" && reden === "Doorgelaten") next.scoreUit = s.scoreUit + 1;
+      if (soort === "Kans" && vak === "aanvallend" && reden === "Gescoord") {
+        next.scoreThuis = s.scoreThuis + 1;
+      }
+      if (soort === "Gemis" && vak === "verdedigend" && reden === "Doorgelaten") {
+        next.scoreUit = s.scoreUit + 1;
+      }
       return next;
     });
+  };
+
+  // 🔹 LOSSE functie voor Balbezit-events (GEEN vak)
+  const logBalbezit = (team: "thuis" | "uit", reden: LogReden, spelerId?: string) => {
+    const halfMinuten = Number.isFinite(state.halfMinuten)
+      ? state.halfMinuten
+      : DEFAULT_STATE.halfMinuten;
+    const totalSeconds = halfMinuten * 60;
+    const resterend = Math.max(totalSeconds - state.tijdSeconden, 0);
+    const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+
+    const e: LogEvent = {
+      id: uid("ev"),
+      tijdSeconden: state.tijdSeconden,
+      soort: "Balbezit",
+      reden,
+      spelerId,
+      resterendSeconden: resterend,
+      wedstrijdMinuut: minuut,
+      // vak bewust leeg
+    };
+
+    setState((s) => ({
+      ...s,
+      log: [e, ...s.log],
+    }));
   };
 
   const exportCSV = () => {
@@ -330,9 +441,16 @@ export default function App() {
         .map((e) => [
           e.id,
           formatTime(e.tijdSeconden),
-          formatTime(e.resterendSeconden ?? Math.max(((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) - e.tijdSeconden, 0)),
+          formatTime(
+            e.resterendSeconden ??
+              Math.max(
+                ((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) -
+                  e.tijdSeconden,
+                0
+              )
+          ),
           e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
-          e.vak,
+          e.vak ?? "",
           e.soort,
           e.reden,
           e.pos ?? "",
@@ -340,6 +458,9 @@ export default function App() {
           e.spelerId ? spelersMap.get(e.spelerId)?.naam || "" : "",
         ]),
     ];
+
+
+
     const escapeCSV = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
     const csv = rows.map((r) => r.map(escapeCSV).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -446,6 +567,7 @@ export default function App() {
           setVakPos={setVakPos}
           toggleKlok={toggleKlok}
           resetKlok={resetKlok}
+          openPossessionModal={(team) => setPossPopup({ team })}
         />
       )}
 
@@ -458,6 +580,17 @@ export default function App() {
           onChoose={(reden, spelerId) => {
             logEvent(popup.vak, popup.soort, reden, spelerId);
             setPopup(null);
+          }}
+        />
+      )}
+      {possPopup && (
+        <PossessionModal
+          team={possPopup.team}
+          spelers={veldSpelers}
+          onClose={() => setPossPopup(null)}
+          onSave={(reden, spelerId) => {
+            logBalbezit(possPopup.team, reden, spelerId);
+            setPossPopup(null);
           }}
         />
       )}
@@ -608,7 +741,18 @@ function VakBox({
 
 
 // --- Wedstrijd Tab ---------------------------------------------------------
-function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, bank, setVakPos, toggleKlok, resetKlok }: {
+function WedstrijdTab({
+  state,
+  setState,
+  spelersMap,
+  setPopup,
+  wisselVakken,
+  bank,
+  setVakPos,
+  toggleKlok,
+  resetKlok,
+  openPossessionModal,
+}: {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
   spelersMap: Map<string, Player>;
@@ -618,27 +762,35 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
   setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
   toggleKlok: (aan: boolean) => void;
   resetKlok: () => void;
+  openPossessionModal: (team: "thuis" | "uit") => void;
 }) {
   const circle = (id: string | null, vak: VakSide, i: number) => {
     const p = id ? spelersMap.get(id) : undefined;
+    // let op: dit is technisch een hook-in-hook, maar als je IDE niet klaagt laten we hem nu zo
     const detailsRef = useRef<HTMLDetailsElement | null>(null);
+
     return (
       <div key={`${vak}-${i}`} className="flex items-center gap-2">
         <div className="w-12 h-12 rounded-full border overflow-hidden flex items-center justify-center bg-gray-50">
           {p?.foto ? (
             <img src={p.foto} alt={p.naam} className="w-full h-full object-cover" />
           ) : (
-            <span className="text-sm p-2 text-center">{p?.naam?.slice(0, 2) || "?"}</span>
+            <span className="text-sm p-2 text-center">
+              {p?.naam?.slice(0, 2) || "?"}
+            </span>
           )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="font-medium truncate">{p?.naam || "Leeg"}</div>
           <div className="text-xs text-gray-500">Positie {i + 1}</div>
         </div>
+
         {/* Wisselknop */}
         <div className="relative">
-        <details className="cursor-pointer" ref={detailsRef}>
-            <summary className="list-none px-2 py-1 border rounded-lg text-sm">⇄ Wissel</summary>
+          <details className="cursor-pointer" ref={detailsRef}>
+            <summary className="list-none px-2 py-1 border rounded-lg text-sm">
+              ⇄ Wissel
+            </summary>
             <div className="absolute right-0 mt-1 z-10 bg-white border rounded-xl p-2 w-56 max-h-64 overflow-auto shadow">
               <button
                 className="w-full text-left text-sm p-1 hover:bg-gray-50 rounded"
@@ -646,7 +798,7 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
                   setVakPos(vak, i, null);
                   detailsRef.current?.removeAttribute("open");
                 }}
->
+              >
                 Leeg maken
               </button>
 
@@ -655,13 +807,13 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
                   key={b.id}
                   className="w-full text-left text-sm p-1 hover:bg-gray-50 rounded"
                   onClick={() => {
-                  setVakPos(vak, i, b.id);
-                  detailsRef.current?.removeAttribute("open");
-                }}
-  >
-                {b.naam}
-              </button>
-            ))}
+                    setVakPos(vak, i, b.id);
+                    detailsRef.current?.removeAttribute("open");
+                  }}
+                >
+                  {b.naam}
+                </button>
+              ))}
             </div>
           </details>
         </div>
@@ -687,184 +839,327 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
   const aanvValid = aanvCounts.dames === 2 && aanvCounts.heren === 2;
   const verdValid = verdCounts.dames === 2 && verdCounts.heren === 2;
 
-  const resterend = Math.max(((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) - state.tijdSeconden, 0);
+  const resterend = Math.max(
+    (
+      (Number.isFinite(state.halfMinuten)
+        ? state.halfMinuten
+        : DEFAULT_STATE.halfMinuten) * 60
+    ) - state.tijdSeconden,
+    0
+  );
+
+  const totaalPoss =
+    state.possessionThuisSeconden + state.possessionUitSeconden;
+
+  const possThuis =
+    totaalPoss > 0
+      ? Math.round((state.possessionThuisSeconden / totaalPoss) * 100)
+      : 0;
+  const possUit =
+    totaalPoss > 0
+      ? Math.round((state.possessionUitSeconden / totaalPoss) * 100)
+      : 0;
 
   return (
     <div className="space-y-4">
       {/* Score + tijd + controls */}
       <div className="border rounded-2xl p-4">
-        {/* Kolomlayout: tijd/duur boven, score eronder */}
+        {/* Kolomlayout: tijd/duur boven, dan balbezit, dan score */}
         <div className="flex flex-col gap-4">
-  
           {/* Tijd + duur + start/pauze */}
-          <div className="flex flex-wrap items-center gap-3 justify-between">
+          <div className="flex flex-wrap items-start gap-3 justify-between">
+            {/* Tijd */}
             <div>
               <div className="text-2xl font-bold">{formatTime(resterend)}</div>
               <div className="text-xs text-gray-500">
                 Verstreken: {formatTime(state.tijdSeconden)}
               </div>
             </div>
-  
-            <div className="flex gap-2 items-center">
-              {!state.klokLoopt ? (
-                <Button variant="primary" onClick={() => toggleKlok(true)}>
-                  Start
+
+            {/* Knoppen + duur */}
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex gap-2 items-center">
+                {!state.klokLoopt ? (
+                  <Button variant="primary" onClick={() => toggleKlok(true)}>
+                    Start
+                  </Button>
+                ) : (
+                  <Button variant="primary" onClick={() => toggleKlok(false)}>
+                    Pauze
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={resetKlok}>
+                  Reset
                 </Button>
-              ) : (
-                <Button variant="primary" onClick={() => toggleKlok(false)}>
-                  Pauze
-                </Button>
-              )}
-              <Button variant="secondary" onClick={resetKlok}>Reset</Button>
-  
-              <div className="flex items-center gap-2 ml-2">
-                <div className="text-lg">Duur</div>
-                <Button
-                  size="md"
-                  disabled={state.klokLoopt}
-                  onClick={() => setState(s => {
-                    const hm = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten;
-                    return { ...s, halfMinuten: Math.max(1, hm - 1) };
-                  })}
-                >−</Button>
-                <div className="w-10 text-center">
-                  {Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten}
+
+                <div className="flex items-center gap-2 ml-2">
+                  <div className="text-lg">Duur</div>
+                  <Button
+                    size="md"
+                    disabled={state.klokLoopt}
+                    onClick={() =>
+                      setState((s) => {
+                        const hm = Number.isFinite(s.halfMinuten)
+                          ? s.halfMinuten
+                          : DEFAULT_STATE.halfMinuten;
+                        return { ...s, halfMinuten: Math.max(1, hm - 1) };
+                      })
+                    }
+                  >
+                    −
+                  </Button>
+                  <div className="w-10 text-center">
+                    {Number.isFinite(state.halfMinuten)
+                      ? state.halfMinuten
+                      : DEFAULT_STATE.halfMinuten}
+                  </div>
+                  <Button
+                    size="md"
+                    disabled={state.klokLoopt}
+                    onClick={() =>
+                      setState((s) => {
+                        const hm = Number.isFinite(s.halfMinuten)
+                          ? s.halfMinuten
+                          : DEFAULT_STATE.halfMinuten;
+                        return { ...s, halfMinuten: Math.min(60, hm + 1) };
+                      })
+                    }
+                  >
+                    +
+                  </Button>
+                  <div className="text-lg">Minuten</div>
                 </div>
-                <Button
-                  size="md"
-                  disabled={state.klokLoopt}
-                  onClick={() => setState(s => {
-                    const hm = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten;
-                    return { ...s, halfMinuten: Math.min(60, hm + 1) };
-                  })}
-                >+</Button>
-                <div className="text-lg">Minuten</div>
               </div>
             </div>
           </div>
-  
+
+          {/* 🔵 Grote balbezit-knoppen over de breedte */}
+          <div className="w-full">
+            <div className="text-xs text-gray-500 mb-1">
+              Balbezit (tik bij elke wissel)
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                size="md"
+                variant={
+                  state.possessionOwner === "thuis" ? "primary" : "secondary"
+                }
+                className="w-full py-4 text-lg"
+                onClick={() => {
+                  setState((s) => ({ ...s, possessionOwner: "thuis" }));
+                  openPossessionModal("thuis");
+                }}
+              >
+                Balbezit Thuis
+              </Button>
+              <Button
+                size="md"
+                variant={
+                  state.possessionOwner === "uit" ? "primary" : "secondary"
+                }
+                className="w-full py-4 text-lg"
+                onClick={() => {
+                  setState((s) => ({ ...s, possessionOwner: "uit" }));
+                  openPossessionModal("uit");
+                }}
+              >
+                Balbezit Uit
+              </Button>
+            </div>
+          </div>
+
           {/* Scoresectie (gekleurde kaarten) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* THUIS */}
             <div className="rounded-2xl border bg-blue-50 p-4">
               <div className="flex items-center gap-3 justify-between">
-                <div className="text-lg font-semibold text-blue-800">Thuis</div>
+                <div className="text-lg font-semibold text-blue-800">
+                  Thuis
+                </div>
                 <div className="flex items-center gap-2">
                   <Button
                     size="md"
-                    onClick={() => setState(s => ({ ...s, scoreThuis: Math.max(0, s.scoreThuis - 1) }))}
-                  >-</Button>
+                    onClick={() =>
+                      setState((s) => ({
+                        ...s,
+                        scoreThuis: Math.max(0, s.scoreThuis - 1),
+                      }))
+                    }
+                  >
+                    -
+                  </Button>
                   <div className="text-3xl font-extrabold w-12 text-center text-blue-900">
                     {state.scoreThuis}
                   </div>
                   <Button
                     size="md"
-                    onClick={() => setState(s => ({ ...s, scoreThuis: s.scoreThuis + 1 }))}
-                  >+</Button>
+                    onClick={() =>
+                      setState((s) => ({
+                        ...s,
+                        scoreThuis: s.scoreThuis + 1,
+                      }))
+                    }
+                  >
+                    +
+                  </Button>
                 </div>
               </div>
+              {/* Balbezit onder de stand */}
+              <div className="mt-1 text-xs text-blue-800">
+                Balbezit: {possThuis}%
+              </div>
             </div>
-  
+
             {/* UIT */}
             <div className="rounded-2xl border bg-amber-50 p-4">
               <div className="flex items-center gap-3 justify-between">
-                <div className="text-lg font-semibold text-amber-800">Uit</div>
+                <div className="text-lg font-semibold text-amber-800">
+                  Uit
+                </div>
                 <div className="flex items-center gap-2">
                   <Button
                     size="md"
-                    onClick={() => setState(s => ({ ...s, scoreUit: Math.max(0, s.scoreUit - 1) }))}
-                  >-</Button>
+                    onClick={() =>
+                      setState((s) => ({
+                        ...s,
+                        scoreUit: Math.max(0, s.scoreUit - 1),
+                      }))
+                    }
+                  >
+                    -
+                  </Button>
                   <div className="text-3xl font-extrabold w-12 text-center text-amber-900">
                     {state.scoreUit}
                   </div>
                   <Button
                     size="md"
-                    onClick={() => setState(s => ({ ...s, scoreUit: s.scoreUit + 1 }))}
-                  >+</Button>
+                    onClick={() =>
+                      setState((s) => ({
+                        ...s,
+                        scoreUit: s.scoreUit + 1,
+                      }))
+                    }
+                  >
+                    +
+                  </Button>
                 </div>
+              </div>
+              {/* Balbezit onder de stand */}
+              <div className="mt-1 text-xs text-amber-800">
+                Balbezit: {possUit}%
               </div>
             </div>
           </div>
-  
         </div>
       </div>
-  
 
       {/* Vakken */}
       <div className="grid md:grid-cols-2 gap-4">
-          <div className={`rounded-2xl p-4 border ${aanvValid ? "border-gray-200" : "border-red-500"}`}>
-            <div className="flex items-center justify-between mb-2">
-              <div className={`font-semibold ${aanvValid ? "" : "text-red-600"}`}>
-                Aanvallend vak
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  size="md"
-                  variant={aanvValid ? "secondary" : "danger"}
-                  onClick={() => setPopup({ vak: "aanvallend", soort: "Gemis" })}
-                >
-                  Gemis
-                </Button>
-                <Button
-                  size="md"
-                  variant={aanvValid ? "secondary" : "danger"}
-                  onClick={() => setPopup({ vak: "aanvallend", soort: "Kans" })}
-                >
-                  Kans
-                </Button>
-              </div>
+        {/* Aanvallend vak */}
+        <div
+          className={`rounded-2xl p-4 border ${
+            aanvValid ? "border-gray-200" : "border-red-500"
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div
+              className={`font-semibold ${
+                aanvValid ? "" : "text-red-600"
+              }`}
+            >
+              Aanvallend vak
             </div>
-        
-            {!aanvValid && (
-              <div className="text-xs text-red-600 mb-2">
-                Let op: dit vak heeft geen 2 dames en 2 heren (nu {aanvCounts.dames} dames, {aanvCounts.heren} heren).
-              </div>
-            )}
-        
-            <div className="space-y-3">
-              {state.aanval.map((id, i) => circle(id, "aanvallend", i))}
+            <div className="flex gap-2">
+              <Button
+                size="md"
+                variant={aanvValid ? "secondary" : "danger"}
+                onClick={() => setPopup({ vak: "aanvallend", soort: "Gemis" })}
+              >
+                Gemis
+              </Button>
+              <Button
+                size="md"
+                variant={aanvValid ? "secondary" : "danger"}
+                onClick={() => setPopup({ vak: "aanvallend", soort: "Kans" })}
+              >
+                Kans
+              </Button>
             </div>
           </div>
 
-          <div className={`rounded-2xl p-4 border ${verdValid ? "border-gray-200" : "border-red-500"}`}>
-        <div className="flex items-center justify-between mb-2">
-          <div className={`font-semibold ${verdValid ? "" : "text-red-600"}`}>
-            Verdedigend vak
-          </div>
-          <div className="flex gap-2">
-            <Button
-              size="md"
-              variant={verdValid ? "secondary" : "danger"}
-              onClick={() => setPopup({ vak: "verdedigend", soort: "Gemis" })}
-            >
-              Gemis
-            </Button>
-            <Button
-              size="md"
-              variant={verdValid ? "secondary" : "danger"}
-              onClick={() => setPopup({ vak: "verdedigend", soort: "Kans" })}
-            >
-              Kans
-            </Button>
+          {!aanvValid && (
+            <div className="text-xs text-red-600 mb-2">
+              Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+              {aanvCounts.dames} dames, {aanvCounts.heren} heren).
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {state.aanval.map((id, i) => circle(id, "aanvallend", i))}
           </div>
         </div>
-      
-        {!verdValid && (
-          <div className="text-xs text-red-600 mb-2">
-            Let op: dit vak heeft geen 2 dames en 2 heren (nu {verdCounts.dames} dames, {verdCounts.heren} heren).
+
+        {/* Verdedigend vak */}
+        <div
+          className={`rounded-2xl p-4 border ${
+            verdValid ? "border-gray-200" : "border-red-500"
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div
+              className={`font-semibold ${
+                verdValid ? "" : "text-red-600"
+              }`}
+            >
+              Verdedigend vak
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="md"
+                variant={verdValid ? "secondary" : "danger"}
+                onClick={() =>
+                  setPopup({ vak: "verdedigend", soort: "Gemis" })
+                }
+              >
+                Gemis
+              </Button>
+              <Button
+                size="md"
+                variant={verdValid ? "secondary" : "danger"}
+                onClick={() =>
+                  setPopup({ vak: "verdedigend", soort: "Kans" })
+                }
+              >
+                Kans
+              </Button>
+            </div>
           </div>
-        )}
-      
-        <div className="space-y-3">
-          {state.verdediging.map((id, i) => circle(id, "verdedigend", i))}
+
+          {!verdValid && (
+            <div className="text-xs text-red-600 mb-2">
+              Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+              {verdCounts.dames} dames, {verdCounts.heren} heren).
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {state.verdediging.map((id, i) => circle(id, "verdedigend", i))}
+          </div>
         </div>
-      </div>
       </div>
 
+      {/* Wissel + log */}
       <div className="flex items-center justify-between">
-        <button className="px-3 py-2 border rounded-xl" onClick={wisselVakken}>Vakken wisselen (↕)</button>
+        <button
+          className="px-3 py-2 border rounded-xl"
+          onClick={wisselVakken}
+        >
+          Vakken wisselen (↕)
+        </button>
         <details>
-          <summary className="px-3 py-2 border rounded-xl cursor-pointer">Log bekijken</summary>
+          <summary className="px-3 py-2 border rounded-xl cursor-pointer">
+            Log bekijken
+          </summary>
           <div className="mt-2 max-h-64 overflow-auto border rounded-xl">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 sticky top-0">
@@ -883,13 +1178,30 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
                 {state.log.map((e) => (
                   <tr key={e.id} className="border-t">
                     <td className="p-2">{formatTime(e.tijdSeconden)}</td>
-                    <td className="p-2">{formatTime(e.resterendSeconden ?? Math.max(((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) - e.tijdSeconden, 0))}</td>
-                    <td className="p-2">{e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60))}</td>
-                    <td className="p-2">{e.vak}</td>
+                    <td className="p-2">
+                      {formatTime(
+                        e.resterendSeconden ??
+                          Math.max(
+                            (
+                              (Number.isFinite(state.halfMinuten)
+                                ? state.halfMinuten
+                                : DEFAULT_STATE.halfMinuten) * 60
+                            ) - e.tijdSeconden,
+                            0
+                          )
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {e.wedstrijdMinuut ??
+                        Math.max(1, Math.ceil(e.tijdSeconden / 60))}
+                    </td>
+                    <td className="p-2">{e.vak ?? "—"}</td>
                     <td className="p-2">{e.soort}</td>
                     <td className="p-2">{e.reden}</td>
                     <td className="p-2">{e.pos ?? "—"}</td>
-                    <td className="p-2">{e.spelerId ? spelersMap.get(e.spelerId)?.naam : "—"}</td>
+                    <td className="p-2">
+                      {e.spelerId ? spelersMap.get(e.spelerId)?.naam : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -901,8 +1213,15 @@ function WedstrijdTab({ state, setState, spelersMap, setPopup, wisselVakken, ban
   );
 }
 
+
 // --- Modal ---------------------------------------------------------------
-function ReasonModal({ vak, soort, spelersInVak, onClose, onChoose }: {
+function ReasonModal({
+  vak,
+  soort,
+  spelersInVak,
+  onClose,
+  onChoose,
+}: {
   vak: VakSide;
   soort: "Gemis" | "Kans";
   spelersInVak: Player[];
@@ -910,42 +1229,205 @@ function ReasonModal({ vak, soort, spelersInVak, onClose, onChoose }: {
   onChoose: (reden: LogReden, spelerId?: string) => void;
 }) {
   const [speler, setSpeler] = useState<string | undefined>(undefined);
-  const opties: LogReden[] = vak === "aanvallend" && soort === "Kans"
-    ? ["Bal onderschept", "Bal uit", "overtreding", "Gescoord"]
-    : ["Bal onderschept", "Bal uit", "overtreding", "Doorgelaten"];
+
+  const opties: LogReden[] =
+    vak === "aanvallend" && soort === "Kans"
+      ? ["Bal onderschept", "Bal uit", "overtreding", "Gescoord"]
+      : ["Bal onderschept", "Bal uit", "overtreding", "Doorgelaten"];
+
+  const titelKleur =
+    vak === "aanvallend" ? "text-blue-700" : "text-amber-700";
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl p-4 w-full max-w-md shadow-xl">
-        <div className="text-lg font-semibold mb-3">{soort} – {vak}</div>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl p-6 space-y-6">
+        {/* Titel */}
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className={`text-2xl font-bold ${titelKleur}`}>
+              {soort} – {vak === "aanvallend" ? "Aanvallend vak" : "Verdedigend vak"}
+            </div>
+            <div className="text-sm text-gray-500 mt-1">
+              Kies eventueel een speler en daarna een reden.
+            </div>
+          </div>
+          <button
+            className="text-sm text-gray-500 hover:text-gray-800"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
 
-        <div className="space-y-2 mb-3">
-          <div className="text-sm">Kies speler (optioneel)</div>
-          <div className="flex flex-wrap gap-2">
-            <button className={`px-3 py-1 border rounded-full text-sm ${!speler ? "bg-black text-white" : ""}`} onClick={() => setSpeler(undefined)}>Team‑event</button>
+        {/* Spelersselectie */}
+        <div className="space-y-2">
+          <div className="text-sm font-semibold">Speler (optioneel)</div>
+          <div className="flex flex-wrap gap-2 max-h-40 overflow-auto">
+            <button
+              className={`px-3 py-2 rounded-full border text-sm font-medium ${
+                !speler
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-800 hover:bg-gray-50"
+              }`}
+              onClick={() => setSpeler(undefined)}
+            >
+              Team-event
+            </button>
             {spelersInVak.map((p) => (
-              <button key={p.id} className={`px-3 py-1 border rounded-full text-sm flex items-center gap-2 ${speler === p.id ? "bg-black text-white" : ""}`} onClick={() => setSpeler(p.id)}>
+              <button
+                key={p.id}
+                className={`px-3 py-2 rounded-full border text-sm font-medium flex items-center gap-2 ${
+                  speler === p.id
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-800 hover:bg-gray-50"
+                }`}
+                onClick={() => setSpeler(p.id)}
+              >
                 {p.foto ? (
-                  <img src={p.foto} alt={p.naam} className="w-5 h-5 rounded-full object-cover" />
+                  <img
+                    src={p.foto}
+                    alt={p.naam}
+                    className="w-6 h-6 rounded-full object-cover"
+                  />
                 ) : (
-                  <span className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-[10px]">{p.naam.slice(0,2)}</span>
+                  <span className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-[10px]">
+                    {p.naam.slice(0, 2)}
+                  </span>
                 )}
+                <span className="truncate max-w-[160px]">{p.naam}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Reden-knoppen */}
+        <div className="space-y-2">
+          <div className="text-sm font-semibold">Reden</div>
+          <div className="grid grid-cols-2 gap-3">
+            {opties.map((o) => (
+              <button
+                key={o}
+                className="w-full py-4 px-3 text-base font-semibold rounded-xl border bg-gray-50 hover:bg-gray-100 active:scale-[0.98] transition"
+                onClick={() => onChoose(o, speler)}
+              >
+                {o}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Onderste balk */}
+        <div className="flex justify-end">
+          <button
+            className="text-sm text-gray-500 hover:text-gray-800"
+            onClick={onClose}
+          >
+            Sluiten
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PossessionModal({
+  team,
+  spelers,
+  onClose,
+  onSave,
+}: {
+  team: "thuis" | "uit";
+  spelers: Player[];
+  onClose: () => void;
+  onSave: (reden: LogReden, spelerId?: string) => void;
+}) {
+  const [speler, setSpeler] = useState<string | undefined>(undefined);
+
+  const opties: LogReden[] = [
+    "Onderschept",
+    "Doelpunt tegen",
+    "Vrijebal",
+    "Strafworp",
+  ];
+
+  const accentBg = team === "thuis" ? "bg-blue-50" : "bg-amber-50";
+  const accentText = team === "thuis" ? "text-blue-800" : "text-amber-800";
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl p-6 space-y-6">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className={`text-2xl font-bold ${accentText}`}>
+              Nieuw balbezit – {team === "thuis" ? "Thuis" : "Uit"}
+            </div>
+            <div className="text-sm text-gray-500 mt-1">
+              Kies (optioneel) een speler en daarna de aanleiding voor balbezit.
+            </div>
+          </div>
+          <button
+            className="text-sm text-gray-500 hover:text-gray-800"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Spelers (alle veldspelers) */}
+        <div className="space-y-2">
+          <div className="text-sm font-semibold">Speler (optioneel)</div>
+          <div className="flex flex-wrap gap-2 max-h-40 overflow-auto">
+            <button
+              className={`px-4 py-5 rounded-full border text-base font-semibold ${
+                !speler
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-800 hover:bg-gray-50"
+              }`}
+              onClick={() => setSpeler(undefined)}
+            >
+              Team-event
+            </button>
+            {spelers.map((p) => (
+              <button
+                key={p.id}
+                className={`px-4 py-5 rounded-full border text-base font-semibold ${
+                  speler === p.id
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-800 hover:bg-gray-50"
+                }`}
+                onClick={() => setSpeler(p.id)}
+              >
                 {p.naam}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          {opties.map((o) => (
-            <button key={o} className="border rounded-xl p-3 hover:shadow" onClick={() => onChoose(o, speler)}>
-              {o}
-            </button>
-          ))}
+        {/* Reden-knoppen groot en duidelijk */}
+        <div className="space-y-2">
+          <div className="text-sm font-semibold">Aanleiding balbezit</div>
+          <div className="grid grid-cols-2 gap-3">
+            {opties.map((o) => (
+              <button
+                key={o}
+                className={`w-full py-4 px-3 text-base font-semibold rounded-xl border ${accentBg} hover:brightness-95 active:scale-[0.98] transition`}
+                onClick={() => onSave(o, speler)}
+              >
+                {o}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex justify-end mt-3">
-          <button className="text-sm text-gray-600" onClick={onClose}>Sluiten</button>
+        {/* Onderste balk */}
+        <div className="flex justify-end">
+          <button
+            className="text-sm text-gray-500 hover:text-gray-800"
+            onClick={onClose}
+          >
+            Sluiten
+          </button>
         </div>
       </div>
     </div>
