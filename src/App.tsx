@@ -72,11 +72,11 @@ type LogEvent = {
   vak?: VakSide;
   soort: "Gemis" | "Kans" | "Wissel" | "Balbezit";
   reden: LogReden;
-  team?: "thuis" | "uit";   // 🔵 voeg deze toe
   spelerId?: string;
   resterendSeconden?: number;
   wedstrijdMinuut?: number; // ceil(verstreken_s / 60), min 1
-  pos?: number; // 1..4
+  pos?: number; // 1..4 (alleen voor wissels)
+  team?: "thuis" | "uit"; // ✅ nieuw, vooral voor Balbezit
 };
 
 type AppState = {
@@ -89,11 +89,10 @@ type AppState = {
   klokLoopt: boolean;
   halfMinuten: number; // duur helft in minuten
   log: LogEvent[];
-
-  // ✅ nieuw:
   possessionOwner: "thuis" | "uit" | null;
   possessionThuisSeconden: number;
   possessionUitSeconden: number;
+  aanvalLinks: boolean; //true is links, false is rechts
 };
 
 const DEFAULT_STATE: AppState = {
@@ -111,6 +110,8 @@ const DEFAULT_STATE: AppState = {
   possessionOwner: null,
   possessionThuisSeconden: 0,
   possessionUitSeconden: 0,
+  // 👇 NIEUW:
+  aanvalLinks: true,    // Standaard Links
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
@@ -188,6 +189,7 @@ function sanitizeState(raw: any): AppState {
       (s as any).possessionUitSeconden,
       DEFAULT_STATE.possessionUitSeconden
     ),
+    aanvalLinks: bool((s as any).aanvalLinks, DEFAULT_STATE.aanvalLinks),
   };
 }
 
@@ -396,34 +398,65 @@ export default function App() {
     });
   };
 
-  // 🔹 LOSSE functie voor Balbezit-events (GEEN vak)
-  const logBalbezit = (team: "thuis" | "uit", reden: LogReden, spelerId?: string) => {
-    const halfMinuten = Number.isFinite(state.halfMinuten)
-      ? state.halfMinuten
-      : DEFAULT_STATE.halfMinuten;
-    const totalSeconds = halfMinuten * 60;
-    const resterend = Math.max(totalSeconds - state.tijdSeconden, 0);
-    const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+  // 🔹 LOSSE functie voor Balbezit-events
+  const logBalbezit = (
+    team: "thuis" | "uit",
+    reden: LogReden,
+    spelerId?: string
+  ) => {
+    setState((s) => {
+      const halfMinuten = Number.isFinite(s.halfMinuten)
+        ? s.halfMinuten
+        : DEFAULT_STATE.halfMinuten;
+      const totalSeconds = halfMinuten * 60;
 
-    const e: LogEvent = {
-      id: uid("ev"),
-      tijdSeconden: state.tijdSeconden,
-      soort: "Balbezit",
-      reden,
-      spelerId,
-      resterendSeconden: resterend,
-      wedstrijdMinuut: minuut,
-      team, 
-      // vak bewust leeg
-    };
+      const resterend = Math.max(totalSeconds - s.tijdSeconden, 0);
+      const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
 
-    setState((s) => ({
-      ...s,
-      log: [e, ...s.log],
-    }));
+      // ✅ Vak bepalen op basis van waar de speler nu staat
+      let vak: VakSide | undefined = undefined;
+      if (spelerId) {
+        if (s.aanval.includes(spelerId)) vak = "aanvallend";
+        else if (s.verdediging.includes(spelerId)) vak = "verdedigend";
+      }
+
+      const e: LogEvent = {
+        id: uid("ev"),
+        tijdSeconden: s.tijdSeconden,
+        soort: "Balbezit",
+        reden,
+        spelerId,
+        resterendSeconden: resterend,
+        wedstrijdMinuut: minuut,
+        vak,   // 👈 nu wordt het vak ingevuld
+        team, // 👈 welk team balbezit kreeg
+      };
+
+      return { ...s, log: [e, ...s.log] };
+    });
   };
 
+
+
   const exportCSV = () => {
+    // ✅ balbezit-percentages uitrekenen
+    const totaalPoss =
+      state.possessionThuisSeconden + state.possessionUitSeconden;
+  
+    const possThuis =
+      totaalPoss > 0
+        ? Math.round(
+            (state.possessionThuisSeconden / totaalPoss) * 100
+          )
+        : 0;
+  
+    const possUit =
+      totaalPoss > 0
+        ? Math.round(
+            (state.possessionUitSeconden / totaalPoss) * 100
+          )
+        : 0;
+  
     const rows = [
       [
         "id",
@@ -433,9 +466,11 @@ export default function App() {
         "vak",
         "soort",
         "reden",
-        "positie",
+        "team",
         "spelerId",
         "spelerNaam",
+        "balbezit_thuis_pct",
+        "balbezit_uit_pct",
       ],
       ...state.log
         .slice()
@@ -446,33 +481,40 @@ export default function App() {
           formatTime(
             e.resterendSeconden ??
               Math.max(
-                ((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) -
+                ((Number.isFinite(state.halfMinuten)
+                  ? state.halfMinuten
+                  : DEFAULT_STATE.halfMinuten) *
+                  60) -
                   e.tijdSeconden,
                 0
               )
           ),
-          e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
+          e.wedstrijdMinuut ??
+            Math.max(1, Math.ceil(e.tijdSeconden / 60)),
           e.vak ?? "",
           e.soort,
           e.reden,
-          e.pos ?? "",
+          e.team ?? "",
           e.spelerId || "",
           e.spelerId ? spelersMap.get(e.spelerId)?.naam || "" : "",
+          possThuis.toString(),
+          possUit.toString(),
         ]),
     ];
-
-
-
+  
     const escapeCSV = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
     const csv = rows.map((r) => r.map(escapeCSV).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `korfbal-log-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `korfbal-log-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
+
 
   const resetAlles = () => {
     if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
@@ -840,7 +882,7 @@ function WedstrijdTab({
   const verdCounts = countGeslachtInVak(state.verdediging);
   const aanvValid = aanvCounts.dames === 2 && aanvCounts.heren === 2;
   const verdValid = verdCounts.dames === 2 && verdCounts.heren === 2;
-
+  const aanvalLinks = state.aanvalLinks ?? true;
   const resterend = Math.max(
     (
       (Number.isFinite(state.halfMinuten)
@@ -1055,155 +1097,209 @@ function WedstrijdTab({
         </div>
       </div>
 
-      {/* Vakken */}
-      <div className="grid md:grid-cols-2 gap-4">
-        {/* Aanvallend vak */}
-        <div
-          className={`rounded-2xl p-4 border ${
-            aanvValid ? "border-gray-200" : "border-red-500"
-          }`}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <div
-              className={`font-semibold ${
-                aanvValid ? "" : "text-red-600"
-              }`}
-            >
-              Aanvallend vak
-            </div>
-            <div className="flex gap-2">
-              <Button
-                size="md"
-                variant={aanvValid ? "secondary" : "danger"}
-                onClick={() => setPopup({ vak: "aanvallend", soort: "Gemis" })}
-              >
-                Gemis
-              </Button>
-              <Button
-                size="md"
-                variant={aanvValid ? "secondary" : "danger"}
-                onClick={() => setPopup({ vak: "aanvallend", soort: "Kans" })}
-              >
-                Kans
-              </Button>
-            </div>
-          </div>
-
-          {!aanvValid && (
-            <div className="text-xs text-red-600 mb-2">
-              Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
-              {aanvCounts.dames} dames, {aanvCounts.heren} heren).
-            </div>
-          )}
-
-          <div className="space-y-3">
-            {state.aanval.map((id, i) => circle(id, "aanvallend", i))}
-          </div>
+      {/* Vakken + grote wisselknop tussen de vakken */}
+      <div className="mt-2">
+        {/* Kleine knop om L/R te wisselen */}
+        <div className="flex justify-end mb-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              setState((s) => ({ ...s, aanvalLinks: !s.aanvalLinks }))
+            }
+          >
+            Aanval Links of Rechts
+          </Button>
         </div>
 
-        {/* Verdedigend vak */}
-        <div
-          className={`rounded-2xl p-4 border ${
-            verdValid ? "border-gray-200" : "border-red-500"
-          }`}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <div
-              className={`font-semibold ${
-                verdValid ? "" : "text-red-600"
-              }`}
-            >
-              Verdedigend vak
-            </div>
-            <div className="flex gap-2">
-              <Button
-                size="md"
-                variant={verdValid ? "secondary" : "danger"}
-                onClick={() =>
-                  setPopup({ vak: "verdedigend", soort: "Gemis" })
-                }
-              >
-                Gemis
-              </Button>
-              <Button
-                size="md"
-                variant={verdValid ? "secondary" : "danger"}
-                onClick={() =>
-                  setPopup({ vak: "verdedigend", soort: "Kans" })
-                }
-              >
-                Kans
-              </Button>
-            </div>
+        <div className="relative">
+          <div className="grid md:grid-cols-2 gap-4">
+            {/* 🟦 Aanvallend vak kaart */}
+            {(() => {
+              const aanvVakCard = (
+                <div
+                  className={`rounded-2xl p-4 border ${
+                    aanvValid ? "border-gray-200" : "border-red-500"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={`font-semibold ${aanvValid ? "" : "text-red-600"}`}>
+                      Aanvallend vak
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="md"
+                        variant={aanvValid ? "secondary" : "danger"}
+                        onClick={() => setPopup({ vak: "aanvallend", soort: "Gemis" })}
+                      >
+                        Gemis
+                      </Button>
+                      <Button
+                        size="md"
+                        variant={aanvValid ? "secondary" : "danger"}
+                        onClick={() => setPopup({ vak: "aanvallend", soort: "Kans" })}
+                      >
+                        Kans
+                      </Button>
+                    </div>
+                  </div>
+
+                  {!aanvValid && (
+                    <div className="text-xs text-red-600 mb-2">
+                      Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+                      {aanvCounts.dames} dames, {aanvCounts.heren} heren).
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {state.aanval.map((id, i) => circle(id, "aanvallend", i))}
+                  </div>
+                </div>
+              );
+
+              {/* 🟡 Verdedigend vak kaart */}
+              const verdVakCard = (
+                <div
+                  className={`rounded-2xl p-4 border ${
+                    verdValid ? "border-gray-200" : "border-red-500"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={`font-semibold ${verdValid ? "" : "text-red-600"}`}>
+                      Verdedigend vak
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="md"
+                        variant={verdValid ? "secondary" : "danger"}
+                        onClick={() => setPopup({ vak: "verdedigend", soort: "Gemis" })}
+                      >
+                        Gemis
+                      </Button>
+                      <Button
+                        size="md"
+                        variant={verdValid ? "secondary" : "danger"}
+                        onClick={() => setPopup({ vak: "verdedigend", soort: "Kans" })}
+                      >
+                        Kans
+                      </Button>
+                    </div>
+                  </div>
+
+                  {!verdValid && (
+                    <div className="text-xs text-red-600 mb-2">
+                      Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+                      {verdCounts.dames} dames, {verdCounts.heren} heren).
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {state.verdediging.map((id, i) => circle(id, "verdedigend", i))}
+                  </div>
+                </div>
+              );
+
+              // 👉 hier bepalen we de VOLGORDE
+              return aanvalLinks ? (
+                <>
+                  {aanvVakCard}
+                  {verdVakCard}
+                </>
+              ) : (
+                <>
+                  {verdVakCard}
+                  {aanvVakCard}
+                </>
+              );
+            })()}
           </div>
 
-          {!verdValid && (
-            <div className="text-xs text-red-600 mb-2">
-              Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
-              {verdCounts.dames} dames, {verdCounts.heren} heren).
-            </div>
-          )}
-
-          <div className="space-y-3">
-            {state.verdediging.map((id, i) => circle(id, "verdedigend", i))}
-          </div>
+          {/* 🔵 Ronde wissel-knop tussen de vakken (spel-vak wissel) */}
+          <button
+            type="button"
+            onClick={wisselVakken}
+            aria-label="Vakken wisselen"
+            className="
+              flex
+              absolute top-1/2 left-1/2
+              -translate-x-1/2 -translate-y-1/2
+              w-10 h-10
+              rounded-full
+              bg-white
+              border border-gray-300
+              shadow-lg
+              items-center justify-center
+              text-lg
+              hover:bg-gray-50
+              active:scale-95
+            "
+          >
+            ⇄
+          </button>
         </div>
       </div>
 
       {/* Wissel + log */}
-      <div className="flex items-center justify-between">
-        <button
-          className="px-3 py-2 border rounded-xl"
-          onClick={wisselVakken}
-        >
-          Vakken wisselen (↕)
-        </button>
-        <details>
-          <summary className="px-3 py-2 border rounded-xl cursor-pointer">
+      <div className="flex items-center justify-between mt-2">
+
+        <details className="ml-2 w-full md:w-full">
+          <summary className="px-3 py-2 border rounded-xl cursor-pointer text-xs">
             Log bekijken
           </summary>
-          <div className="mt-2 max-h-64 overflow-auto border rounded-xl">
-            <table className="w-full text-sm">
+
+          <div className="mt-2 max-h-48 overflow-auto border rounded-xl">
+            <table className="w-full text-[10px]">
               <thead className="bg-gray-50 sticky top-0">
                 <tr>
-                  <th className="text-left p-2">Tijd (verstreken)</th>
-                  <th className="text-left p-2">Klok (resterend)</th>
-                  <th className="text-left p-2">Wedstrijdminuut</th>
-                  <th className="text-left p-2">Vak</th>
-                  <th className="text-left p-2">Soort</th>
-                  <th className="text-left p-2">Reden</th>
-                  <th className="text-left p-2">Positie</th>
-                  <th className="text-left p-2">Speler</th>
+                  <th className="text-left p-1">Tijd</th>
+                  <th className="text-left p-1">Resterend</th>
+                  <th className="text-left p-1">Min</th>
+                  <th className="text-left p-1">Vak</th>
+                  <th className="text-left p-1">Soort</th>
+                  <th className="text-left p-1">Reden</th>
+                  <th className="text-left p-1">Speler</th>
+                  <th className="text-left p-1">Team</th>
+                  <th className="text-left p-1">Balbezit Thuis</th>
+                  <th className="text-left p-1">Balbezit Uit</th>
                 </tr>
               </thead>
               <tbody>
                 {state.log.map((e) => (
                   <tr key={e.id} className="border-t">
-                    <td className="p-2">{formatTime(e.tijdSeconden)}</td>
-                    <td className="p-2">
+                    <td className="p-1">{formatTime(e.tijdSeconden)}</td>
+                    <td className="p-1">
                       {formatTime(
                         e.resterendSeconden ??
                           Math.max(
-                            (
-                              (Number.isFinite(state.halfMinuten)
-                                ? state.halfMinuten
-                                : DEFAULT_STATE.halfMinuten) * 60
-                            ) - e.tijdSeconden,
+                            ((Number.isFinite(state.halfMinuten)
+                              ? state.halfMinuten
+                              : DEFAULT_STATE.halfMinuten) *
+                              60) -
+                              e.tijdSeconden,
                             0
                           )
                       )}
                     </td>
-                    <td className="p-2">
+                    <td className="p-1">
                       {e.wedstrijdMinuut ??
                         Math.max(1, Math.ceil(e.tijdSeconden / 60))}
                     </td>
-                    <td className="p-2">{e.vak ?? "—"}</td>
-                    <td className="p-2">{e.soort}</td>
-                    <td className="p-2">{e.reden}</td>
-                    <td className="p-2">{e.pos ?? "—"}</td>
-                    <td className="p-2">
+                    <td className="p-1">{e.vak ?? "—"}</td>
+                    <td className="p-1">{e.soort}</td>
+                    <td className="p-1">{e.reden}</td>
+                    <td className="p-1">
                       {e.spelerId ? spelersMap.get(e.spelerId)?.naam : "—"}
                     </td>
+                    <td className="p-1">
+                      {e.team === "thuis"
+                        ? "Thuis"
+                        : e.team === "uit"
+                        ? "Uit"
+                        : "—"}
+                    </td>
+                    {/* ✅ balbezit netjes onder de juiste kopjes */}
+                    <td className="p-1">{possThuis}%</td>
+                    <td className="p-1">{possUit}%</td>
                   </tr>
                 ))}
               </tbody>
