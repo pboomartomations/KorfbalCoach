@@ -47,6 +47,7 @@ function Button({
 
 // --- Helpers ---------------------------------------------------------------
 const GESLACHTEN: readonly ["Dame", "Heer"] = ["Dame", "Heer"];
+const TEGENSTANDER_ID = "__tegenstander__";
 type Geslacht = (typeof GESLACHTEN)[number];
 
 type Player = { id: string; naam: string; geslacht: Geslacht; foto?: string };
@@ -61,23 +62,32 @@ type LogReden =
 | "Gescoord"
 | "Wissel in"
 | "Wissel uit"
-| "Onderschept"
-| "Doelpunt tegen"
+// Balbezit-specifiek
+| "Pass Onderschept"
 | "Vrijebal"
-| "Strafworp";
+| "Vrije bal tegen"
+| "Strafworp"
+| "Strafworp tegen"
+| "Schot afgevangen"
+// Schot/Rebound
+| "Raak"
+| "Mis";
 
 type LogEvent = {
   id: string;
   tijdSeconden: number; // verstreken tijd
   vak?: VakSide;
-  soort: "Gemis" | "Kans" | "Wissel" | "Balbezit";
+  soort: "Gemis" | "Kans" | "Wissel" | "Balbezit" | "Schot" | "Rebound";
   reden: LogReden;
   spelerId?: string;
   resterendSeconden?: number;
   wedstrijdMinuut?: number; // ceil(verstreken_s / 60), min 1
   pos?: number; // 1..4 (alleen voor wissels)
   team?: "thuis" | "uit"; // ✅ nieuw, vooral voor Balbezit
+  possThuis?: number; // 0–100
+  possUit?: number;   // 0–100
 };
+
 
 type AppState = {
   spelers: Player[];
@@ -85,13 +95,19 @@ type AppState = {
   verdediging: (string | null)[];
   scoreThuis: number;
   scoreUit: number;
+
   tijdSeconden: number; // verstreken seconden in huidige helft
+  halfElapsedSeconden: number;   // tijd in de huidige helft
   klokLoopt: boolean;
   halfMinuten: number; // duur helft in minuten
+  
   log: LogEvent[];
   possessionOwner: "thuis" | "uit" | null;
   possessionThuisSeconden: number;
   possessionUitSeconden: number;
+  
+
+  currentHalf: 1 | 2;          // welke helft zijn we in
   aanvalLinks: boolean; //true is links, false is rechts
 };
 
@@ -101,16 +117,19 @@ const DEFAULT_STATE: AppState = {
   verdediging: [null, null, null, null],
   scoreThuis: 0,
   scoreUit: 0,
+
   tijdSeconden: 0,
   klokLoopt: false,
+  halfElapsedSeconden: 0,   // ✅ nieuw  
   halfMinuten: 25,
-  log: [],
 
-  // ✅ nieuw:
+  log: [],
+  
   possessionOwner: null,
   possessionThuisSeconden: 0,
   possessionUitSeconden: 0,
-  // 👇 NIEUW:
+  
+  currentHalf: 1,          // ✅ begin in 1e helft
   aanvalLinks: true,    // Standaard Links
 };
 
@@ -155,6 +174,14 @@ function getSharedStateFromUrl(): AppState | null {
 }
 
 
+function detectVakForSpeler(state: AppState, spelerId?: string): VakSide | undefined {
+  if (!spelerId) return undefined;
+  if (state.aanval.includes(spelerId)) return "aanvallend";
+  if (state.verdediging.includes(spelerId)) return "verdedigend";
+  return undefined;
+}
+
+
 // -- Hydration/migratie helper: maak opgeslagen state veilig en compleet
 function sanitizeState(raw: any): AppState {
   const s: Partial<AppState> = typeof raw === "object" && raw ? raw : {};
@@ -171,25 +198,17 @@ function sanitizeState(raw: any): AppState {
     scoreThuis: num((s as any).scoreThuis, DEFAULT_STATE.scoreThuis),
     scoreUit: num((s as any).scoreUit, DEFAULT_STATE.scoreUit),
     tijdSeconden: num((s as any).tijdSeconden, DEFAULT_STATE.tijdSeconden),
+    halfElapsedSeconden: num((s as any).halfElapsedSeconden, DEFAULT_STATE.halfElapsedSeconden ),
     klokLoopt: bool((s as any).klokLoopt, DEFAULT_STATE.klokLoopt),
     halfMinuten: num((s as any).halfMinuten, DEFAULT_STATE.halfMinuten),
     log: Array.isArray((s as any).log) ? ((s as any).log as LogEvent[]) : [],
-
-
-    // ✅ nieuw:
-    possessionOwner:
-      (s as any).possessionOwner === "thuis" || (s as any).possessionOwner === "uit"
-        ? (s as any).possessionOwner
-        : null,
-    possessionThuisSeconden: num(
-      (s as any).possessionThuisSeconden,
-      DEFAULT_STATE.possessionThuisSeconden
-    ),
+    currentHalf: (s as any).currentHalf === 2 ? 2 : 1,
+    aanvalLinks: bool((s as any).aanvalLinks, DEFAULT_STATE.aanvalLinks),
+    possessionOwner:(s as any).possessionOwner === "thuis" || (s as any).possessionOwner === "uit"? (s as any).possessionOwner: null,possessionThuisSeconden: num((s as any).possessionThuisSeconden,DEFAULT_STATE.possessionThuisSeconden),
     possessionUitSeconden: num(
       (s as any).possessionUitSeconden,
       DEFAULT_STATE.possessionUitSeconden
     ),
-    aanvalLinks: bool((s as any).aanvalLinks, DEFAULT_STATE.aanvalLinks),
   };
 }
 
@@ -214,6 +233,7 @@ export default function App() {
   const [tab, setTab] = useState<"spelers" | "vakken" | "wedstrijd">("spelers");
   const [popup, setPopup] = useState<null | { vak: VakSide; soort: "Gemis" | "Kans" }>(null);
   const [possPopup, setPossPopup] = useState<null | { team: "thuis" | "uit" }>(null);
+  const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
 
   // Persist
   useEffect(() => {
@@ -223,44 +243,52 @@ export default function App() {
   }, [state]);
 
   // Timer (intern: op-tellen; UI toont resterend) + balbezit
-  const intervalRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (state.klokLoopt && intervalRef.current === null) {
-      intervalRef.current = window.setInterval(() => {
-        setState((s) => {
-          const total =
-            (Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
-          const next = s.tijdSeconden + 1;
+// ⏱️ Timer-effect – eenvoudige, enkele interval
+useEffect(() => {
+  // als de klok niet loopt: geen interval
+  if (!state.klokLoopt) return;
 
-          const updated: AppState = { ...s };
+    const id = window.setInterval(() => {
+      setState((prev) => {
+        const halfMinuten = Number.isFinite(prev.halfMinuten)
+          ? prev.halfMinuten
+          : DEFAULT_STATE.halfMinuten;
+        const halfTotal = halfMinuten * 60;
 
-          // tijd bijwerken
-          if (next >= total) {
-            updated.tijdSeconden = total;
-            updated.klokLoopt = false;
-          } else {
-            updated.tijdSeconden = next;
-          }
+        const nextTotal = prev.tijdSeconden + 1;          // totale wedstrijd-tijd
+        const nextHalfRaw = prev.halfElapsedSeconden + 1; // tijd in huidige helft
+        const nextHalf = Math.min(nextHalfRaw, halfTotal);
 
-          // balbezit-tijd ophogen
-          if (s.possessionOwner === "thuis") {
-            updated.possessionThuisSeconden = (updated.possessionThuisSeconden ?? 0) + 1;
-          } else if (s.possessionOwner === "uit") {
-            updated.possessionUitSeconden = (updated.possessionUitSeconden ?? 0) + 1;
-          }
+        const updated: AppState = {
+          ...prev,
+          tijdSeconden: nextTotal,
+          halfElapsedSeconden: nextHalf,
+        };
 
-          return updated;
-        });
-      }, 1000) as unknown as number;
-    }
-    if (!state.klokLoopt && intervalRef.current !== null) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+        // helft vol? → klok stoppen
+        if (nextHalfRaw >= halfTotal) {
+          updated.klokLoopt = false;
+        }
+
+        // balbezit-seconden ophogen
+        if (prev.possessionOwner === "thuis") {
+          updated.possessionThuisSeconden =
+            prev.possessionThuisSeconden + 1;
+        } else if (prev.possessionOwner === "uit") {
+          updated.possessionUitSeconden =
+            prev.possessionUitSeconden + 1;
+        }
+
+        return updated;
+      });
+    }, 1000);
+
+    // opruimen (ook bij StrictMode 2x mount)
     return () => {
-      if (intervalRef.current !== null) clearInterval(intervalRef.current);
+      window.clearInterval(id);
     };
   }, [state.klokLoopt, state.halfMinuten]);
+
 
   const spelersMap = useMemo(() => {
     const m = new Map<string, Player>();
@@ -308,11 +336,12 @@ export default function App() {
       arr[pos] = spelerId;
 
       const logs: LogEvent[] = [];
-      const resterend = Math.max(
-        ((Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) -
-          s.tijdSeconden,
-        0
-      );
+      const halfMinuten = Number.isFinite(state.halfMinuten)
+      ? state.halfMinuten
+      : DEFAULT_STATE.halfMinuten;
+      const halfTotal = halfMinuten * 60;
+    
+      const resterend = Math.max(halfTotal - state.halfElapsedSeconden, 0);
       const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
 
       if (prevId && prevId !== spelerId) {
@@ -353,14 +382,17 @@ export default function App() {
   const toggleKlok = (aan: boolean) => setState((s) => ({ ...s, klokLoopt: aan }));
 
   const resetKlok = () =>
-    setState((s) => ({
-      ...s,
-      tijdSeconden: 0,
-      klokLoopt: false,
-      possessionOwner: null,
-      possessionThuisSeconden: 0,
-      possessionUitSeconden: 0,
-    }));
+  setState((s) => ({
+    ...s,
+    tijdSeconden: 0,
+    halfElapsedSeconden: 0,
+    klokLoopt: false,
+    possessionOwner: null,
+    possessionThuisSeconden: 0,
+    possessionUitSeconden: 0,
+    currentHalf: 1,
+    aanvalLinks: DEFAULT_STATE.aanvalLinks,
+  }));
 
   // 🔹 LOSSE functie voor gewone Gemis/Kans/Wissel events
   const logEvent = (
@@ -369,11 +401,13 @@ export default function App() {
     reden: LogReden,
     spelerId?: string
   ) => {
-    const resterend = Math.max(
-      ((Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60) -
-        state.tijdSeconden,
-      0
-    );
+    const halfMinuten = Number.isFinite(state.halfMinuten)
+    ? state.halfMinuten
+    : DEFAULT_STATE.halfMinuten;
+    const halfTotal = halfMinuten * 60;
+  
+    const resterend = Math.max(halfTotal - state.halfElapsedSeconden, 0);
+
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
     const e: LogEvent = {
       id: uid("ev"),
@@ -398,43 +432,57 @@ export default function App() {
     });
   };
 
-  // 🔹 LOSSE functie voor Balbezit-events
-  const logBalbezit = (
-    team: "thuis" | "uit",
-    reden: LogReden,
-    spelerId?: string
-  ) => {
-    setState((s) => {
-      const halfMinuten = Number.isFinite(s.halfMinuten)
-        ? s.halfMinuten
-        : DEFAULT_STATE.halfMinuten;
-      const totalSeconds = halfMinuten * 60;
-
-      const resterend = Math.max(totalSeconds - s.tijdSeconden, 0);
-      const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
-
-      // ✅ Vak bepalen op basis van waar de speler nu staat
-      let vak: VakSide | undefined = undefined;
-      if (spelerId) {
-        if (s.aanval.includes(spelerId)) vak = "aanvallend";
-        else if (s.verdediging.includes(spelerId)) vak = "verdedigend";
-      }
-
-      const e: LogEvent = {
-        id: uid("ev"),
-        tijdSeconden: s.tijdSeconden,
-        soort: "Balbezit",
-        reden,
-        spelerId,
-        resterendSeconden: resterend,
-        wedstrijdMinuut: minuut,
-        vak,   // 👈 nu wordt het vak ingevuld
-        team, // 👈 welk team balbezit kreeg
-      };
-
-      return { ...s, log: [e, ...s.log] };
-    });
+  const logSchotOfRebound = (type: "Schot" | "Rebound", resultaat: "Raak" | "Mis", spelerId?: string) => {
+    const halfMinuten = Number.isFinite(state.halfMinuten)
+      ? state.halfMinuten
+      : DEFAULT_STATE.halfMinuten;
+    const totalSeconds = halfMinuten * 60;
+    const resterend = Math.max(totalSeconds - state.halfElapsedSeconden, 0);
+    const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+    const vak = detectVakForSpeler(state, spelerId) ?? "aanvallend";
+  
+    const e: LogEvent = {
+      id: uid("ev"),
+      tijdSeconden: state.tijdSeconden,
+      vak,
+      soort: type,
+      reden: resultaat,
+      spelerId,
+      resterendSeconden: resterend,
+      wedstrijdMinuut: minuut,
+    };
+  
+    setState((s) => ({ ...s, log: [e, ...s.log] }));
   };
+  
+  // 🔹 LOSSE functie voor Balbezit-events (GEEN vak, maar wel snapshot poss%)
+  const logBalbezit = (team: "thuis" | "uit", reden: LogReden, spelerId?: string) => {
+    const halfMinuten = Number.isFinite(state.halfMinuten)
+      ? state.halfMinuten
+      : DEFAULT_STATE.halfMinuten;
+    const totalSeconds = halfMinuten * 60;
+    const resterend = Math.max(totalSeconds - state.tijdSeconden, 0);
+    const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+  
+    // als balbezit voor UIT is en er is géén speler gekozen:
+    // log dan een “virtuele” speler met naam "Tegenstander"
+    const effectiveSpelerId =
+      team === "uit" && !spelerId ? TEGENSTANDER_ID : spelerId;
+  
+    const e: LogEvent = {
+      id: uid("ev"),
+      tijdSeconden: state.tijdSeconden,
+      soort: "Balbezit",
+      reden,
+      spelerId: effectiveSpelerId,
+      resterendSeconden: resterend,
+      wedstrijdMinuut: minuut,
+      // vak leeg voor balbezit
+    };
+  
+    setState((s) => ({ ...s, log: [e, ...s.log] }));
+  };
+
 
 
 
@@ -476,29 +524,21 @@ export default function App() {
         .slice()
         .reverse()
         .map((e) => [
-          e.id,
-          formatTime(e.tijdSeconden),
-          formatTime(
-            e.resterendSeconden ??
-              Math.max(
-                ((Number.isFinite(state.halfMinuten)
-                  ? state.halfMinuten
-                  : DEFAULT_STATE.halfMinuten) *
-                  60) -
-                  e.tijdSeconden,
-                0
-              )
-          ),
-          e.wedstrijdMinuut ??
-            Math.max(1, Math.ceil(e.tijdSeconden / 60)),
+          e.id,formatTime(e.tijdSeconden),formatTime(
+          e.resterendSeconden ??Math.max(((Number.isFinite(state.halfMinuten)? state.halfMinuten: DEFAULT_STATE.halfMinuten) *60) -e.tijdSeconden,0)),
+          e.wedstrijdMinuut ??Math.max(1, Math.ceil(e.tijdSeconden / 60)),
           e.vak ?? "",
           e.soort,
           e.reden,
           e.team ?? "",
           e.spelerId || "",
-          e.spelerId ? spelersMap.get(e.spelerId)?.naam || "" : "",
-          possThuis.toString(),
-          possUit.toString(),
+          e.spelerId === TEGENSTANDER_ID
+          ? "Tegenstander"
+          : e.spelerId
+            ? spelersMap.get(e.spelerId)?.naam || ""
+            : "",
+          e.possThuis ?? "",
+          e.possUit ?? "",
         ]),
     ];
   
@@ -612,6 +652,7 @@ export default function App() {
           toggleKlok={toggleKlok}
           resetKlok={resetKlok}
           openPossessionModal={(team) => setPossPopup({ team })}
+          openShotReboundModal={(type) => setShotPopup({ type })}   
         />
       )}
 
@@ -638,6 +679,20 @@ export default function App() {
           }}
         />
       )}
+
+      {shotPopup && (
+        <ShotReboundModal
+          type={shotPopup.type}
+          spelers={spelersAanval}
+          onClose={() => setShotPopup(null)}
+          onSave={(resultaat, spelerId) => {
+            logSchotOfRebound(shotPopup.type, resultaat, spelerId);
+            setShotPopup(null);
+          }}
+        />
+      )}
+
+
     </div>
   );
 }
@@ -796,6 +851,7 @@ function WedstrijdTab({
   toggleKlok,
   resetKlok,
   openPossessionModal,
+  openShotReboundModal, 
 }: {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
@@ -807,6 +863,7 @@ function WedstrijdTab({
   toggleKlok: (aan: boolean) => void;
   resetKlok: () => void;
   openPossessionModal: (team: "thuis" | "uit") => void;
+  openShotReboundModal: (type: "Schot" | "Rebound") => void; 
 }) {
   const circle = (id: string | null, vak: VakSide, i: number) => {
     const p = id ? spelersMap.get(id) : undefined;
@@ -883,14 +940,12 @@ function WedstrijdTab({
   const aanvValid = aanvCounts.dames === 2 && aanvCounts.heren === 2;
   const verdValid = verdCounts.dames === 2 && verdCounts.heren === 2;
   const aanvalLinks = state.aanvalLinks ?? true;
-  const resterend = Math.max(
-    (
-      (Number.isFinite(state.halfMinuten)
-        ? state.halfMinuten
-        : DEFAULT_STATE.halfMinuten) * 60
-    ) - state.tijdSeconden,
-    0
-  );
+  const halfMinuten = Number.isFinite(state.halfMinuten)
+  ? state.halfMinuten
+  : DEFAULT_STATE.halfMinuten;
+  const halfTotal = halfMinuten * 60;
+
+  const resterend = Math.max(halfTotal - state.halfElapsedSeconden, 0);
 
   const totaalPoss =
     state.possessionThuisSeconden + state.possessionUitSeconden;
@@ -904,91 +959,112 @@ function WedstrijdTab({
       ? Math.round((state.possessionUitSeconden / totaalPoss) * 100)
       : 0;
 
-  return (
-    <div className="space-y-4">
-      {/* Score + tijd + controls */}
-      <div className="border rounded-2xl p-4">
-        {/* Kolomlayout: tijd/duur boven, dan balbezit, dan score */}
-        <div className="flex flex-col gap-4">
-          {/* Tijd + duur + start/pauze */}
-          <div className="flex flex-wrap items-start gap-3 justify-between">
-            {/* Tijd */}
-            <div>
-              <div className="text-2xl font-bold">{formatTime(resterend)}</div>
-              <div className="text-xs text-gray-500">
-                Verstreken: {formatTime(state.tijdSeconden)}
-              </div>
-            </div>
-
-            {/* Knoppen + duur */}
-            <div className="flex flex-col items-end gap-2">
-              <div className="flex gap-2 items-center">
-                {!state.klokLoopt ? (
-                  <Button variant="primary" onClick={() => toggleKlok(true)}>
-                    Start
-                  </Button>
-                ) : (
-                  <Button variant="primary" onClick={() => toggleKlok(false)}>
-                    Pauze
-                  </Button>
-                )}
-                <Button variant="secondary" onClick={resetKlok}>
-                  Reset
-                </Button>
-
-                <div className="flex items-center gap-2 ml-2">
-                  <div className="text-lg">Duur</div>
-                  <Button
-                    size="md"
-                    disabled={state.klokLoopt}
-                    onClick={() =>
-                      setState((s) => {
-                        const hm = Number.isFinite(s.halfMinuten)
-                          ? s.halfMinuten
-                          : DEFAULT_STATE.halfMinuten;
-                        return { ...s, halfMinuten: Math.max(1, hm - 1) };
-                      })
-                    }
-                  >
-                    −
-                  </Button>
-                  <div className="w-10 text-center">
-                    {Number.isFinite(state.halfMinuten)
-                      ? state.halfMinuten
-                      : DEFAULT_STATE.halfMinuten}
+      return (
+        <div className="space-y-4">
+          {/* Score + tijd + controls */}
+          <div className="border rounded-2xl p-4">
+            {/* Kolomlayout: tijd/duur boven, dan balbezit, dan score */}
+            <div className="flex flex-col gap-4">
+              {/* Tijd + duur + start/pauze */}
+              <div className="flex flex-wrap items-start gap-3 justify-between">
+                {/* Tijd */}
+                <div>
+                  <div className="text-2xl font-bold">{formatTime(resterend)}</div>
+                  <div className="text-xs text-gray-500">
+                    Verstreken: {formatTime(state.tijdSeconden)} – {state.currentHalf}e helft
                   </div>
+                </div>
+      
+                {/* Knoppen + duur */}
+                <div className="flex gap-2 items-center">
+                  {/* Start / Pauze */}
+                  {!state.klokLoopt ? (
+                    <Button variant="primary" onClick={() => toggleKlok(true)}>
+                      Start
+                    </Button>
+                  ) : (
+                    <Button variant="primary" onClick={() => toggleKlok(false)}>
+                      Pauze
+                    </Button>
+                  )}
+      
+                  {/* Reset */}
+                  <Button variant="secondary" onClick={resetKlok}>
+                    Reset
+                  </Button>
+      
+                  {/* 2e helft */}
                   <Button
                     size="md"
-                    disabled={state.klokLoopt}
+                    variant="secondary"
+                    disabled={state.currentHalf === 2} // maar 2 helften
                     onClick={() =>
-                      setState((s) => {
-                        const hm = Number.isFinite(s.halfMinuten)
-                          ? s.halfMinuten
-                          : DEFAULT_STATE.halfMinuten;
-                        return { ...s, halfMinuten: Math.min(60, hm + 1) };
-                      })
+                      setState((s) => ({
+                        ...s,
+                        currentHalf: 2,
+                        halfElapsedSeconden: 0,   // nieuwe helft start op 0
+                        klokLoopt: true,          // meteen laten lopen
+                        aanvalLinks: !s.aanvalLinks, // kant wisselen
+                      }))
                     }
                   >
-                    +
+                    2e helft
                   </Button>
-                  <div className="text-lg">Minuten</div>
+      
+                  {/* Duur instellen */}
+                  <div className="flex items-center gap-2 ml-2">
+                    <div className="text-lg">Duur</div>
+                    <Button
+                      size="md"
+                      disabled={state.klokLoopt}
+                      onClick={() =>
+                        setState((s) => {
+                          const hm = Number.isFinite(s.halfMinuten)
+                            ? s.halfMinuten
+                            : DEFAULT_STATE.halfMinuten;
+                          return { ...s, halfMinuten: Math.max(1, hm - 1) };
+                        })
+                      }
+                    >
+                      −
+                    </Button>
+                    <div className="w-10 text-center">
+                      {Number.isFinite(state.halfMinuten)
+                        ? state.halfMinuten
+                        : DEFAULT_STATE.halfMinuten}
+                    </div>
+                    <Button
+                      size="md"
+                      disabled={state.klokLoopt}
+                      onClick={() =>
+                        setState((s) => {
+                          const hm = Number.isFinite(s.halfMinuten)
+                            ? s.halfMinuten
+                            : DEFAULT_STATE.halfMinuten;
+                          return { ...s, halfMinuten: Math.min(60, hm + 1) };
+                        })
+                      }
+                    >
+                      +
+                    </Button>
+                    <div className="text-lg">Minuten</div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
+      
+              {/* ⬇️ hierna komen je balbezit-knoppen en de score-blokken */}
 
-          {/* 🔵 Grote balbezit-knoppen over de breedte */}
+          {/* 🔵 Grote balbezit- en schot/rebound-knoppen */}
           <div className="w-full">
             <div className="text-xs text-gray-500 mb-1">
-              Balbezit (tik bij elke wissel)
+              Balbezit & schotregistratie
             </div>
             <div className="grid grid-cols-2 gap-3">
+              {/* Rij 1: Balbezit Thuis / Uit */}
               <Button
                 size="md"
-                variant={
-                  state.possessionOwner === "thuis" ? "primary" : "secondary"
-                }
-                className="w-full py-4 text-lg"
+                variant={state.possessionOwner === "thuis" ? "primary" : "secondary"}
+                className="w-full py-12 text-lg"
                 onClick={() => {
                   setState((s) => ({ ...s, possessionOwner: "thuis" }));
                   openPossessionModal("thuis");
@@ -998,16 +1074,32 @@ function WedstrijdTab({
               </Button>
               <Button
                 size="md"
-                variant={
-                  state.possessionOwner === "uit" ? "primary" : "secondary"
-                }
-                className="w-full py-4 text-lg"
+                variant={state.possessionOwner === "uit" ? "primary" : "secondary"}
+                className="w-full py-12 text-lg"
                 onClick={() => {
                   setState((s) => ({ ...s, possessionOwner: "uit" }));
                   openPossessionModal("uit");
                 }}
               >
                 Balbezit Uit
+              </Button>
+          
+              {/* Rij 2: Schot / Rebound */}
+              <Button
+                size="md"
+                variant="secondary"
+                className="w-full py-12 text-lg"
+                onClick={() => openShotReboundModal("Rebound")}
+              >
+                Schot
+              </Button>
+              <Button
+                size="md"
+                variant="secondary"
+                className="w-full py-12 text-lg"
+                onClick={() => openShotReboundModal("Rebound")}
+              >
+                Rebound
               </Button>
             </div>
           </div>
@@ -1288,7 +1380,11 @@ function WedstrijdTab({
                     <td className="p-1">{e.soort}</td>
                     <td className="p-1">{e.reden}</td>
                     <td className="p-1">
-                      {e.spelerId ? spelersMap.get(e.spelerId)?.naam : "—"}
+                      {e.spelerId === TEGENSTANDER_ID
+                        ? "Tegenstander"
+                        : e.spelerId
+                          ? spelersMap.get(e.spelerId)?.naam
+                          : "—"}
                     </td>
                     <td className="p-1">
                       {e.team === "thuis"
@@ -1298,8 +1394,8 @@ function WedstrijdTab({
                         : "—"}
                     </td>
                     {/* ✅ balbezit netjes onder de juiste kopjes */}
-                    <td className="p-1">{possThuis}%</td>
-                    <td className="p-1">{possUit}%</td>
+                    <td className="p-2">{typeof e.possThuis === "number" ? `${e.possThuis}%` : "—"}</td>
+                    <td className="p-2">{typeof e.possUit === "number" ? `${e.possUit}%` : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1441,46 +1537,25 @@ function PossessionModal({
 }) {
   const [speler, setSpeler] = useState<string | undefined>(undefined);
 
-  const opties: LogReden[] = [
-    "Onderschept",
-    "Doelpunt tegen",
-    "Vrijebal",
-    "Strafworp",
-  ];
-
-  const accentBg = team === "thuis" ? "bg-blue-50" : "bg-amber-50";
-  const accentText = team === "thuis" ? "text-blue-800" : "text-amber-800";
+  const opties: LogReden[] =
+    team === "thuis"
+      ? ["Pass Onderschept", "Bal uit", "Vrijebal", "Strafworp"]
+      : ["Pass Onderschept", "Bal uit", "Vrije bal tegen", "Strafworp tegen"];
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className={`text-2xl font-bold ${accentText}`}>
-              Nieuw balbezit – {team === "thuis" ? "Thuis" : "Uit"}
-            </div>
-            <div className="text-sm text-gray-500 mt-1">
-              Kies (optioneel) een speler en daarna de aanleiding voor balbezit.
-            </div>
-          </div>
-          <button
-            className="text-sm text-gray-500 hover:text-gray-800"
-            onClick={onClose}
-          >
-            ✕
-          </button>
+      <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-xl">
+        <div className="text-2xl font-semibold mb-4">
+          Nieuw balbezit – {team === "thuis" ? "Thuis" : "Uit"}
         </div>
 
-        {/* Spelers (alle veldspelers) */}
-        <div className="space-y-2">
-          <div className="text-sm font-semibold">Speler (optioneel)</div>
-          <div className="flex flex-wrap gap-2 max-h-40 overflow-auto">
+        {/* Speler kiezen */}
+        <div className="space-y-2 mb-4">
+          <div className="text-sm">Kies speler (optioneel)</div>
+          <div className="flex flex-wrap gap-2 max-h-48 overflow-auto">
             <button
-              className={`px-4 py-5 rounded-full border text-base font-semibold ${
-                !speler
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-800 hover:bg-gray-50"
+              className={`px-4 py-2 border rounded-full text-base font-semibold ${
+                !speler ? "bg-black text-white" : ""
               }`}
               onClick={() => setSpeler(undefined)}
             >
@@ -1489,10 +1564,8 @@ function PossessionModal({
             {spelers.map((p) => (
               <button
                 key={p.id}
-                className={`px-4 py-5 rounded-full border text-base font-semibold ${
-                  speler === p.id
-                    ? "bg-gray-900 text-white border-gray-900"
-                    : "bg-white text-gray-800 hover:bg-gray-50"
+                className={`px-4 py-2 border rounded-full text-base font-semibold ${
+                  speler === p.id ? "bg-black text-white" : ""
                 }`}
                 onClick={() => setSpeler(p.id)}
               >
@@ -1502,28 +1575,29 @@ function PossessionModal({
           </div>
         </div>
 
-        {/* Reden-knoppen groot en duidelijk */}
-        <div className="space-y-2">
-          <div className="text-sm font-semibold">Aanleiding balbezit</div>
-          <div className="grid grid-cols-2 gap-3">
-            {opties.map((o) => (
-              <button
-                key={o}
-                className={`w-full py-4 px-3 text-base font-semibold rounded-xl border ${accentBg} hover:brightness-95 active:scale-[0.98] transition`}
-                onClick={() => onSave(o, speler)}
-              >
-                {o}
-              </button>
-            ))}
-          </div>
+        {/* Reden knoppen */}
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          {opties.map((o) => (
+            <button
+              key={o}
+              className="border rounded-xl p-4 hover:shadow text-base font-semibold"
+              onClick={() => onSave(o, speler)}
+            >
+              {o}
+            </button>
+          ))}
         </div>
 
-        {/* Onderste balk */}
+        {/* Extra brede knop: Schot afgevangen */}
+        <button
+          className="w-full border rounded-xl p-4 hover:shadow text-base font-semibold mb-4"
+          onClick={() => onSave("Schot afgevangen", speler)}
+        >
+          Schot afgevangen
+        </button>
+
         <div className="flex justify-end">
-          <button
-            className="text-sm text-gray-500 hover:text-gray-800"
-            onClick={onClose}
-          >
+          <button className="text-sm text-gray-600" onClick={onClose}>
             Sluiten
           </button>
         </div>
@@ -1531,6 +1605,79 @@ function PossessionModal({
     </div>
   );
 }
+
+function ShotReboundModal({
+  type,
+  spelers,
+  onClose,
+  onSave,
+}: {
+  type: "Schot" | "Rebound";
+  spelers: Player[];
+  onClose: () => void;
+  onSave: (resultaat: "Raak" | "Mis", spelerId?: string) => void;
+}) {
+  const [speler, setSpeler] = useState<string | undefined>(undefined);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-xl">
+        <div className="text-2xl font-semibold mb-4">
+          {type} – aanvallend vak
+        </div>
+
+        {/* Speler kiezen (alleen aanvalsvak) */}
+        <div className="space-y-2 mb-4">
+          <div className="text-sm">Kies speler (optioneel)</div>
+          <div className="flex flex-wrap gap-2 max-h-48 overflow-auto">
+            <button
+              className={`px-4 py-2 border rounded-full text-base font-semibold ${
+                !speler ? "bg-black text-white" : ""
+              }`}
+              onClick={() => setSpeler(undefined)}
+            >
+              Team-event
+            </button>
+            {spelers.map((p) => (
+              <button
+                key={p.id}
+                className={`px-4 py-2 border rounded-full text-base font-semibold ${
+                  speler === p.id ? "bg-black text-white" : ""
+                }`}
+                onClick={() => setSpeler(p.id)}
+              >
+                {p.naam}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Raak / Mis knoppen */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button
+            className="border rounded-xl p-4 hover:shadow text-base font-semibold bg-green-50"
+            onClick={() => onSave("Raak", speler)}
+          >
+            Raak
+          </button>
+          <button
+            className="border rounded-xl p-4 hover:shadow text-base font-semibold bg-red-50"
+            onClick={() => onSave("Mis", speler)}
+          >
+            Mis
+          </button>
+        </div>
+
+        <div className="flex justify-end">
+          <button className="text-sm text-gray-600" onClick={onClose}>
+            Sluiten
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 // --- UI bits ---------------------------------------------------------------
 function Avatar({ url, naam }: { url?: string; naam: string }) {
