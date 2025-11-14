@@ -488,7 +488,7 @@ useEffect(() => {
 
   const exportCSV = () => {
     // ✅ balbezit-percentages uitrekenen
-    const totaalPoss =
+    /*const totaalPoss =
       state.possessionThuisSeconden + state.possessionUitSeconden;
   
     const possThuis =
@@ -503,7 +503,7 @@ useEffect(() => {
         ? Math.round(
             (state.possessionUitSeconden / totaalPoss) * 100
           )
-        : 0;
+        : 0;*/
   
     const rows = [
       [
