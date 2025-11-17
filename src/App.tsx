@@ -55,60 +55,64 @@ type Player = { id: string; naam: string; geslacht: Geslacht; foto?: string };
 type VakSide = "aanvallend" | "verdedigend";
 
 type LogReden =
-| "Bal onderschept"
-| "Bal uit"
-| "overtreding"
-| "Doorgelaten"
-| "Gescoord"
-| "Wissel in"
-| "Wissel uit"
-// Balbezit-specifiek
-| "Pass Onderschept"
-| "Vrijebal"
-| "Vrije bal tegen"
-| "Strafworp"
-| "Strafworp tegen"
-| "Schot afgevangen"
-// Schot/Rebound
-| "Raak"
-| "Mis";
+  | "Bal onderschept"
+  | "Bal uit"
+  | "overtreding"
+  | "Doorgelaten"
+  | "Gescoord"
+  | "Wissel in"
+  | "Wissel uit"
+  | "Pass Onderschept"
+  | "Vrijebal"
+  | "Vrije bal tegen"
+  | "Strafworp"
+  | "Strafworp tegen"
+  | "Schot afgevangen"
+  | "Gemist Schot"
+  | "Rebound";
 
 type LogEvent = {
   id: string;
-  tijdSeconden: number; // verstreken tijd
+  tijdSeconden: number;            // totale verstreken tijd in de wedstrijd
   vak?: VakSide;
   soort: "Gemis" | "Kans" | "Wissel" | "Balbezit" | "Schot" | "Rebound";
   reden: LogReden;
   spelerId?: string;
   resterendSeconden?: number;
-  wedstrijdMinuut?: number; // ceil(verstreken_s / 60), min 1
-  pos?: number; // 1..4 (alleen voor wissels)
-  team?: "thuis" | "uit"; // ✅ nieuw, vooral voor Balbezit
-  possThuis?: number; // 0–100
-  possUit?: number;   // 0–100
-};
+  wedstrijdMinuut?: number;
+  pos?: number;                    // 1..4 (alleen voor wissels)
+  team?: "thuis" | "uit";          // vooral voor Balbezit
 
+  // snapshots van balbezit op dat moment
+  possThuis?: number;              // 0–100
+  possUit?: number;                // 0–100
+
+  // optioneel extra info voor analyse
+  type?: "Schot" | "Rebound";
+  resultaat?: "Raak" | "Mis";
+};
 
 type AppState = {
   spelers: Player[];
-  aanval: (string | null)[]; // 4 posities: id of null
+  aanval: (string | null)[];
   verdediging: (string | null)[];
   scoreThuis: number;
   scoreUit: number;
-
-  tijdSeconden: number; // verstreken seconden in huidige helft
-  halfElapsedSeconden: number;   // tijd in de huidige helft
+  tijdSeconden: number;               // loopt over beide helften door
   klokLoopt: boolean;
-  halfMinuten: number; // duur helft in minuten
-  
+  halfMinuten: number;
   log: LogEvent[];
+
   possessionOwner: "thuis" | "uit" | null;
   possessionThuisSeconden: number;
   possessionUitSeconden: number;
-  
 
-  currentHalf: 1 | 2;          // welke helft zijn we in
-  aanvalLinks: boolean; //true is links, false is rechts
+  autoVakWisselNa2: boolean;
+  goalsSinceLastSwitch: number;
+  aanvalLinks: boolean;
+  currentHalf: 1 | 2;
+
+  activeVak: VakSide;                 // waar is nu de bal
 };
 
 const DEFAULT_STATE: AppState = {
@@ -117,20 +121,18 @@ const DEFAULT_STATE: AppState = {
   verdediging: [null, null, null, null],
   scoreThuis: 0,
   scoreUit: 0,
-
   tijdSeconden: 0,
   klokLoopt: false,
-  halfElapsedSeconden: 0,   // ✅ nieuw  
   halfMinuten: 25,
-
   log: [],
-  
   possessionOwner: null,
   possessionThuisSeconden: 0,
   possessionUitSeconden: 0,
-  
-  currentHalf: 1,          // ✅ begin in 1e helft
-  aanvalLinks: true,    // Standaard Links
+  autoVakWisselNa2: false,
+  goalsSinceLastSwitch: 0,
+  aanvalLinks: true,
+  currentHalf: 1,
+  activeVak: "aanvallend",
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
@@ -148,7 +150,6 @@ function uid(prefix = "id") {
 
 function encodeStateForShare(s: AppState): string {
   const json = JSON.stringify(s);
-  // veilig encoden voor in een URL
   return encodeURIComponent(btoa(json));
 }
 
@@ -173,7 +174,6 @@ function getSharedStateFromUrl(): AppState | null {
   }
 }
 
-
 function detectVakForSpeler(state: AppState, spelerId?: string): VakSide | undefined {
   if (!spelerId) return undefined;
   if (state.aanval.includes(spelerId)) return "aanvallend";
@@ -181,36 +181,56 @@ function detectVakForSpeler(state: AppState, spelerId?: string): VakSide | undef
   return undefined;
 }
 
-
-// -- Hydration/migratie helper: maak opgeslagen state veilig en compleet
+// -- Hydration/migratie helper ----------------------------------------------
 function sanitizeState(raw: any): AppState {
-  const s: Partial<AppState> = typeof raw === "object" && raw ? raw : {};
+  const s: any = typeof raw === "object" && raw ? raw : {};
   const toArr4 = (a: any): (string | null)[] =>
     Array.isArray(a)
       ? [a[0] ?? null, a[1] ?? null, a[2] ?? null, a[3] ?? null]
       : [null, null, null, null];
   const num = (v: any, d: number) => (Number.isFinite(v) ? Number(v) : d);
   const bool = (v: any, d: boolean) => (typeof v === "boolean" ? v : d);
+
   return {
     spelers: Array.isArray(s.spelers) ? (s.spelers as Player[]) : [],
-    aanval: toArr4((s as any).aanval),
-    verdediging: toArr4((s as any).verdediging),
-    scoreThuis: num((s as any).scoreThuis, DEFAULT_STATE.scoreThuis),
-    scoreUit: num((s as any).scoreUit, DEFAULT_STATE.scoreUit),
-    tijdSeconden: num((s as any).tijdSeconden, DEFAULT_STATE.tijdSeconden),
-    halfElapsedSeconden: num((s as any).halfElapsedSeconden, DEFAULT_STATE.halfElapsedSeconden ),
-    klokLoopt: bool((s as any).klokLoopt, DEFAULT_STATE.klokLoopt),
-    halfMinuten: num((s as any).halfMinuten, DEFAULT_STATE.halfMinuten),
-    log: Array.isArray((s as any).log) ? ((s as any).log as LogEvent[]) : [],
-    currentHalf: (s as any).currentHalf === 2 ? 2 : 1,
-    aanvalLinks: bool((s as any).aanvalLinks, DEFAULT_STATE.aanvalLinks),
-    possessionOwner:(s as any).possessionOwner === "thuis" || (s as any).possessionOwner === "uit"? (s as any).possessionOwner: null,possessionThuisSeconden: num((s as any).possessionThuisSeconden,DEFAULT_STATE.possessionThuisSeconden),
+    aanval: toArr4(s.aanval),
+    verdediging: toArr4(s.verdediging),
+    scoreThuis: num(s.scoreThuis, DEFAULT_STATE.scoreThuis),
+    scoreUit: num(s.scoreUit, DEFAULT_STATE.scoreUit),
+    tijdSeconden: num(s.tijdSeconden, DEFAULT_STATE.tijdSeconden),
+    klokLoopt: bool(s.klokLoopt, DEFAULT_STATE.klokLoopt),
+    halfMinuten: num(s.halfMinuten, DEFAULT_STATE.halfMinuten),
+    log: Array.isArray(s.log) ? (s.log as LogEvent[]) : [],
+
+    possessionOwner:
+      s.possessionOwner === "thuis" || s.possessionOwner === "uit"
+        ? s.possessionOwner
+        : null,
+    possessionThuisSeconden: num(
+      s.possessionThuisSeconden,
+      DEFAULT_STATE.possessionThuisSeconden
+    ),
     possessionUitSeconden: num(
-      (s as any).possessionUitSeconden,
+      s.possessionUitSeconden,
       DEFAULT_STATE.possessionUitSeconden
     ),
+
+    autoVakWisselNa2: bool(s.autoVakWisselNa2, DEFAULT_STATE.autoVakWisselNa2),
+    goalsSinceLastSwitch: num(
+      s.goalsSinceLastSwitch,
+      DEFAULT_STATE.goalsSinceLastSwitch
+    ),
+
+    aanvalLinks:
+      typeof s.aanvalLinks === "boolean"
+        ? s.aanvalLinks
+        : DEFAULT_STATE.aanvalLinks,
+    currentHalf: s.currentHalf === 2 ? 2 : 1,
+
+    activeVak: s.activeVak === "verdedigend" ? "verdedigend" : "aanvallend",
   };
 }
+
 
 // --- Main component --------------------------------------------------------
 
@@ -236,59 +256,45 @@ export default function App() {
   const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
 
   // Persist
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {}
-  }, [state]);
-
   // Timer (intern: op-tellen; UI toont resterend) + balbezit
-// ⏱️ Timer-effect – eenvoudige, enkele interval
 useEffect(() => {
-  // als de klok niet loopt: geen interval
   if (!state.klokLoopt) return;
 
-    const id = window.setInterval(() => {
-      setState((prev) => {
-        const halfMinuten = Number.isFinite(prev.halfMinuten)
-          ? prev.halfMinuten
-          : DEFAULT_STATE.halfMinuten;
-        const halfTotal = halfMinuten * 60;
+  const id = window.setInterval(() => {
+    setState((prev) => {
+      const halfMinuten = Number.isFinite(prev.halfMinuten)
+        ? prev.halfMinuten
+        : DEFAULT_STATE.halfMinuten;
+      const halfTotal = halfMinuten * 60;
 
-        const nextTotal = prev.tijdSeconden + 1;          // totale wedstrijd-tijd
-        const nextHalfRaw = prev.halfElapsedSeconden + 1; // tijd in huidige helft
-        const nextHalf = Math.min(nextHalfRaw, halfTotal);
+      // einde van de huidige helft in totale seconden
+      const currentHalfEnd = prev.currentHalf * halfTotal;
 
-        const updated: AppState = {
-          ...prev,
-          tijdSeconden: nextTotal,
-          halfElapsedSeconden: nextHalf,
-        };
+      const nextTime = Math.min(prev.tijdSeconden + 1, currentHalfEnd);
 
-        // helft vol? → klok stoppen
-        if (nextHalfRaw >= halfTotal) {
-          updated.klokLoopt = false;
-        }
+      const updated: AppState = {
+        ...prev,
+        tijdSeconden: nextTime,
+      };
 
-        // balbezit-seconden ophogen
-        if (prev.possessionOwner === "thuis") {
-          updated.possessionThuisSeconden =
-            prev.possessionThuisSeconden + 1;
-        } else if (prev.possessionOwner === "uit") {
-          updated.possessionUitSeconden =
-            prev.possessionUitSeconden + 1;
-        }
+      // helft vol → klok stoppen
+      if (nextTime >= currentHalfEnd) {
+        updated.klokLoopt = false;
+      }
 
-        return updated;
-      });
-    }, 1000);
+      // balbezit-tijd ophogen
+      if (prev.possessionOwner === "thuis") {
+        updated.possessionThuisSeconden = prev.possessionThuisSeconden + 1;
+      } else if (prev.possessionOwner === "uit") {
+        updated.possessionUitSeconden = prev.possessionUitSeconden + 1;
+      }
 
-    // opruimen (ook bij StrictMode 2x mount)
-    return () => {
-      window.clearInterval(id);
-    };
-  }, [state.klokLoopt, state.halfMinuten]);
+      return updated;
+    });
+  }, 1000);
 
+  return () => clearInterval(id);
+}, [state.klokLoopt, state.halfMinuten, state.currentHalf]);
 
   const spelersMap = useMemo(() => {
     const m = new Map<string, Player>();
@@ -334,16 +340,19 @@ useEffect(() => {
       const arr = vak === "aanvallend" ? [...s.aanval] : [...s.verdediging];
       const prevId = arr[pos] || null;
       arr[pos] = spelerId;
-
+  
       const logs: LogEvent[] = [];
-      const halfMinuten = Number.isFinite(state.halfMinuten)
-      ? state.halfMinuten
-      : DEFAULT_STATE.halfMinuten;
+  
+      // ✅ gebruik de halfMinuten uit de actuele state 's'
+      const halfMinuten = Number.isFinite(s.halfMinuten)
+        ? s.halfMinuten
+        : DEFAULT_STATE.halfMinuten;
       const halfTotal = halfMinuten * 60;
-    
-      const resterend = Math.max(halfTotal - state.halfElapsedSeconden, 0);
+  
+      // ✅ geen halfElapsedSeconden meer → gewoon tijdSeconden
+      const resterend = Math.max(halfTotal - s.tijdSeconden, 0);
       const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
-
+  
       if (prevId && prevId !== spelerId) {
         logs.push({
           id: uid("ev"),
@@ -357,6 +366,7 @@ useEffect(() => {
           pos: pos + 1,
         });
       }
+  
       if (spelerId && prevId !== spelerId) {
         logs.push({
           id: uid("ev"),
@@ -370,14 +380,18 @@ useEffect(() => {
           pos: pos + 1,
         });
       }
-
-      const next = vak === "aanvallend" ? { ...s, aanval: arr } : { ...s, verdediging: arr };
+  
+      const next =
+        vak === "aanvallend"
+          ? { ...s, aanval: arr }
+          : { ...s, verdediging: arr };
+  
       return logs.length ? { ...next, log: [...logs, ...s.log] } : next;
     });
   };
 
   const wisselVakken = () =>
-    setState((s) => ({ ...s, aanval: s.verdediging, verdediging: s.aanval }));
+    setState((s) => ({ ...s, aanval: s.verdediging, verdediging: s.aanval, goalsSinceLastSwitch:0 }));
 
   const toggleKlok = (aan: boolean) => setState((s) => ({ ...s, klokLoopt: aan }));
 
@@ -385,7 +399,6 @@ useEffect(() => {
   setState((s) => ({
     ...s,
     tijdSeconden: 0,
-    halfElapsedSeconden: 0,
     klokLoopt: false,
     possessionOwner: null,
     possessionThuisSeconden: 0,
@@ -393,6 +406,7 @@ useEffect(() => {
     currentHalf: 1,
     aanvalLinks: DEFAULT_STATE.aanvalLinks,
   }));
+
 
   // 🔹 LOSSE functie voor gewone Gemis/Kans/Wissel events
   const logEvent = (
@@ -402,13 +416,11 @@ useEffect(() => {
     spelerId?: string
   ) => {
     const halfMinuten = Number.isFinite(state.halfMinuten)
-    ? state.halfMinuten
-    : DEFAULT_STATE.halfMinuten;
-    const halfTotal = halfMinuten * 60;
-  
-    const resterend = Math.max(halfTotal - state.halfElapsedSeconden, 0);
-
+      ? state.halfMinuten
+      : DEFAULT_STATE.halfMinuten;
+    const resterend = Math.max(halfMinuten * 60 - state.tijdSeconden, 0);
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+  
     const e: LogEvent = {
       id: uid("ev"),
       tijdSeconden: state.tijdSeconden,
@@ -419,53 +431,135 @@ useEffect(() => {
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
     };
-
+  
     setState((s) => {
-      const next: AppState = { ...s, log: [e, ...s.log] };
+      let next: AppState = { ...s, log: [e, ...s.log] };
+      let goalScored = false;
+  
+      // bestaande score-logica
       if (soort === "Kans" && vak === "aanvallend" && reden === "Gescoord") {
         next.scoreThuis = s.scoreThuis + 1;
+        goalScored = true;
       }
       if (soort === "Gemis" && vak === "verdedigend" && reden === "Doorgelaten") {
         next.scoreUit = s.scoreUit + 1;
+        goalScored = true;
       }
+  
+      // 🔁 automatisch vakkenwissel na 2 goals (als je die logica al hebt)
+      if (goalScored && s.autoVakWisselNa2) {
+        const goalsTotaal = s.goalsSinceLastSwitch + 1;
+        if (goalsTotaal >= 2) {
+          next = {
+            ...next,
+            aanval: next.verdediging,
+            verdediging: next.aanval,
+            goalsSinceLastSwitch: 0,
+          };
+        } else {
+          next.goalsSinceLastSwitch = goalsTotaal;
+        }
+      }
+  
+      // ⚪ alleen bal-kant wisselen na goal:
+      if (goalScored) {
+        next.activeVak =
+          s.activeVak === "aanvallend" ? "verdedigend" : "aanvallend";
+      }
+  
       return next;
     });
   };
 
-  const logSchotOfRebound = (type: "Schot" | "Rebound", resultaat: "Raak" | "Mis", spelerId?: string) => {
+  const logSchotOfRebound = (
+    type: "Schot" | "Rebound",
+    resultaat: "Raak" | "Mis",
+    spelerId?: string
+  ) => {
     const halfMinuten = Number.isFinite(state.halfMinuten)
       ? state.halfMinuten
       : DEFAULT_STATE.halfMinuten;
-    const totalSeconds = halfMinuten * 60;
-    const resterend = Math.max(totalSeconds - state.halfElapsedSeconden, 0);
+    const halfTotal = halfMinuten * 60;
+  
+    // bepaal in welke helft we zitten, om resterend te tonen
+    const halfStart = state.currentHalf === 1 ? 0 : halfTotal;
+    const halfElapsed = Math.max(
+      0,
+      Math.min(halfTotal, state.tijdSeconden - halfStart)
+    );
+    const resterend = Math.max(halfTotal - halfElapsed, 0);
+  
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
     const vak = detectVakForSpeler(state, spelerId) ?? "aanvallend";
+  
+    const totaalPoss =
+      state.possessionThuisSeconden + state.possessionUitSeconden;
+    const possThuis =
+      totaalPoss > 0
+        ? Math.round((state.possessionThuisSeconden / totaalPoss) * 100)
+        : 0;
+    const possUit =
+      totaalPoss > 0
+        ? Math.round((state.possessionUitSeconden / totaalPoss) * 100)
+        : 0;
+  
+    const reden: LogReden =
+      type === "Schot"
+        ? resultaat === "Raak"
+          ? "Gescoord"
+          : "Gemist Schot"
+        : "Rebound";
   
     const e: LogEvent = {
       id: uid("ev"),
       tijdSeconden: state.tijdSeconden,
       vak,
-      soort: type,
-      reden: resultaat,
+      soort: type, // "Schot" of "Rebound"
+      reden,
       spelerId,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
+      possThuis,
+      possUit,
+      type,
+      resultaat,
     };
   
     setState((s) => ({ ...s, log: [e, ...s.log] }));
   };
   
+  
   // 🔹 LOSSE functie voor Balbezit-events (GEEN vak, maar wel snapshot poss%)
-  const logBalbezit = (team: "thuis" | "uit", reden: LogReden, spelerId?: string) => {
+  const logBalbezit = (
+    team: "thuis" | "uit",
+    reden: LogReden,
+    spelerId?: string
+  ) => {
     const halfMinuten = Number.isFinite(state.halfMinuten)
       ? state.halfMinuten
       : DEFAULT_STATE.halfMinuten;
-    const totalSeconds = halfMinuten * 60;
-    const resterend = Math.max(totalSeconds - state.tijdSeconden, 0);
+    const halfTotal = halfMinuten * 60;
+  
+    const halfStart = state.currentHalf === 1 ? 0 : halfTotal;
+    const halfElapsed = Math.max(
+      0,
+      Math.min(halfTotal, state.tijdSeconden - halfStart)
+    );
+    const resterend = Math.max(halfTotal - halfElapsed, 0);
+  
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
   
-    // als balbezit voor UIT is en er is géén speler gekozen:
-    // log dan een “virtuele” speler met naam "Tegenstander"
+    const totaalPoss =
+      state.possessionThuisSeconden + state.possessionUitSeconden;
+    const possThuis =
+      totaalPoss > 0
+        ? Math.round((state.possessionThuisSeconden / totaalPoss) * 100)
+        : 0;
+    const possUit =
+      totaalPoss > 0
+        ? Math.round((state.possessionUitSeconden / totaalPoss) * 100)
+        : 0;
+  
     const effectiveSpelerId =
       team === "uit" && !spelerId ? TEGENSTANDER_ID : spelerId;
   
@@ -477,11 +571,14 @@ useEffect(() => {
       spelerId: effectiveSpelerId,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
-      // vak leeg voor balbezit
+      team,
+      possThuis,
+      possUit,
     };
   
     setState((s) => ({ ...s, log: [e, ...s.log] }));
   };
+  
 
 
 
@@ -637,6 +734,8 @@ useEffect(() => {
           verdediging={state.verdediging}
           setVakPos={setVakPos}
           wisselVakken={wisselVakken}
+          autoVakWisselNa2={state.autoVakWisselNa2}
+          setAutoVakWisselNa2={(value) => setState((s) => ({ ...s, autoVakWisselNa2: value }))}   
         />
       )}
 
@@ -750,21 +849,42 @@ function SpelersTab({ spelers, addSpeler, delSpeler }: {
 }
 
 // --- Vakindeling Tab -------------------------------------------------------
-function VakindelingTab({ spelers, toegewezen, aanval, verdediging, setVakPos, wisselVakken }: {
+function VakindelingTab({
+  spelers,
+  toegewezen,
+  aanval,
+  verdediging,
+  setVakPos,
+  wisselVakken,
+  autoVakWisselNa2,
+  setAutoVakWisselNa2,
+}: {
   spelers: Player[];
   toegewezen: Set<string>;
   aanval: (string | null)[];
   verdediging: (string | null)[];
   setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
   wisselVakken: () => void;
+  autoVakWisselNa2: boolean;
+  setAutoVakWisselNa2: (value: boolean) => void;
 }) {
-  const beschikbare = spelers.filter((s) => !toegewezen.has(s.id));
   return (
     <div className="grid md:grid-cols-2 gap-4">
       <VakBox titel="Aanvallend vak" vak="aanvallend" posities={aanval} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
       <VakBox titel="Verdedigend vak" vak="verdedigend" posities={verdediging} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
       <div className="md:col-span-2 flex items-center justify-between mt-2">
         <div className="text-sm text-gray-600">Bank: {beschikbare.map((s) => s.naam).join(", ") || "—"}</div>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={autoVakWisselNa2}
+                onChange={(e) => setAutoVakWisselNa2(e.target.checked)}
+              />
+            <span>Automatisch wisselen na 2 doelpunten</span>
+        </label>
+      </div>
         <button className="px-3 py-2 border rounded-xl" onClick={wisselVakken}>Vakken wisselen</button>
       </div>
     </div>
@@ -865,10 +985,12 @@ function WedstrijdTab({
   openPossessionModal: (team: "thuis" | "uit") => void;
   openShotReboundModal: (type: "Schot" | "Rebound") => void; 
 }) {
-  const circle = (id: string | null, vak: VakSide, i: number) => {
+    const circle = (id: string | null, vak: VakSide, i: number) => {
     const p = id ? spelersMap.get(id) : undefined;
-    // let op: dit is technisch een hook-in-hook, maar als je IDE niet klaagt laten we hem nu zo
+    // let op: dit is technisch een hook-in-hook, maar als IDE niet klaagt laten ik hem nu zo
     const detailsRef = useRef<HTMLDetailsElement | null>(null);
+    const isAanvalActive = state.activeVak === "aanvallend";
+    const isVerdActive = state.activeVak === "verdedigend";
 
     return (
       <div key={`${vak}-${i}`} className="flex items-center gap-2">
@@ -940,16 +1062,27 @@ function WedstrijdTab({
   const aanvValid = aanvCounts.dames === 2 && aanvCounts.heren === 2;
   const verdValid = verdCounts.dames === 2 && verdCounts.heren === 2;
   const aanvalLinks = state.aanvalLinks ?? true;
+
   const halfMinuten = Number.isFinite(state.halfMinuten)
-  ? state.halfMinuten
-  : DEFAULT_STATE.halfMinuten;
+    ? state.halfMinuten
+    : DEFAULT_STATE.halfMinuten;
   const halfTotal = halfMinuten * 60;
-
-  const resterend = Math.max(halfTotal - state.halfElapsedSeconden, 0);
-
+  
+  // hoeveel tijd is er in de huidige helft gespeeld?
+  const halfStart = state.currentHalf === 1 ? 0 : halfTotal;
+  const halfElapsed = Math.max(
+    0,
+    Math.min(halfTotal, state.tijdSeconden - halfStart)
+  );
+  const resterend = Math.max(halfTotal - halfElapsed, 0);
+  
+  // active vak flags
+  const isAanvalActive = state.activeVak === "aanvallend";
+  const isVerdActive = state.activeVak === "verdedigend";
+  
   const totaalPoss =
     state.possessionThuisSeconden + state.possessionUitSeconden;
-
+  
   const possThuis =
     totaalPoss > 0
       ? Math.round((state.possessionThuisSeconden / totaalPoss) * 100)
@@ -1002,9 +1135,8 @@ function WedstrijdTab({
                       setState((s) => ({
                         ...s,
                         currentHalf: 2,
-                        halfElapsedSeconden: 0,   // nieuwe helft start op 0
-                        klokLoopt: true,          // meteen laten lopen
-                        aanvalLinks: !s.aanvalLinks, // kant wisselen
+                        klokLoopt: true,
+                        aanvalLinks: !s.aanvalLinks,
                       }))
                     }
                   >
@@ -1059,49 +1191,121 @@ function WedstrijdTab({
             <div className="text-xs text-gray-500 mb-1">
               Balbezit & schotregistratie
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {/* Rij 1: Balbezit Thuis / Uit */}
+ {/* Vakken */}
+ <div className="grid md:grid-cols-2 gap-4">
+        {/* Aanvallend vak */}
+        <div
+          className={`rounded-2xl p-4 border ${
+            aanvValid ? "border-gray-200" : "border-red-500"
+          } ${isAanvalActive ? "bg-white" : "bg-gray-50"}`}
+          onClick={() =>
+            setState((s) => ({ ...s, activeVak: "aanvallend" }))
+          }
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className={`font-semibold ${aanvValid ? "" : "text-red-600"}`}>
+              Aanvallend vak
+            </div>
+            <div className="flex gap-2">
               <Button
                 size="md"
-                variant={state.possessionOwner === "thuis" ? "primary" : "secondary"}
-                className="w-full py-12 text-lg"
-                onClick={() => {
-                  setState((s) => ({ ...s, possessionOwner: "thuis" }));
-                  openPossessionModal("thuis");
+                variant={aanvValid ? "secondary" : "danger"}
+                onClick={(e) => {
+                  e.stopPropagation(); // klik op knop mag niet ook het vak activeren
+                  setPopup({ vak: "aanvallend", soort: "Gemis" });
                 }}
               >
-                Balbezit Thuis
+                Gemis
               </Button>
               <Button
                 size="md"
-                variant={state.possessionOwner === "uit" ? "primary" : "secondary"}
-                className="w-full py-12 text-lg"
-                onClick={() => {
-                  setState((s) => ({ ...s, possessionOwner: "uit" }));
-                  openPossessionModal("uit");
+                variant={aanvValid ? "secondary" : "danger"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPopup({ vak: "aanvallend", soort: "Kans" });
                 }}
               >
-                Balbezit Uit
-              </Button>
-          
-              {/* Rij 2: Schot / Rebound */}
-              <Button
-                size="md"
-                variant="secondary"
-                className="w-full py-12 text-lg"
-                onClick={() => openShotReboundModal("Rebound")}
-              >
-                Schot
-              </Button>
-              <Button
-                size="md"
-                variant="secondary"
-                className="w-full py-12 text-lg"
-                onClick={() => openShotReboundModal("Rebound")}
-              >
-                Rebound
+                Kans
               </Button>
             </div>
+          </div>
+
+          {!aanvValid && (
+            <div className="text-xs text-red-600 mb-2">
+              Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+              {aanvCounts.dames} dames, {aanvCounts.heren} heren).
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {state.aanval.map((id, i) => circle(id, "aanvallend", i))}
+          </div>
+        </div>
+
+        {/* Verdedigend vak */}
+        <div
+          className={`rounded-2xl p-4 border ${
+            verdValid ? "border-gray-200" : "border-red-500"
+          } ${isVerdActive ? "bg-white" : "bg-gray-50"}`}
+          onClick={() =>
+            setState((s) => ({ ...s, activeVak: "verdedigend" }))
+          }
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className={`font-semibold ${verdValid ? "" : "text-red-600"}`}>
+              Verdedigend vak
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="md"
+                variant={verdValid ? "secondary" : "danger"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPopup({ vak: "verdedigend", soort: "Gemis" });
+                }}
+              >
+                Gemis
+              </Button>
+              <Button
+                size="md"
+                variant={verdValid ? "secondary" : "danger"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPopup({ vak: "verdedigend", soort: "Kans" });
+                }}
+              >
+                Kans
+              </Button>
+            </div>
+          </div>
+
+          {!verdValid && (
+            <div className="text-xs text-red-600 mb-2">
+              Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+              {verdCounts.dames} dames, {verdCounts.heren} heren).
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {state.verdediging.map((id, i) => circle(id, "verdedigend", i))}
+          </div>
+
+          {/* STEAL-knop onder het verdedigende vak */}
+          <div className="mt-4">
+            <Button
+              variant="primary"
+              className="w-full py-3"
+              onClick={(e) => {
+                e.stopPropagation();
+                // hier later Steal-logica / popup aan koppelen
+                alert("Steal-actie nog te koppelen aan logica 🙂");
+              }}
+            >
+              STEAL
+            </Button>
+          </div>
+        </div>
+      </div>
           </div>
 
           {/* Scoresectie (gekleurde kaarten) */}
