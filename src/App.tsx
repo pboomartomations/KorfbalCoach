@@ -1016,7 +1016,6 @@ function WedstrijdTab({
   state,
   setState,
   spelersMap,
-  setPopup,
   wisselVakken,
   bank,
   setVakPos,
