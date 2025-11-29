@@ -79,6 +79,7 @@ type LogReden =
     tijdSeconden: number;            // totale verstreken tijd in de wedstrijd
     vak?: VakSide;
     soort: "Gemis" | "Kans" | "Wissel" | "Balbezit" | "Schot" | "Rebound";
+    actie?: "Schot" | "Doorloop" | "Vrijebal" | "Strafworp";
     reden: LogReden;
     spelerId?: string;
     resterendSeconden?: number;
@@ -263,6 +264,8 @@ export default function App() {
   const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
   const [vakActionPopup, setVakActionPopup] =
   useState<null | { vak: VakSide }>(null);
+  const [stealPopup, setStealPopup] = useState<null | {}>(null);
+
 
 
 
@@ -424,7 +427,8 @@ useEffect(() => {
     vak: VakSide,
     soort: "Gemis" | "Kans" | "Wissel",
     reden: LogReden,
-    spelerId?: string
+    spelerId?: string,
+    actie?: "Schot" | "Doorloop" | "Vrijebal" | "Strafworp"
   ) => {
     const halfMinuten = Number.isFinite(state.halfMinuten)
       ? state.halfMinuten
@@ -439,6 +443,7 @@ useEffect(() => {
       soort,
       reden,
       spelerId,
+      actie,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
     };
@@ -482,10 +487,43 @@ useEffect(() => {
     });
   };
 
+  const logSteal = (spelerId?: string) => {
+    const halfMinuten = Number.isFinite(state.halfMinuten)
+      ? state.halfMinuten
+      : DEFAULT_STATE.halfMinuten;
+    const totalSeconds = halfMinuten * 60;
+    const resterend = Math.max(totalSeconds - state.tijdSeconden, 0);
+    const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+  
+    const e: LogEvent = {
+      id: uid("ev"),
+      tijdSeconden: state.tijdSeconden,
+      vak: "verdedigend",
+      soort: "Balbezit",
+      reden: "Schot afgevangen",
+      spelerId,
+      resterendSeconden: resterend,
+      wedstrijdMinuut: minuut,
+      team: "thuis",
+    };
+  
+    setState((s) => ({ ...s, log: [e, ...s.log] }));
+  };
+  
+
+
+
+
+
+
+
+
+
+
   const handleVakActieLog = (
     vak: VakSide,
-    _actie: "Schot" | "Doorloop" | "Vrijebal" | "Strafworp",
-    uitkomst: "Raak" | "Mis" | "Korf",
+    actie: "Schot" | "Doorloop" | "Vrijebal" | "Strafworp",
+    uitkomst: "Korf" | "Mis" | "Raak",
     spelerId?: string
   ) => {
     let soort: "Kans" | "Gemis";
@@ -493,23 +531,25 @@ useEffect(() => {
   
     if (vak === "aanvallend") {
       soort = "Kans";
-      if (uitkomst === "Raak" || uitkomst === "Korf") {
+      if (uitkomst === "Raak") {
         reden = "Gescoord";
       } else {
-        // Mis
         reden = "Gemist Schot";
       }
     } else {
       soort = "Gemis";
-      if (uitkomst === "Raak" || uitkomst === "Korf") {
+      if (uitkomst === "Raak") {
         reden = "Doorgelaten";
       } else {
-        // Mis
         reden = "Gemist Schot";
       }
     }
   
-    logEvent(vak, soort, reden, spelerId);
+    // ❗ Juist: actie met kleine letter
+    logEvent(vak, soort, reden, spelerId, actie);
+  
+    // Warning weg + handig voor debugging
+    console.log("Actie:", actie);
   };
 
   const logSchotOfRebound = (
@@ -782,13 +822,13 @@ useEffect(() => {
           state={state}
           setState={setState}
           spelersMap={spelersMap}
-          setPopup={setPopup}
           wisselVakken={wisselVakken}
           bank={bank}
           setVakPos={setVakPos}
           toggleKlok={toggleKlok}
           resetKlok={resetKlok}
           openVakActionModal={(vak) => setVakActionPopup({ vak })}
+          openStealModal={() => setStealPopup({})}
         />
       )}
 
@@ -838,6 +878,17 @@ useEffect(() => {
           onComplete={(actie, uitkomst, spelerId) => {
             handleVakActieLog(vakActionPopup.vak, actie, uitkomst, spelerId);
             setVakActionPopup(null);
+          }}
+        />
+      )}
+
+      {stealPopup && (
+        <StealModal
+          spelers={spelersVerdediging}
+          onClose={() => setStealPopup(null)}
+          onSave={(spelerId) => {
+            logSteal(spelerId);
+            setStealPopup(null);
           }}
         />
       )}
@@ -1021,18 +1072,19 @@ function WedstrijdTab({
   setVakPos,
   toggleKlok,
   resetKlok,
-  openVakActionModal,  
+  openVakActionModal,
+  openStealModal,
 }: {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
   spelersMap: Map<string, Player>;
-  setPopup: (p: { vak: VakSide; soort: "Gemis" | "Kans" } | null) => void;
   wisselVakken: () => void;
   bank: Player[];
   setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
   toggleKlok: (aan: boolean) => void;
   resetKlok: () => void;
-  openVakActionModal: (vak: VakSide) => void; 
+  openVakActionModal: (vak: VakSide) => void;
+  openStealModal: () => void;
 }) {
     const handleVakClick = (vak: VakSide) => {
       // Klik je op een NIET-actief vak → maak 'm actief
@@ -1138,6 +1190,20 @@ function WedstrijdTab({
                   >
                     2e helft
                   </Button>
+          
+                  <div className="flex gap-2 items-center">
+                    {/* Start / Pauze / Reset / 2e helft enz... */}
+
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setState((s) => ({ ...s, aanvalLinks: !s.aanvalLinks }))
+                      }
+                    >
+                      Aanval links/rechts
+                    </Button>
+                  </div>
       
                   {/* Duur instellen */}
                   <div className="flex items-center gap-2 ml-2">
@@ -1187,134 +1253,250 @@ function WedstrijdTab({
             <div className="text-xs text-gray-500 mb-1">
               Balbezit & schotregistratie
             </div>
-
+      
       {/* 🟢 Vakken als 2 veldhelften */}
       <div className="relative mt-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          {/* Aanvallend vak */}
-          <div
-            className={`rounded-2xl p-4 border ${
-              aanvValid ? "border-gray-200" : "border-red-500"
-            } ${
-              state.activeVak === "aanvallend" ? "bg-white" : "bg-gray-100"
-            } cursor-pointer`}
-            onClick={() => handleVakClick("aanvallend")}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <div
-                className={`font-semibold ${
-                  aanvValid ? "" : "text-red-600"
-                }`}
-              >
-                Aanvallend vak
-              </div>
-            </div>
-
-            {!aanvValid && (
-              <div className="text-xs text-red-600 mb-2">
-                Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
-                {aanvCounts.dames} dames, {aanvCounts.heren} heren).
-              </div>
-            )}
-            <div className="space-y-3">
-              {state.aanval.map((id, i) => (
-                <SpelerCircleRow
-                  key={`aanval-${i}`}
-                  id={id}
-                  vak="aanvallend"
-                  index={i}
-                  spelersMap={spelersMap}
-                  bank={bank}
-                  setVakPos={setVakPos}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Verdedigend vak */}
-          <div
-            className={`rounded-2xl p-4 border ${
-              verdValid ? "border-gray-200" : "border-red-500"
-            } ${
-              state.activeVak === "verdedigend" ? "bg-white" : "bg-gray-100"
-            } cursor-pointer`}
-            onClick={() => handleVakClick("verdedigend")}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <div
-                className={`font-semibold ${
-                  verdValid ? "" : "text-red-600"
-                }`}
-              >
-                Verdedigend vak
-              </div>
-            </div>
-
-            {!verdValid && (
-              <div className="text-xs text-red-600 mb-2">
-                Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
-                {verdCounts.dames} dames, {verdCounts.heren} heren).
-              </div>
-            )}
-
-              <div className="space-y-3">
-                {state.verdediging.map((id, i) => (
-                  <SpelerCircleRow
-                    key={`verdediging-${i}`}
-                    id={id}
-                    vak="verdedigend"
-                    index={i}
-                    spelersMap={spelersMap}
-                    bank={bank}
-                    setVakPos={setVakPos}
-                  />
-                ))}
-              </div>
-
-            {/* STEAL-knop onder het verdedigende vak */}
-            <div className="mt-4">
-              <Button
-                variant="primary"
-                className="w-full py-3"
-                onClick={(e) => {
-                  e.stopPropagation(); // niet ook het vak activeren
-                  // simpele STEAL-log (team-event)
-                  setState((s) => {
-                    const halfMinuten = Number.isFinite(s.halfMinuten)
-                      ? s.halfMinuten
-                      : DEFAULT_STATE.halfMinuten;
-                    const totalSeconds = halfMinuten * 60;
-                    const resterend = Math.max(
-                      totalSeconds - s.tijdSeconden,
-                      0
-                    );
-                    const minuut = Math.max(
-                      1,
-                      Math.ceil(s.tijdSeconden / 60)
-                    );
-
-                    const e: LogEvent = {
-                      id: uid("ev"),
-                      tijdSeconden: s.tijdSeconden,
-                      vak: "verdedigend",
-                      soort: "Balbezit",
-                      reden: "Schot afgevangen",
-                      resterendSeconden: resterend,
-                      wedstrijdMinuut: minuut,
-                      team: "thuis",
-                    };
-
-                    return { ...s, log: [e, ...s.log] };
-                  });
-                }}
-              >
-                STEAL
-              </Button>
-            </div>
-          </div>
+        {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
+        <div className="flex mb-4" style={{ gap: 0 }}>
+          {state.aanvalLinks ? (
+            <>
+              <FieldImageCard
+                vak="aanvallend"
+                title="Aanvallend vak"
+                imgSrc="/VeldLinks.png"        // <-- jouw afbeelding
+                active={state.activeVak === "aanvallend"}
+                onClick={() => handleVakClick("aanvallend")}
+              />
+              <FieldImageCard
+                vak="verdedigend"
+                title="Verdedigend vak"
+                imgSrc="/VeldRechts.png"   // <-- jouw afbeelding
+                active={state.activeVak === "verdedigend"}
+                onClick={() => handleVakClick("verdedigend")}
+              />
+            </>
+          ) : (
+            <>
+              {/* Als aanval rechts is, wissel de volgorde */}
+              <FieldImageCard
+                vak="verdedigend"
+                title="Verdedigend vak"
+                imgSrc="/VeldLinks.png"
+                active={state.activeVak === "verdedigend"}
+                onClick={() => handleVakClick("verdedigend")}
+              />
+              <FieldImageCard
+                vak="aanvallend"
+                title="Aanvallend vak"
+                imgSrc="/VeldRechts.png"
+                active={state.activeVak === "aanvallend"}
+                onClick={() => handleVakClick("aanvallend")}
+              />
+            </>
+          )}
         </div>
 
-        {/* 🔄 Ronde wisselknop tussen de vakken */}
+        {/* ONDER: de vakken met namen & wisselknoppen (oud gedrag) */}
+        <div className="grid md:grid-cols-2 gap-4">
+          {state.aanvalLinks ? (
+            <>
+              {/* LINKS: Aanvallend vak */}
+              <div
+                className={`rounded-2xl p-4 border ${
+                  aanvValid ? "border-gray-200" : "border-red-500"
+                } ${
+                  state.activeVak === "aanvallend" ? "bg-white" : "bg-gray-100"
+                } cursor-pointer`}
+                onClick={() => handleVakClick("aanvallend")}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div
+                    className={`font-semibold ${
+                      aanvValid ? "" : "text-red-600"
+                    }`}
+                  >
+                    Aanvallend vak
+                  </div>
+                </div>
+
+                {!aanvValid && (
+                  <div className="text-xs text-red-600 mb-2">
+                    Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+                    {aanvCounts.dames} dames, {aanvCounts.heren} heren).
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {state.aanval.map((id, i) => (
+                    <SpelerCircleRow
+                      key={`aanval-${i}`}
+                      id={id}
+                      vak="aanvallend"
+                      index={i}
+                      spelersMap={spelersMap}
+                      bank={bank}
+                      setVakPos={setVakPos}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* RECHTS: Verdedigend vak */}
+              <div
+                className={`rounded-2xl p-4 border ${
+                  verdValid ? "border-gray-200" : "border-red-500"
+                } ${
+                  state.activeVak === "verdedigend" ? "bg-white" : "bg-gray-100"
+                } cursor-pointer`}
+                onClick={() => handleVakClick("verdedigend")}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div
+                    className={`font-semibold ${
+                      verdValid ? "" : "text-red-600"
+                    }`}
+                  >
+                    Verdedigend vak
+                  </div>
+                </div>
+
+                {!verdValid && (
+                  <div className="text-xs text-red-600 mb-2">
+                    Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+                    {verdCounts.dames} dames, {verdCounts.heren} heren).
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {state.verdediging.map((id, i) => (
+                    <SpelerCircleRow
+                      key={`verdediging-${i}`}
+                      id={id}
+                      vak="verdedigend"
+                      index={i}
+                      spelersMap={spelersMap}
+                      bank={bank}
+                      setVakPos={setVakPos}
+                    />
+                  ))}
+                </div>
+
+                {/* STEAL-knop */}
+                <div className="mt-4">
+                  <Button
+                    variant="primary"
+                    className="w-full py-3"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStealModal();
+                    }}
+                  >
+                    STEAL
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* LINKS: Verdedigend vak */}
+              <div
+                className={`rounded-2xl p-4 border ${
+                  verdValid ? "border-gray-200" : "border-red-500"
+                } ${
+                  state.activeVak === "verdedigend" ? "bg-white" : "bg-gray-100"
+                } cursor-pointer`}
+                onClick={() => handleVakClick("verdedigend")}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div
+                    className={`font-semibold ${
+                      verdValid ? "" : "text-red-600"
+                    }`}
+                  >
+                    Verdedigend vak
+                  </div>
+                </div>
+
+                {!verdValid && (
+                  <div className="text-xs text-red-600 mb-2">
+                    Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+                    {verdCounts.dames} dames, {verdCounts.heren} heren).
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {state.verdediging.map((id, i) => (
+                    <SpelerCircleRow
+                      key={`verdediging-${i}`}
+                      id={id}
+                      vak="verdedigend"
+                      index={i}
+                      spelersMap={spelersMap}
+                      bank={bank}
+                      setVakPos={setVakPos}
+                    />
+                  ))}
+                </div>
+
+                <div className="mt-4">
+                  <Button
+                    variant="primary"
+                    className="w-full py-3"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStealModal();
+                    }}
+                  >
+                    STEAL
+                  </Button>
+                </div>
+              </div>
+
+              {/* RECHTS: Aanvallend vak */}
+              <div
+                className={`rounded-2xl p-4 border ${
+                  aanvValid ? "border-gray-200" : "border-red-500"
+                } ${
+                  state.activeVak === "aanvallend" ? "bg-white" : "bg-gray-100"
+                } cursor-pointer`}
+                onClick={() => handleVakClick("aanvallend")}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div
+                    className={`font-semibold ${
+                      aanvValid ? "" : "text-red-600"
+                    }`}
+                  >
+                    Aanvallend vak
+                  </div>
+                </div>
+
+                {!aanvValid && (
+                  <div className="text-xs text-red-600 mb-2">
+                    Let op: dit vak heeft geen 2 dames en 2 heren (nu{" "}
+                    {aanvCounts.dames} dames, {aanvCounts.heren} heren).
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {state.aanval.map((id, i) => (
+                    <SpelerCircleRow
+                      key={`aanval-${i}`}
+                      id={id}
+                      vak="aanvallend"
+                      index={i}
+                      spelersMap={spelersMap}
+                      bank={bank}
+                      setVakPos={setVakPos}
+                    />
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Wisselknop tussen de vakken (blijft) */}
         <button
           type="button"
           onClick={wisselVakken}
@@ -1337,8 +1519,10 @@ function WedstrijdTab({
           ⇄
         </button>
       </div>
-    </div>
 
+
+
+    </div>
           {/* Scoresectie (gekleurde kaarten) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* THUIS */}
@@ -1613,7 +1797,7 @@ function VakActionModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-white w-full h-full md:rounded-2xl md:m-6 p-4 md:p-6 space-y-6 overflow-auto">
+        <div className="bg-white w-full max-w-3xl md:rounded-2xl md:m-6 p-4 md:p-6 space-y-6 max-h-[90vh] overflow-auto">
         {/* Titel + stappenindicator */}
         <div className="flex items-start justify-between gap-2">
           <div>
@@ -1639,7 +1823,7 @@ function VakActionModal({
 
         {/* Stap 1: Actie */}
         {step === 1 && (
-          <div className="space-y-6 w-full h-full">
+          <div className="space-y-6 w-full">
             <div className="text-2xl font-bold text-center">Kies een actie</div>
 
             <div className="grid grid-cols-2 grid-rows-2 gap-4 w-full h-[70vh]">
@@ -1674,10 +1858,10 @@ function VakActionModal({
 
         {/* Stap 2: Speler */}
         {step === 2 && (
-          <div className="w-full h-full flex flex-col gap-6">
+          <div className="w-full flex flex-col gap-6">
             <div className="text-2xl font-bold text-center">Kies speler</div>
 
-            <div className="grid grid-cols-2 grid-rows-3 gap-4 w-full h-[70vh]">
+            <div className="grid grid-cols-2 grid-rows-3 gap-4 w-full">
               {/* Bovenste rij: 'Geen keuze' over volledige breedte */}
               <button
                 className="
@@ -1727,10 +1911,10 @@ function VakActionModal({
         )}
         {/* Stap 3: Uitkomst */}
         {step === 3 && (
-          <div className="space-y-6 w-full h-full">
+          <div className="space-y-6 w-full">
             <div className="text-2xl font-bold text-center">Uitkomst</div>
 
-            <div className="grid grid-cols-2 grid-rows-2 gap-4 w-full h-[70vh]">
+            <div className="grid grid-cols-2 grid-rows-2 gap-4 w-full">
               {/* RAAK (groen) */}
               <button
                 className="
@@ -2006,6 +2190,71 @@ function PossessionModal({
   );
 }
 
+function StealModal({
+  spelers,
+  onClose,
+  onSave,
+}: {
+  spelers: Player[];
+  onClose: () => void;
+  onSave: (spelerId?: string) => void;
+}) {
+  const [speler, setSpeler] = useState<string | undefined>(undefined);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-xl">
+        <div className="text-2xl font-semibold mb-4">
+          Steal – verdedigend vak
+        </div>
+
+        <div className="space-y-2 mb-4">
+          <div className="text-sm">Wie vangt het schot af?</div>
+          <div className="flex flex-wrap gap-2 max-h-48 overflow-auto">
+            {/* Team-event */}
+            <button
+              className={`px-4 py-2 border rounded-full text-base font-semibold ${
+                !speler ? "bg-black text-white" : ""
+              }`}
+              onClick={() => setSpeler(undefined)}
+            >
+              Team-event
+            </button>
+
+            {/* Spelers uit het verdedigende vak */}
+            {spelers.map((p) => (
+              <button
+                key={p.id}
+                className={`px-4 py-2 border rounded-full text-base font-semibold ${
+                  speler === p.id ? "bg-black text-white" : ""
+                }`}
+                onClick={() => setSpeler(p.id)}
+              >
+                {p.naam}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button
+            className="text-sm text-gray-600"
+            onClick={onClose}
+          >
+            Annuleren
+          </button>
+          <Button
+            variant="primary"
+            onClick={() => onSave(speler)}
+          >
+            Log steal
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ShotReboundModal({
   type,
   spelers,
@@ -2078,6 +2327,53 @@ function ShotReboundModal({
   );
 }
 
+type FieldImageCardProps = {
+  vak: VakSide;
+  title: string;
+  imgSrc: string;
+  active: boolean;
+  onClick: () => void;
+};
+
+function FieldImageCard({
+  vak,
+  title,
+  imgSrc,
+  active,
+  onClick,
+}: FieldImageCardProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="
+        p-0 m-0
+        border-none
+        focus:outline-none
+        focus:ring-0
+        outline-none
+        flex-1
+      "
+      style={{ border: "none", background: "transparent" }}
+    >
+      <img
+        src={imgSrc}
+        alt={title}
+        className={`
+          w-full
+          h-full
+          object-cover
+          transition-opacity
+          duration-200
+          select-none
+          pointer-events-none
+          ${active ? "opacity-100" : "opacity-40"}
+        `}
+        draggable={false}
+      />
+    </button>
+  );
+}
 
 // --- UI bits ---------------------------------------------------------------
 function Avatar({ url, naam }: { url?: string; naam: string }) {
