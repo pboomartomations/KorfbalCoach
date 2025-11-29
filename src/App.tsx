@@ -2336,7 +2336,7 @@ type FieldImageCardProps = {
 };
 
 function FieldImageCard({
-  vak,
+  //vak,
   title,
   imgSrc,
   active,
