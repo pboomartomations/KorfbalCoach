@@ -74,6 +74,18 @@ type LogReden =
   | "Korf"
   | "Doelpunt";
 
+
+  type AttackTeam = "thuis" | "uit";
+
+  type AttackMeta = {
+    id: string;              // interne id
+    index: number;           // 1,2,3,... (aanvalnummer)
+    team: AttackTeam;        // thuis of uit
+    vak: VakSide;            // aanvallend / verdedigend
+    startSeconden: number;   // starttijd vd aanval (wedstrijdseconden)
+    endSeconden?: number;    // optional: eindtijd
+  };
+
   type LogEvent = {
     id: string;
     tijdSeconden: number;            // totale verstreken tijd in de wedstrijd
@@ -86,14 +98,12 @@ type LogReden =
     wedstrijdMinuut?: number;
     pos?: number;                    // 1..4 (alleen voor wissels)
     team?: "thuis" | "uit";          // vooral voor Balbezit
-  
-    // ✅ snapshots van balbezit op het moment van loggen
     possThuis?: number;              // 0–100
     possUit?: number;                // 0–100
-  
-    // ✅ extra info voor schot / rebound
     type?: "Schot" | "Rebound";
     resultaat?: "Raak" | "Mis";
+    attackId?: string;
+    attackIndex?: number;
   };
 
   
@@ -110,17 +120,16 @@ type AppState = {
   klokLoopt: boolean;
   halfMinuten: number;
   log: LogEvent[];
-
   possessionOwner: "thuis" | "uit" | null;
   possessionThuisSeconden: number;
   possessionUitSeconden: number;
-
   autoVakWisselNa2: boolean;
   goalsSinceLastSwitch: number;
   aanvalLinks: boolean;
   currentHalf: 1 | 2;
-
   activeVak: VakSide;                 // waar is nu de bal
+  attacks: AttackMeta[];
+  currentAttackId: string | null;
 };
 
 const DEFAULT_STATE: AppState = {
@@ -141,9 +150,45 @@ const DEFAULT_STATE: AppState = {
   aanvalLinks: true,
   currentHalf: 1,
   activeVak: "aanvallend",
+  attacks: [],
+  currentAttackId: null,
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
+
+function startAttackForVak(prev: AppState, vak: VakSide): AppState {
+  const now = prev.tijdSeconden;
+
+  const team: AttackTeam = vak === "aanvallend" ? "thuis" : "uit";
+
+  const attacks = [...prev.attacks];
+
+  // oude aanval afsluiten (als er één loopt)
+  if (prev.currentAttackId) {
+    const idx = attacks.findIndex((a) => a.id === prev.currentAttackId);
+    if (idx >= 0 && attacks[idx].endSeconden == null) {
+      attacks[idx] = { ...attacks[idx], endSeconden: now };
+    }
+  }
+
+  // nieuwe aanval aanmaken
+  const newId = uid("att");
+  const newAttack: AttackMeta = {
+    id: newId,
+    index: attacks.length + 1,
+    team,
+    vak,
+    startSeconden: now,
+  };
+  attacks.push(newAttack);
+
+  return {
+    ...prev,
+    activeVak: vak,
+    attacks,
+    currentAttackId: newId,
+  };
+}
 
 function formatTime(secs: number) {
   const clamped = Math.max(0, Math.floor(secs));
@@ -170,6 +215,14 @@ function decodeStateFromShare(encoded: string): AppState | null {
     return null;
   }
 }
+
+function getCurrentAttackInfo(state: AppState) {
+  if (!state.currentAttackId) return { attackId: undefined, attackIndex: undefined as number | undefined };
+  const a = state.attacks.find((x) => x.id === state.currentAttackId);
+  if (!a) return { attackId: undefined, attackIndex: undefined as number | undefined };
+  return { attackId: a.id, attackIndex: a.index };
+}
+
 
 function getSharedStateFromUrl(): AppState | null {
   try {
@@ -236,6 +289,15 @@ function sanitizeState(raw: any): AppState {
     currentHalf: s.currentHalf === 2 ? 2 : 1,
 
     activeVak: s.activeVak === "verdedigend" ? "verdedigend" : "aanvallend",
+
+    // 🔹 NIEUW: aanvallen + huidige aanval
+    attacks: Array.isArray(s.attacks)
+      ? (s.attacks as AttackMeta[])
+      : DEFAULT_STATE.attacks,
+    currentAttackId:
+      typeof s.currentAttackId === "string"
+        ? s.currentAttackId
+        : DEFAULT_STATE.currentAttackId,
   };
 }
 
@@ -280,29 +342,36 @@ useEffect(() => {
         ? prev.halfMinuten
         : DEFAULT_STATE.halfMinuten;
       const halfTotal = halfMinuten * 60;
-
-      // einde van de huidige helft in totale seconden
+    
       const currentHalfEnd = prev.currentHalf * halfTotal;
-
       const nextTime = Math.min(prev.tijdSeconden + 1, currentHalfEnd);
-
-      const updated: AppState = {
+    
+      let updated: AppState = {
         ...prev,
         tijdSeconden: nextTime,
       };
-
-      // helft vol → klok stoppen
-      if (nextTime >= currentHalfEnd) {
-        updated.klokLoopt = false;
-      }
-
+    
       // balbezit-tijd ophogen
       if (prev.possessionOwner === "thuis") {
         updated.possessionThuisSeconden = prev.possessionThuisSeconden + 1;
       } else if (prev.possessionOwner === "uit") {
         updated.possessionUitSeconden = prev.possessionUitSeconden + 1;
       }
-
+    
+      // helft vol → klok stoppen en aanval afsluiten
+      if (nextTime >= currentHalfEnd) {
+        updated.klokLoopt = false;
+    
+        if (prev.currentAttackId) {
+          const attacks = [...prev.attacks];
+          const idx = attacks.findIndex((a) => a.id === prev.currentAttackId);
+          if (idx >= 0 && attacks[idx].endSeconden == null) {
+            attacks[idx] = { ...attacks[idx], endSeconden: nextTime };
+          }
+          updated.attacks = attacks;
+          updated.currentAttackId = null;
+        }
+      }
       return updated;
     });
   }, 1000);
@@ -435,6 +504,8 @@ useEffect(() => {
       : DEFAULT_STATE.halfMinuten;
     const resterend = Math.max(halfMinuten * 60 - state.tijdSeconden, 0);
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+
+    const { attackId, attackIndex } = getCurrentAttackInfo(state);
   
     const e: LogEvent = {
       id: uid("ev"),
@@ -446,6 +517,8 @@ useEffect(() => {
       actie,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
+      attackId,
+      attackIndex,
     };
   
     setState((s) => {
@@ -479,8 +552,9 @@ useEffect(() => {
   
       // ⚪ alleen bal-kant wisselen na goal:
       if (goalScored) {
-        next.activeVak =
+        const nextVak =
           s.activeVak === "aanvallend" ? "verdedigend" : "aanvallend";
+        next = startAttackForVak(next, nextVak);
       }
   
       return next;
@@ -494,6 +568,7 @@ useEffect(() => {
     const totalSeconds = halfMinuten * 60;
     const resterend = Math.max(totalSeconds - state.tijdSeconden, 0);
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
+    const { attackId, attackIndex } = getCurrentAttackInfo(state);
   
     const e: LogEvent = {
       id: uid("ev"),
@@ -505,6 +580,8 @@ useEffect(() => {
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
       team: "thuis",
+      attackId,
+      attackIndex,
     };
   
     setState((s) => ({ ...s, log: [e, ...s.log] }));
@@ -591,7 +668,7 @@ useEffect(() => {
           ? "Gescoord"
           : "Gemist Schot"
         : "Rebound";
-  
+    const { attackId, attackIndex } = getCurrentAttackInfo(state);
     const e: LogEvent = {
       id: uid("ev"),
       tijdSeconden: state.tijdSeconden,
@@ -605,6 +682,8 @@ useEffect(() => {
       possUit,
       type,
       resultaat,
+      attackId,
+      attackIndex,
     };
   
     setState((s) => ({ ...s, log: [e, ...s.log] }));
@@ -644,6 +723,7 @@ useEffect(() => {
   // virtuele "Tegenstander" als team=uit en geen speler gekozen
   const effectiveSpelerId =
     team === "uit" && !spelerId ? TEGENSTANDER_ID : spelerId;
+    const { attackId, attackIndex } = getCurrentAttackInfo(state);
 
   const e: LogEvent = {
     id: uid("ev"),
@@ -656,6 +736,8 @@ useEffect(() => {
     team,
     possThuis,
     possUit,
+    attackId,
+    attackIndex,
   };
 
   setState((s) => ({ ...s, log: [e, ...s.log] }));
@@ -683,39 +765,80 @@ useEffect(() => {
     const rows = [
       [
         "id",
+        "aanval_nr",
+        "aanval_team",
+        "aanval_vak",
+        "aanval_start",
+        "aanval_einde",
+        "aanval_einde",
         "tijd_verstreken",
         "klok_resterend",
         "wedstrijd_minuut",
         "vak",
         "soort",
         "reden",
-        "team",
+        "team_event",
         "spelerId",
         "spelerNaam",
         "balbezit_thuis_pct",
         "balbezit_uit_pct",
       ],
       ...state.log
-        .slice()
-        .reverse()
-        .map((e) => [
-          e.id,formatTime(e.tijdSeconden),formatTime(
-          e.resterendSeconden ??Math.max(((Number.isFinite(state.halfMinuten)? state.halfMinuten: DEFAULT_STATE.halfMinuten) *60) -e.tijdSeconden,0)),
-          e.wedstrijdMinuut ??Math.max(1, Math.ceil(e.tijdSeconden / 60)),
+      .slice()
+      .reverse()
+      .map((e) => {
+        const attackMeta = e.attackId
+          ? state.attacks.find((a) => a.id === e.attackId)
+          : undefined;
+  
+
+        const aanvalDuurSeconden =
+          attackMeta && attackMeta.endSeconden != null
+            ? attackMeta.endSeconden - attackMeta.startSeconden
+            : undefined;
+            
+        return [
+          e.id,
+          e.attackIndex ?? "",
+          attackMeta?.team ?? "",
+          attackMeta?.vak ?? "",
+          attackMeta ? formatTime(attackMeta.startSeconden) : "",
+          attackMeta?.endSeconden != null
+            ? formatTime(attackMeta.endSeconden)
+            : "",
+          aanvalDuurSeconden != null
+            ? formatTime(aanvalDuurSeconden)
+            : "",                    // 👈 duur in mm:ss
+        formatTime(e.tijdSeconden),
+          formatTime(e.tijdSeconden),
+          formatTime(
+            e.resterendSeconden ??
+              Math.max(
+                ((Number.isFinite(state.halfMinuten)
+                  ? state.halfMinuten
+                  : DEFAULT_STATE.halfMinuten) *
+                  60) -
+                  e.tijdSeconden,
+                0
+              )
+          ),
+          e.wedstrijdMinuut ??
+            Math.max(1, Math.ceil(e.tijdSeconden / 60)),
           e.vak ?? "",
           e.soort,
           e.reden,
           e.team ?? "",
           e.spelerId || "",
           e.spelerId === TEGENSTANDER_ID
-          ? "Tegenstander"
-          : e.spelerId
+            ? "Tegenstander"
+            : e.spelerId
             ? spelersMap.get(e.spelerId)?.naam || ""
             : "",
           e.possThuis ?? "",
           e.possUit ?? "",
-        ]),
-    ];
+        ];
+      }),
+  ];
   
     const escapeCSV = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
     const csv = rows.map((r) => r.map(escapeCSV).join(",")).join("\n");
@@ -734,9 +857,22 @@ useEffect(() => {
   const resetAlles = () => {
     if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
     try { localStorage.removeItem(STORAGE_KEY); } catch {}
-    setState({ ...DEFAULT_STATE });
+    setState({ 
+      ...DEFAULT_STATE,
+      attacks: [],
+      currentAttackId: null,
+    });
   };
-  const leegLog = () => setState((s) => ({ ...s, log: [] }));
+  const leegLog = () =>
+  setState((s) => ({
+    ...s,
+    log: [],
+    attacks: [],         // 👈 alle aanvallen wissen
+    currentAttackId: null, // 👈 geen lopende aanval meer
+    goalsSinceLastSwitch: 0, // optioneel maar slim
+    possessionThuisSeconden: 0, // optioneel reset balbezit
+    possessionUitSeconden: 0,   // optioneel reset balbezit
+  }));
 
   // Afgeleide arrays voor modal
   const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
@@ -1089,7 +1225,7 @@ function WedstrijdTab({
     const handleVakClick = (vak: VakSide) => {
       // Klik je op een NIET-actief vak → maak 'm actief
       if (state.activeVak !== vak) {
-        setState((s) => ({ ...s, activeVak: vak }));
+        setState((s) => startAttackForVak(s, vak));
         return;
       }
       // Klik je op het AL actieve vak → popup tonen
@@ -1611,77 +1747,85 @@ function WedstrijdTab({
       
 
       {/* Wissel + log */}
-      <div className="flex items-center justify-between mt-2">
+      
+      <details className="ml-2 w-full md:w-full mt-2">
+        <summary className="px-3 py-2 border rounded-xl cursor-pointer text-xs">
+          Overzicht aanvallen
+        </summary>
 
-        <details className="ml-2 w-full md:w-full">
-          <summary className="px-3 py-2 border rounded-xl cursor-pointer text-xs">
-            Log bekijken
-          </summary>
+        <div className="mt-2 max-h-64 overflow-auto border rounded-xl">
+          <table className="w-full text-[10px]">
+            <thead className="bg-gray-50 sticky top-0">
+              <tr>
+                <th className="text-left p-1">Aanval</th>
+                <th className="text-left p-1">Team</th>
+                <th className="text-left p-1">Vak</th>
+                <th className="text-left p-1">Start</th>
+                <th className="text-left p-1">Einde</th>
+                <th className="text-left p-1">Duur</th>
+                <th className="text-left p-1">Schoten</th>
+                <th className="text-left p-1">Doorloop</th>
+                <th className="text-left p-1">Vrije ballen</th>
+                <th className="text-left p-1">Strafworpen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.attacks.map((a) => {
+                const duurSeconden =
+                  a.endSeconden != null
+                    ? a.endSeconden - a.startSeconden
+                    : undefined;
 
-          <div className="mt-2 max-h-48 overflow-auto border rounded-xl">
-            <table className="w-full text-[10px]">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr>
-                  <th className="text-left p-1">Tijd</th>
-                  <th className="text-left p-1">Resterend</th>
-                  <th className="text-left p-1">Min</th>
-                  <th className="text-left p-1">Vak</th>
-                  <th className="text-left p-1">Soort</th>
-                  <th className="text-left p-1">Reden</th>
-                  <th className="text-left p-1">Speler</th>
-                  <th className="text-left p-1">Team</th>
-                  <th className="text-left p-1">Balbezit Thuis</th>
-                  <th className="text-left p-1">Balbezit Uit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.log.map((e) => (
-                  <tr key={e.id} className="border-t">
-                    <td className="p-1">{formatTime(e.tijdSeconden)}</td>
+                // Alle events binnen deze aanval
+                const eventsInAttack = state.log.filter(
+                  (e) => e.attackId === a.id
+                );
+
+                const schoten = eventsInAttack.filter(
+                  (e) => e.actie === "Schot"
+                ).length;
+
+                const doorloop = eventsInAttack.filter(
+                  (e) => e.actie === "Doorloop"
+                ).length;
+
+                const vrijeBallen = eventsInAttack.filter(
+                  (e) => e.actie === "Vrijebal"
+                ).length;
+
+                const strafworpen = eventsInAttack.filter(
+                  (e) => e.actie === "Strafworp"
+                ).length;
+
+                return (
+                  <tr key={a.id} className="border-t">
+                    <td className="p-1">{a.index}</td>
                     <td className="p-1">
-                      {formatTime(
-                        e.resterendSeconden ??
-                          Math.max(
-                            ((Number.isFinite(state.halfMinuten)
-                              ? state.halfMinuten
-                              : DEFAULT_STATE.halfMinuten) *
-                              60) -
-                              e.tijdSeconden,
-                            0
-                          )
-                      )}
+                      {a.team === "thuis" ? "Thuis" : "Uit"}
                     </td>
                     <td className="p-1">
-                      {e.wedstrijdMinuut ??
-                        Math.max(1, Math.ceil(e.tijdSeconden / 60))}
+                      {a.vak === "aanvallend" ? "Aanvallend" : "Verdedigend"}
                     </td>
-                    <td className="p-1">{e.vak ?? "—"}</td>
-                    <td className="p-1">{e.soort}</td>
-                    <td className="p-1">{e.reden}</td>
+                    <td className="p-1">{formatTime(a.startSeconden)}</td>
                     <td className="p-1">
-                      {e.spelerId === TEGENSTANDER_ID
-                        ? "Tegenstander"
-                        : e.spelerId
-                          ? spelersMap.get(e.spelerId)?.naam
-                          : "—"}
-                    </td>
-                    <td className="p-1">
-                      {e.team === "thuis"
-                        ? "Thuis"
-                        : e.team === "uit"
-                        ? "Uit"
+                      {a.endSeconden != null
+                        ? formatTime(a.endSeconden)
                         : "—"}
                     </td>
-                    {/* ✅ balbezit netjes onder de juiste kopjes */}
-                    <td className="p-2">{typeof e.possThuis === "number" ? `${e.possThuis}%` : "—"}</td>
-                    <td className="p-2">{typeof e.possUit === "number" ? `${e.possUit}%` : "—"}</td>
+                    <td className="p-1">
+                      {duurSeconden != null ? formatTime(duurSeconden) : "—"}
+                    </td>
+                    <td className="p-1">{schoten}</td>
+                    <td className="p-1">{doorloop}</td>
+                    <td className="p-1">{vrijeBallen}</td>
+                    <td className="p-1">{strafworpen}</td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      </div>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>
   );
 }
