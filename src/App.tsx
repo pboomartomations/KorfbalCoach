@@ -644,22 +644,7 @@ useEffect(() => {
   
     // vak bepalen obv speler (als geen speler: aanvallend aanhouden)
     const vak = detectVakForSpeler(state, spelerId) ?? "aanvallend";
-  
-    // balbezit-snapshot op dit moment
-    const totaalPoss =
-      state.possessionThuisSeconden + state.possessionUitSeconden;
-    const possThuis =
-      totaalPoss > 0
-        ? Math.round(
-            (state.possessionThuisSeconden / totaalPoss) * 100
-          )
-        : 0;
-    const possUit =
-      totaalPoss > 0
-        ? Math.round(
-            (state.possessionUitSeconden / totaalPoss) * 100
-          )
-        : 0;
+
   
     // reden voor in de log
     const reden: LogReden =
@@ -678,8 +663,6 @@ useEffect(() => {
       spelerId,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
-      possThuis,
-      possUit,
       type,
       resultaat,
       attackId,
@@ -704,21 +687,7 @@ useEffect(() => {
   const resterend = Math.max(totalSeconds - state.tijdSeconden, 0);
   const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
 
-  // balbezit snapshot
-  const totaalPoss =
-    state.possessionThuisSeconden + state.possessionUitSeconden;
-  const possThuis =
-    totaalPoss > 0
-      ? Math.round(
-          (state.possessionThuisSeconden / totaalPoss) * 100
-        )
-      : 0;
-  const possUit =
-    totaalPoss > 0
-      ? Math.round(
-          (state.possessionUitSeconden / totaalPoss) * 100
-        )
-      : 0;
+
 
   // virtuele "Tegenstander" als team=uit en geen speler gekozen
   const effectiveSpelerId =
@@ -734,8 +703,6 @@ useEffect(() => {
     resterendSeconden: resterend,
     wedstrijdMinuut: minuut,
     team,
-    possThuis,
-    possUit,
     attackId,
     attackIndex,
   };
@@ -743,25 +710,61 @@ useEffect(() => {
   setState((s) => ({ ...s, log: [e, ...s.log] }));
 };
   
+  const exportAttacksCSV = () => {
+    const rows: (string | number)[][] = [
+      [
+        "aanval_nr",
+        "team",
+        "vak",
+        "start",
+        "einde",
+        "duur",
+        "schoten",
+        "doorloop",
+        "vrije_ballen",
+        "strafworpen",
+      ],
+    ];
+    
+    state.attacks.forEach(a => {
+      const events = state.log.filter(e => e.attackId === a.id);
+
+      const schoten = events.filter(e => e.actie === "Schot").length;
+      const doorloop = events.filter(e => e.actie === "Doorloop").length;
+      const vrije = events.filter(e => e.actie === "Vrijebal").length;
+      const straf = events.filter(e => e.actie === "Strafworp").length;
+
+      const duur =
+        a.endSeconden != null
+          ? a.endSeconden - a.startSeconden
+          : null;
+
+      rows.push([
+        a.index,
+        a.team,
+        a.vak,
+        formatTime(a.startSeconden),
+        a.endSeconden != null ? formatTime(a.endSeconden) : "",
+        duur != null ? formatTime(duur) : "",
+        schoten,
+        doorloop,
+        vrije,
+        straf,
+      ]);
+    });
+
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+
+    const url = URL.createObjectURL(blob);
+    const aTag = document.createElement("a");
+    aTag.href = url;
+    aTag.download = "aanvallen.csv";
+    aTag.click();
+    URL.revokeObjectURL(url);
+  };
+
   const exportCSV = () => {
-    // ✅ balbezit-percentages uitrekenen
-    /*const totaalPoss =
-      state.possessionThuisSeconden + state.possessionUitSeconden;
-  
-    const possThuis =
-      totaalPoss > 0
-        ? Math.round(
-            (state.possessionThuisSeconden / totaalPoss) * 100
-          )
-        : 0;
-  
-    const possUit =
-      totaalPoss > 0
-        ? Math.round(
-            (state.possessionUitSeconden / totaalPoss) * 100
-          )
-        : 0;*/
-  
     const rows = [
       [
         "id",
@@ -913,6 +916,7 @@ useEffect(() => {
       </Button>
     
       <Button variant="secondary" onClick={exportCSV}>Export CSV</Button>
+      <Button variant="secondary" onClick={exportAttacksCSV}>Export Aanvallen</Button>
       <Button variant="danger" onClick={leegLog}>Log leegmaken</Button>
       <Button variant="danger" onClick={resetAlles}>Reset alles</Button>
     </div>
@@ -1264,173 +1268,252 @@ function WedstrijdTab({
   );
   const resterend = Math.max(halfTotal - halfElapsed, 0);
   
-  const totaalPoss =
-    state.possessionThuisSeconden + state.possessionUitSeconden;
   
-  const possThuis =
-    totaalPoss > 0
-      ? Math.round((state.possessionThuisSeconden / totaalPoss) * 100)
-      : 0;
-  const possUit =
-    totaalPoss > 0
-      ? Math.round((state.possessionUitSeconden / totaalPoss) * 100)
-      : 0;
+  state.possessionThuisSeconden + state.possessionUitSeconden;
 
-      return (
-        <div className="space-y-4">
-          {/* Score + tijd + controls */}
-          <div className="border rounded-2xl p-4">
-            {/* Kolomlayout: tijd/duur boven, dan balbezit, dan score */}
-            <div className="flex flex-col gap-4">
-              {/* Tijd + duur + start/pauze */}
-              <div className="flex flex-wrap items-start gap-3 justify-between">
-                {/* Tijd */}
-                <div>
-                  <div className="text-2xl font-bold">{formatTime(resterend)}</div>
-                  <div className="text-xs text-gray-500">
-                    Verstreken: {formatTime(state.tijdSeconden)} – {state.currentHalf}e helft
-                  </div>
-                </div>
-      
-                {/* Knoppen + duur */}
-                <div className="flex gap-2 items-center">
-                  {/* Start / Pauze */}
-                  {!state.klokLoopt ? (
-                    <Button variant="primary" onClick={() => toggleKlok(true)}>
-                      Start
-                    </Button>
-                  ) : (
-                    <Button variant="primary" onClick={() => toggleKlok(false)}>
-                      Pauze
-                    </Button>
-                  )}
-      
-                  {/* Reset */}
-                  <Button variant="secondary" onClick={resetKlok}>
-                    Reset
-                  </Button>
-      
-                  {/* 2e helft */}
-                  <Button
-                    size="md"
-                    variant="secondary"
-                    disabled={state.currentHalf === 2} // maar 2 helften
-                    onClick={() =>
-                      setState((s) => ({
-                        ...s,
-                        currentHalf: 2,
-                        klokLoopt: true,
-                        aanvalLinks: !s.aanvalLinks,
-                      }))
-                    }
-                  >
-                    2e helft
-                  </Button>
-          
-                  <div className="flex gap-2 items-center">
-                    {/* Start / Pauze / Reset / 2e helft enz... */}
-
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        setState((s) => ({ ...s, aanvalLinks: !s.aanvalLinks }))
-                      }
-                    >
-                      Aanval links/rechts
-                    </Button>
-                  </div>
-      
-                  {/* Duur instellen */}
-                  <div className="flex items-center gap-2 ml-2">
-                    <div className="text-lg">Duur</div>
-                    <Button
-                      size="md"
-                      disabled={state.klokLoopt}
-                      onClick={() =>
-                        setState((s) => {
-                          const hm = Number.isFinite(s.halfMinuten)
-                            ? s.halfMinuten
-                            : DEFAULT_STATE.halfMinuten;
-                          return { ...s, halfMinuten: Math.max(1, hm - 1) };
-                        })
-                      }
-                    >
-                      −
-                    </Button>
-                    <div className="w-10 text-center">
-                      {Number.isFinite(state.halfMinuten)
-                        ? state.halfMinuten
-                        : DEFAULT_STATE.halfMinuten}
-                    </div>
-                    <Button
-                      size="md"
-                      disabled={state.klokLoopt}
-                      onClick={() =>
-                        setState((s) => {
-                          const hm = Number.isFinite(s.halfMinuten)
-                            ? s.halfMinuten
-                            : DEFAULT_STATE.halfMinuten;
-                          return { ...s, halfMinuten: Math.min(60, hm + 1) };
-                        })
-                      }
-                    >
-                      +
-                    </Button>
-                    <div className="text-lg">Minuten</div>
-                  </div>
+    return (
+      <div className="space-y-4">
+        {/* Score + tijd + controls */}
+        <div className="border rounded-2xl p-4">
+          {/* Kolomlayout: tijd/duur boven, dan balbezit, dan score */}
+          <div className="flex flex-col gap-4">
+            {/* Tijd + duur + start/pauze */}
+            <div className="flex flex-wrap items-start gap-3 justify-between">
+              {/* Tijd */}
+              <div>
+                <div className="text-2xl font-bold">{formatTime(resterend)}</div>
+                <div className="text-xs text-gray-500">
+                  Verstreken: {formatTime(state.tijdSeconden)} – {state.currentHalf}e helft
                 </div>
               </div>
-      
-              {/* ⬇️ hierna komen je balbezit-knoppen en de score-blokken */}
+    
+              {/* Knoppen + duur */}
+              <div className="flex gap-2 items-center">
+                {/* Start / Pauze */}
+                {!state.klokLoopt ? (
+                  <Button variant="primary" onClick={() => toggleKlok(true)}>
+                    Start
+                  </Button>
+                ) : (
+                  <Button variant="primary" onClick={() => toggleKlok(false)}>
+                    Pauze
+                  </Button>
+                )}
+    
+                {/* Reset */}
+                <Button variant="secondary" onClick={resetKlok}>
+                  Reset
+                </Button>
+    
+                {/* 2e helft */}
+                <Button
+                  size="md"
+                  variant="secondary"
+                  disabled={state.currentHalf === 2} // maar 2 helften
+                  onClick={() =>
+                    setState((s) => ({
+                      ...s,
+                      currentHalf: 2,
+                      klokLoopt: true,
+                      aanvalLinks: !s.aanvalLinks,
+                    }))
+                  }
+                >
+                  2e helft
+                </Button>
+        
+                <div className="flex gap-2 items-center">
+                  {/* Start / Pauze / Reset / 2e helft enz... */}
 
-          {/* 🔵 Grote balbezit- en schot/rebound-knoppen */}
-          <div className="w-full">
-            <div className="text-xs text-gray-500 mb-1">
-              Balbezit & schotregistratie
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setState((s) => ({ ...s, aanvalLinks: !s.aanvalLinks }))
+                    }
+                  >
+                    Aanval links/rechts
+                  </Button>
+                </div>
+    
+                {/* Duur instellen */}
+                <div className="flex items-center gap-2 ml-2">
+                  <div className="text-lg">Duur</div>
+                  <Button
+                    size="md"
+                    disabled={state.klokLoopt}
+                    onClick={() =>
+                      setState((s) => {
+                        const hm = Number.isFinite(s.halfMinuten)
+                          ? s.halfMinuten
+                          : DEFAULT_STATE.halfMinuten;
+                        return { ...s, halfMinuten: Math.max(1, hm - 1) };
+                      })
+                    }
+                  >
+                    −
+                  </Button>
+                  <div className="w-10 text-center">
+                    {Number.isFinite(state.halfMinuten)
+                      ? state.halfMinuten
+                      : DEFAULT_STATE.halfMinuten}
+                  </div>
+                  <Button
+                    size="md"
+                    disabled={state.klokLoopt}
+                    onClick={() =>
+                      setState((s) => {
+                        const hm = Number.isFinite(s.halfMinuten)
+                          ? s.halfMinuten
+                          : DEFAULT_STATE.halfMinuten;
+                        return { ...s, halfMinuten: Math.min(60, hm + 1) };
+                      })
+                    }
+                  >
+                    +
+                  </Button>
+                  <div className="text-lg">Minuten</div>
+                </div>
+              </div>
             </div>
-      
-      {/* 🟢 Vakken als 2 veldhelften */}
-      <div className="relative mt-4">
-        {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
-        <div className="flex mb-4" style={{ gap: 0 }}>
-          {state.aanvalLinks ? (
-            <>
-              <FieldImageCard
-                vak="aanvallend"
-                title="Aanvallend vak"
-                imgSrc="/VeldLinks.png"        // <-- jouw afbeelding
-                active={state.activeVak === "aanvallend"}
-                onClick={() => handleVakClick("aanvallend")}
-              />
-              <FieldImageCard
-                vak="verdedigend"
-                title="Verdedigend vak"
-                imgSrc="/VeldRechts.png"   // <-- jouw afbeelding
-                active={state.activeVak === "verdedigend"}
-                onClick={() => handleVakClick("verdedigend")}
-              />
-            </>
-          ) : (
-            <>
-              {/* Als aanval rechts is, wissel de volgorde */}
-              <FieldImageCard
-                vak="verdedigend"
-                title="Verdedigend vak"
-                imgSrc="/VeldLinks.png"
-                active={state.activeVak === "verdedigend"}
-                onClick={() => handleVakClick("verdedigend")}
-              />
-              <FieldImageCard
-                vak="aanvallend"
-                title="Aanvallend vak"
-                imgSrc="/VeldRechts.png"
-                active={state.activeVak === "aanvallend"}
-                onClick={() => handleVakClick("aanvallend")}
-              />
-            </>
-          )}
+    
+            {/* ⬇️ hierna komen je balbezit-knoppen en de score-blokken */}
+
+        {/* 🔵 Grote balbezit- en schot/rebound-knoppen */}
+        <div className="w-full">
+          <div className="text-xs text-gray-500 mb-1">
+            Balbezit & schotregistratie
+          </div>
+
+
+    {/* Scoresectie (gekleurde kaarten) */}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {/* THUIS */}
+      <div className="rounded-2xl border bg-blue-50 p-4">
+        <div className="flex items-center gap-3 justify-between">
+          <div className="text-lg font-semibold text-blue-800">
+            Thuis
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="md"
+              onClick={() =>
+                setState((s) => ({
+                  ...s,
+                  scoreThuis: Math.max(0, s.scoreThuis - 1),
+                }))
+              }
+            >
+              -
+            </Button>
+            <div className="text-3xl font-extrabold w-12 text-center text-blue-900">
+              {state.scoreThuis}
+            </div>
+            <Button
+              size="md"
+              onClick={() =>
+                setState((s) => ({
+                  ...s,
+                  scoreThuis: s.scoreThuis + 1,
+                }))
+              }
+            >
+              +
+            </Button>
+          </div>
         </div>
+      </div>
+
+      {/* UIT */}
+      <div className="rounded-2xl border bg-amber-50 p-4">
+        <div className="flex items-center gap-3 justify-between">
+          <div className="text-lg font-semibold text-amber-800">
+            Uit
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="md"
+              onClick={() =>
+                setState((s) => ({
+                  ...s,
+                  scoreUit: Math.max(0, s.scoreUit - 1),
+                }))
+              }
+            >
+              -
+            </Button>
+            <div className="text-3xl font-extrabold w-12 text-center text-amber-900">
+              {state.scoreUit}
+            </div>
+            <Button
+              size="md"
+              onClick={() =>
+                setState((s) => ({
+                  ...s,
+                  scoreUit: s.scoreUit + 1,
+                }))
+              }
+            >
+              +
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* 🟢 Vakken als 2 veldhelften */}
+    <div className="relative mt-4">
+      {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
+      <div className="flex mb-4" style={{ gap: 0 }}>
+        {state.aanvalLinks ? (
+          <>
+            <FieldImageCard
+              vak="aanvallend"
+              title="Aanvallend vak"
+              imgSrc="/VeldLinks.png"        // <-- jouw afbeelding
+              active={state.activeVak === "aanvallend"}
+              onClick={() => handleVakClick("aanvallend")}
+            />
+            <FieldImageCard
+              vak="verdedigend"
+              title="Verdedigend vak"
+              imgSrc="/VeldRechts.png"   // <-- jouw afbeelding
+              active={state.activeVak === "verdedigend"}
+              onClick={() => handleVakClick("verdedigend")}
+            />
+          </>
+        ) : (
+          <>
+            {/* Als aanval rechts is, wissel de volgorde */}
+            <FieldImageCard
+              vak="verdedigend"
+              title="Verdedigend vak"
+              imgSrc="/VeldLinks.png"
+              active={state.activeVak === "verdedigend"}
+              onClick={() => handleVakClick("verdedigend")}
+            />
+            <FieldImageCard
+              vak="aanvallend"
+              title="Aanvallend vak"
+              imgSrc="/VeldRechts.png"
+              active={state.activeVak === "aanvallend"}
+              onClick={() => handleVakClick("aanvallend")}
+            />
+          </>
+        )}
+        <div className="absolute bottom-2 left-0 right-0 flex justify-center">
+        <Button
+          variant="primary"
+          className="px-3 py-1"
+          onClick={(e) => {
+            e.stopPropagation();
+            openStealModal();
+          }}
+        >
+          STEAL
+        </Button>
+      </div>
+    </div>
 
         {/* ONDER: de vakken met namen & wisselknoppen (oud gedrag) */}
         <div className="grid md:grid-cols-2 gap-4">
@@ -1443,7 +1526,6 @@ function WedstrijdTab({
                 } ${
                   state.activeVak === "aanvallend" ? "bg-white" : "bg-gray-100"
                 } cursor-pointer`}
-                onClick={() => handleVakClick("aanvallend")}
               >
                 <div className="flex items-center justify-between mb-2">
                   <div
@@ -1484,7 +1566,6 @@ function WedstrijdTab({
                 } ${
                   state.activeVak === "verdedigend" ? "bg-white" : "bg-gray-100"
                 } cursor-pointer`}
-                onClick={() => handleVakClick("verdedigend")}
               >
                 <div className="flex items-center justify-between mb-2">
                   <div
@@ -1515,20 +1596,6 @@ function WedstrijdTab({
                       setVakPos={setVakPos}
                     />
                   ))}
-                </div>
-
-                {/* STEAL-knop */}
-                <div className="mt-4">
-                  <Button
-                    variant="primary"
-                    className="w-full py-3"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openStealModal();
-                    }}
-                  >
-                    STEAL
-                  </Button>
                 </div>
               </div>
             </>
@@ -1655,94 +1722,9 @@ function WedstrijdTab({
           ⇄
         </button>
       </div>
-
-
-
     </div>
-          {/* Scoresectie (gekleurde kaarten) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* THUIS */}
-            <div className="rounded-2xl border bg-blue-50 p-4">
-              <div className="flex items-center gap-3 justify-between">
-                <div className="text-lg font-semibold text-blue-800">
-                  Thuis
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="md"
-                    onClick={() =>
-                      setState((s) => ({
-                        ...s,
-                        scoreThuis: Math.max(0, s.scoreThuis - 1),
-                      }))
-                    }
-                  >
-                    -
-                  </Button>
-                  <div className="text-3xl font-extrabold w-12 text-center text-blue-900">
-                    {state.scoreThuis}
-                  </div>
-                  <Button
-                    size="md"
-                    onClick={() =>
-                      setState((s) => ({
-                        ...s,
-                        scoreThuis: s.scoreThuis + 1,
-                      }))
-                    }
-                  >
-                    +
-                  </Button>
-                </div>
-              </div>
-              {/* Balbezit onder de stand */}
-              <div className="mt-1 text-xs text-blue-800">
-                Balbezit: {possThuis}%
-              </div>
-            </div>
-
-            {/* UIT */}
-            <div className="rounded-2xl border bg-amber-50 p-4">
-              <div className="flex items-center gap-3 justify-between">
-                <div className="text-lg font-semibold text-amber-800">
-                  Uit
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="md"
-                    onClick={() =>
-                      setState((s) => ({
-                        ...s,
-                        scoreUit: Math.max(0, s.scoreUit - 1),
-                      }))
-                    }
-                  >
-                    -
-                  </Button>
-                  <div className="text-3xl font-extrabold w-12 text-center text-amber-900">
-                    {state.scoreUit}
-                  </div>
-                  <Button
-                    size="md"
-                    onClick={() =>
-                      setState((s) => ({
-                        ...s,
-                        scoreUit: s.scoreUit + 1,
-                      }))
-                    }
-                  >
-                    +
-                  </Button>
-                </div>
-              </div>
-              {/* Balbezit onder de stand */}
-              <div className="mt-1 text-xs text-amber-800">
-                Balbezit: {possUit}%
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+  </div>
+</div>
 
       
 
