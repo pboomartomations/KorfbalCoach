@@ -2534,7 +2534,7 @@ function ShotReboundModal({
             Mis
           </button>
         </div>
-
+        
         <div className="flex justify-end">
           <button className="text-sm text-gray-600" onClick={onClose}>
             Sluiten
