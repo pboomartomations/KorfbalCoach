@@ -770,6 +770,7 @@ const exportToExcel = () => {
           ? attackMeta.endSeconden - attackMeta.startSeconden
           : undefined;
 
+          
       // veld-event koppelen (dichtsbijzijnde in tijd binnen zelfde aanval + vak)
       const findFieldEventForLog = (logEv: LogEvent): FieldEvent | undefined => {
         if (!logEv.attackId || !logEv.vak) return undefined;
