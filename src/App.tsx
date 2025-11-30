@@ -49,6 +49,15 @@ function Button({
 const GESLACHTEN: readonly ["Dame", "Heer"] = ["Dame", "Heer"];
 const TEGENSTANDER_ID = "__tegenstander__";
 
+type FieldEvent = {
+  id: string;
+  vak: VakSide;
+  x: number; // 0–100
+  y: number; // 0–100
+  tijdSeconden: number;
+  attackId?: string;
+};
+
 type Geslacht = (typeof GESLACHTEN)[number];
 
 type Player = { id: string; naam: string; geslacht: Geslacht; foto?: string };
@@ -130,6 +139,7 @@ type AppState = {
   activeVak: VakSide;                 // waar is nu de bal
   attacks: AttackMeta[];
   currentAttackId: string | null;
+  fieldEvents: FieldEvent[];  
 };
 
 const DEFAULT_STATE: AppState = {
@@ -152,6 +162,7 @@ const DEFAULT_STATE: AppState = {
   activeVak: "aanvallend",
   attacks: [],
   currentAttackId: null,
+  fieldEvents: [],   
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
@@ -252,6 +263,8 @@ function sanitizeState(raw: any): AppState {
   const num = (v: any, d: number) => (Number.isFinite(v) ? Number(v) : d);
   const bool = (v: any, d: boolean) => (typeof v === "boolean" ? v : d);
 
+
+
   return {
     spelers: Array.isArray(s.spelers) ? (s.spelers as Player[]) : [],
     aanval: toArr4(s.aanval),
@@ -262,6 +275,9 @@ function sanitizeState(raw: any): AppState {
     klokLoopt: bool(s.klokLoopt, DEFAULT_STATE.klokLoopt),
     halfMinuten: num(s.halfMinuten, DEFAULT_STATE.halfMinuten),
     log: Array.isArray(s.log) ? (s.log as LogEvent[]) : [],
+    fieldEvents: Array.isArray(s.fieldEvents)
+    ? (s.fieldEvents as FieldEvent[])
+    : DEFAULT_STATE.fieldEvents,
 
     possessionOwner:
       s.possessionOwner === "thuis" || s.possessionOwner === "uit"
@@ -710,151 +726,163 @@ useEffect(() => {
   setState((s) => ({ ...s, log: [e, ...s.log] }));
 };
   
-  const exportAttacksCSV = () => {
-    const rows: (string | number)[][] = [
-      [
-        "aanval_nr",
-        "team",
-        "vak",
-        "start",
-        "einde",
-        "duur",
-        "schoten",
-        "doorloop",
-        "vrije_ballen",
-        "strafworpen",
-      ],
-    ];
-    
-    state.attacks.forEach(a => {
-      const events = state.log.filter(e => e.attackId === a.id);
+const exportCSV = () => {
+  // ---------- 1) EVENTS-TABEL ----------
+  const eventHeader = [
+    "id",
+    "tijd_verstreken",
+    "klok_resterend",
+    "wedstrijd_minuut",
+    "vak",
+    "soort",
+    "reden",
+    "team",
+    "spelerId",
+    "spelerNaam",
+    "aanval_nr",
+    "aanval_team",
+    "aanval_vak",
+    "aanval_start",
+    "aanval_einde",
+    "aanval_duur",
+  ];
 
-      const schoten = events.filter(e => e.actie === "Schot").length;
-      const doorloop = events.filter(e => e.actie === "Doorloop").length;
-      const vrije = events.filter(e => e.actie === "Vrijebal").length;
-      const straf = events.filter(e => e.actie === "Strafworp").length;
+  const eventRows: string[][] = state.log
+    .slice()
+    .reverse()
+    .map((e) => {
+      const halfMinuten = Number.isFinite(state.halfMinuten)
+        ? state.halfMinuten
+        : DEFAULT_STATE.halfMinuten;
+      const totalSeconds = halfMinuten * 60;
 
-      const duur =
-        a.endSeconden != null
-          ? a.endSeconden - a.startSeconden
-          : null;
+      const attackMeta = e.attackId
+        ? state.attacks.find((a) => a.id === e.attackId)
+        : undefined;
 
-      rows.push([
-        a.index,
-        a.team,
-        a.vak,
-        formatTime(a.startSeconden),
-        a.endSeconden != null ? formatTime(a.endSeconden) : "",
-        duur != null ? formatTime(duur) : "",
-        schoten,
-        doorloop,
-        vrije,
-        straf,
-      ]);
+      const aanvalDuurSeconden =
+        attackMeta && attackMeta.endSeconden != null
+          ? attackMeta.endSeconden - attackMeta.startSeconden
+          : undefined;
+
+      const resterend =
+        e.resterendSeconden ??
+        Math.max(totalSeconds - e.tijdSeconden, 0);
+
+      return [
+        e.id,
+        formatTime(e.tijdSeconden),
+        formatTime(resterend),
+        String(
+          e.wedstrijdMinuut ??
+            Math.max(1, Math.ceil(e.tijdSeconden / 60))
+        ),
+        e.vak ?? "",
+        e.soort,
+        e.reden,
+        e.team ?? "",
+        e.spelerId || "",
+        e.spelerId === TEGENSTANDER_ID
+          ? "Tegenstander"
+          : e.spelerId
+          ? spelersMap.get(e.spelerId)?.naam || ""
+          : "",
+        e.possThuis != null ? String(e.possThuis) : "",
+        e.possUit != null ? String(e.possUit) : "",
+        e.attackIndex != null ? String(e.attackIndex) : "",
+        attackMeta?.team ?? "",
+        attackMeta?.vak ?? "",
+        attackMeta ? formatTime(attackMeta.startSeconden) : "",
+        attackMeta?.endSeconden != null
+          ? formatTime(attackMeta.endSeconden)
+          : "",
+        aanvalDuurSeconden != null
+          ? formatTime(aanvalDuurSeconden)
+          : "",
+      ];
     });
 
-    const csv = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-
-    const url = URL.createObjectURL(blob);
-    const aTag = document.createElement("a");
-    aTag.href = url;
-    aTag.download = "aanvallen.csv";
-    aTag.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const exportCSV = () => {
-    const rows = [
-      [
-        "id",
-        "aanval_nr",
-        "aanval_team",
-        "aanval_vak",
-        "aanval_start",
-        "aanval_einde",
-        "aanval_einde",
-        "tijd_verstreken",
-        "klok_resterend",
-        "wedstrijd_minuut",
-        "vak",
-        "soort",
-        "reden",
-        "team_event",
-        "spelerId",
-        "spelerNaam",
-        "balbezit_thuis_pct",
-        "balbezit_uit_pct",
-      ],
-      ...state.log
-      .slice()
-      .reverse()
-      .map((e) => {
-        const attackMeta = e.attackId
-          ? state.attacks.find((a) => a.id === e.attackId)
-          : undefined;
-  
-
-        const aanvalDuurSeconden =
-          attackMeta && attackMeta.endSeconden != null
-            ? attackMeta.endSeconden - attackMeta.startSeconden
-            : undefined;
-            
-        return [
-          e.id,
-          e.attackIndex ?? "",
-          attackMeta?.team ?? "",
-          attackMeta?.vak ?? "",
-          attackMeta ? formatTime(attackMeta.startSeconden) : "",
-          attackMeta?.endSeconden != null
-            ? formatTime(attackMeta.endSeconden)
-            : "",
-          aanvalDuurSeconden != null
-            ? formatTime(aanvalDuurSeconden)
-            : "",                    // 👈 duur in mm:ss
-        formatTime(e.tijdSeconden),
-          formatTime(e.tijdSeconden),
-          formatTime(
-            e.resterendSeconden ??
-              Math.max(
-                ((Number.isFinite(state.halfMinuten)
-                  ? state.halfMinuten
-                  : DEFAULT_STATE.halfMinuten) *
-                  60) -
-                  e.tijdSeconden,
-                0
-              )
-          ),
-          e.wedstrijdMinuut ??
-            Math.max(1, Math.ceil(e.tijdSeconden / 60)),
-          e.vak ?? "",
-          e.soort,
-          e.reden,
-          e.team ?? "",
-          e.spelerId || "",
-          e.spelerId === TEGENSTANDER_ID
-            ? "Tegenstander"
-            : e.spelerId
-            ? spelersMap.get(e.spelerId)?.naam || ""
-            : "",
-          e.possThuis ?? "",
-          e.possUit ?? "",
-        ];
-      }),
+  // ---------- 2) AANVALLEN-TABEL ----------
+  const attackHeader = [
+    "aanval_nr",
+    "team",
+    "vak",
+    "start",
+    "einde",
+    "duur",
+    "schoten",
+    "doorloop",
+    "vrije_ballen",
+    "strafworpen",
   ];
-  
-    const escapeCSV = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
-    const csv = rows.map((r) => r.map(escapeCSV).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `korfbal-log-${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+
+  const attackRows: string[][] = state.attacks.map((a) => {
+    const eventsInAttack = state.log.filter((e) => e.attackId === a.id);
+
+    const schoten = eventsInAttack.filter(
+      (e) => e.actie === "Schot"
+    ).length;
+    const doorloop = eventsInAttack.filter(
+      (e) => e.actie === "Doorloop"
+    ).length;
+    const vrije = eventsInAttack.filter(
+      (e) => e.actie === "Vrijebal"
+    ).length;
+    const straf = eventsInAttack.filter(
+      (e) => e.actie === "Strafworp"
+    ).length;
+
+    const duurSeconden =
+      a.endSeconden != null
+        ? a.endSeconden - a.startSeconden
+        : undefined;
+
+    return [
+      String(a.index),
+      a.team,
+      a.vak,
+      formatTime(a.startSeconden),
+      a.endSeconden != null ? formatTime(a.endSeconden) : "",
+      duurSeconden != null ? formatTime(duurSeconden) : "",
+      String(schoten),
+      String(doorloop),
+      String(vrije),
+      String(straf),
+    ];
+  });
+
+  // ---------- 3) COMBINEREN TOT 1 CSV ----------
+  const rows: string[][] = [];
+
+  // Events tabel
+  rows.push(eventHeader, ...eventRows);
+
+  // Lege regel als scheiding
+  rows.push([]);
+
+  // Aanvallen tabel
+  rows.push(attackHeader, ...attackRows);
+
+  // CSV maken
+  const escapeCSV = (v: any) =>
+    `"${String(v).replace(/"/g, '""')}"`;
+
+  const csv = rows
+    .map((r) => r.map(escapeCSV).join(","))
+    .join("\n");
+
+  const blob = new Blob([csv], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `korfbal-log-${new Date()
+    .toISOString()
+    .slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 
   const resetAlles = () => {
@@ -916,7 +944,6 @@ useEffect(() => {
       </Button>
     
       <Button variant="secondary" onClick={exportCSV}>Export CSV</Button>
-      <Button variant="secondary" onClick={exportAttacksCSV}>Export Aanvallen</Button>
       <Button variant="danger" onClick={leegLog}>Log leegmaken</Button>
       <Button variant="danger" onClick={resetAlles}>Reset alles</Button>
     </div>
@@ -1235,7 +1262,8 @@ function WedstrijdTab({
       // Klik je op het AL actieve vak → popup tonen
       openVakActionModal(vak);
     };
-
+  const aanvalMarkers = state.fieldEvents.filter((e) => e.vak === "aanvallend");
+  const verdedigMarkers = state.fieldEvents.filter((e) => e.vak === "verdedigend");
   const countGeslachtInVak = (ids: (string | null)[]) => {
     let dames = 0;
     let heren = 0;
@@ -1461,50 +1489,64 @@ function WedstrijdTab({
       </div>
     </div>
 
-    {/* 🟢 Vakken als 2 veldhelften */}
-    <div className="relative mt-4">
-      {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
-      <div className="flex mb-4" style={{ gap: 0 }}>
-        {state.aanvalLinks ? (
-          <>
-            <FieldImageCard
-              vak="aanvallend"
-              title="Aanvallend vak"
-              imgSrc="/VeldLinks.png"        // <-- jouw afbeelding
-              active={state.activeVak === "aanvallend"}
-              onClick={() => handleVakClick("aanvallend")}
-            />
-            <FieldImageCard
-              vak="verdedigend"
-              title="Verdedigend vak"
-              imgSrc="/VeldRechts.png"   // <-- jouw afbeelding
-              active={state.activeVak === "verdedigend"}
-              onClick={() => handleVakClick("verdedigend")}
-            />
-          </>
-        ) : (
-          <>
-            {/* Als aanval rechts is, wissel de volgorde */}
-            <FieldImageCard
-              vak="verdedigend"
-              title="Verdedigend vak"
-              imgSrc="/VeldLinks.png"
-              active={state.activeVak === "verdedigend"}
-              onClick={() => handleVakClick("verdedigend")}
-            />
-            <FieldImageCard
-              vak="aanvallend"
-              title="Aanvallend vak"
-              imgSrc="/VeldRechts.png"
-              active={state.activeVak === "aanvallend"}
-              onClick={() => handleVakClick("aanvallend")}
-            />
-          </>
-        )}
-        <div className="absolute bottom-2 left-0 right-0 flex justify-center">
+{/* 🟢 Vakken als 2 veldhelften */}
+<div className="relative mt-4">
+  {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
+  <div className="flex mb-4" style={{ gap: 0 }}>
+  {state.aanvalLinks ? (
+    <>
+      {/* LINKS: Aanvallend veld */}
+      <FieldImageCard
+        title="Aanvallend vak"
+        imgSrc="/VeldLinks.png"
+        active={state.activeVak === "aanvallend"}
+        onClick={() => handleVakClick("aanvallend")}
+        markers={aanvalMarkers}
+        onFieldClick={(xPct, yPct) => {
+          setState((s) => {
+            const newEvent: FieldEvent = {
+              id: uid("fe"),
+              vak: "aanvallend",
+              x: xPct,
+              y: yPct,
+              tijdSeconden: s.tijdSeconden,
+              attackId: s.currentAttackId ?? undefined,
+            };
+            return {
+              ...s,
+              fieldEvents: [...s.fieldEvents, newEvent],
+            };
+          });
+        }}
+      />
+
+      {/* RECHTS: Verdedigend veld + STEAL-knop */}
+      <FieldImageCard
+        title="Verdedigend vak"
+        imgSrc="/VeldRechts.png"
+        active={state.activeVak === "verdedigend"}
+        onClick={() => handleVakClick("verdedigend")}
+        markers={verdedigMarkers}
+        onFieldClick={(xPct, yPct) => {
+          setState((s) => {
+            const newEvent: FieldEvent = {
+              id: uid("fe"),
+              vak: "verdedigend",
+              x: xPct,
+              y: yPct,
+              tijdSeconden: s.tijdSeconden,
+              attackId: s.currentAttackId ?? undefined,
+            };
+            return {
+              ...s,
+              fieldEvents: [...s.fieldEvents, newEvent],
+            };
+          });
+        }}
+      >
         <Button
           variant="primary"
-          className="px-3 py-1"
+          className="w-full py-4 text-xl font-bold rounded-xl bg-black/70 text-white"
           onClick={(e) => {
             e.stopPropagation();
             openStealModal();
@@ -1512,8 +1554,73 @@ function WedstrijdTab({
         >
           STEAL
         </Button>
-      </div>
-    </div>
+      </FieldImageCard>
+    </>
+  ) : (
+    <>
+      {/* LINKS: Verdedigend veld + STEAL-knop */}
+      <FieldImageCard
+        title="Verdedigend vak"
+        imgSrc="/VeldLinks.png"
+        active={state.activeVak === "verdedigend"}
+        onClick={() => handleVakClick("verdedigend")}
+        markers={verdedigMarkers}
+        onFieldClick={(xPct, yPct) => {
+          setState((s) => {
+            const newEvent: FieldEvent = {
+              id: uid("fe"),
+              vak: "verdedigend",
+              x: xPct,
+              y: yPct,
+              tijdSeconden: s.tijdSeconden,
+              attackId: s.currentAttackId ?? undefined,
+            };
+            return {
+              ...s,
+              fieldEvents: [...s.fieldEvents, newEvent],
+            };
+          });
+        }}
+      >
+        <Button
+          variant="primary"
+          className="w-full py-4 text-xl font-bold rounded-xl bg-black/70 text-white"
+          onClick={(e) => {
+            e.stopPropagation();
+            openStealModal();
+          }}
+        >
+          STEAL
+        </Button>
+      </FieldImageCard>
+
+      {/* RECHTS: Aanvallend veld */}
+      <FieldImageCard
+        title="Aanvallend vak"
+        imgSrc="/VeldRechts.png"
+        active={state.activeVak === "aanvallend"}
+        onClick={() => handleVakClick("aanvallend")}
+        markers={aanvalMarkers}
+        onFieldClick={(xPct, yPct) => {
+          setState((s) => {
+            const newEvent: FieldEvent = {
+              id: uid("fe"),
+              vak: "aanvallend",
+              x: xPct,
+              y: yPct,
+              tijdSeconden: s.tijdSeconden,
+              attackId: s.currentAttackId ?? undefined,
+            };
+            return {
+              ...s,
+              fieldEvents: [...s.fieldEvents, newEvent],
+            };
+          });
+        }}
+      />
+    </>
+  )}
+</div>
 
         {/* ONDER: de vakken met namen & wisselknoppen (oud gedrag) */}
         <div className="grid md:grid-cols-2 gap-4">
@@ -1608,7 +1715,6 @@ function WedstrijdTab({
                 } ${
                   state.activeVak === "verdedigend" ? "bg-white" : "bg-gray-100"
                 } cursor-pointer`}
-                onClick={() => handleVakClick("verdedigend")}
               >
                 <div className="flex items-center justify-between mb-2">
                   <div
@@ -1640,19 +1746,6 @@ function WedstrijdTab({
                     />
                   ))}
                 </div>
-
-                <div className="mt-4">
-                  <Button
-                    variant="primary"
-                    className="w-full py-3"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openStealModal();
-                    }}
-                  >
-                    STEAL
-                  </Button>
-                </div>
               </div>
 
               {/* RECHTS: Aanvallend vak */}
@@ -1662,7 +1755,6 @@ function WedstrijdTab({
                 } ${
                   state.activeVak === "aanvallend" ? "bg-white" : "bg-gray-100"
                 } cursor-pointer`}
-                onClick={() => handleVakClick("aanvallend")}
               >
                 <div className="flex items-center justify-between mb-2">
                   <div
@@ -2454,49 +2546,78 @@ function ShotReboundModal({
 }
 
 type FieldImageCardProps = {
-  vak: VakSide;
   title: string;
   imgSrc: string;
   active: boolean;
   onClick: () => void;
+  onFieldClick?: (xPct: number, yPct: number) => void;
+  markers?: { id: string; x: number; y: number }[];
+  children?: React.ReactNode;
 };
 
 function FieldImageCard({
-  //vak,
   title,
   imgSrc,
-  active,
   onClick,
+  onFieldClick,
+  markers = [],
+  children,
 }: FieldImageCardProps) {
+  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+
+    if (onFieldClick) {
+      const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+      const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+
+      onFieldClick(xPct, yPct);
+    }
+
+    onClick();
+  };
+
   return (
     <button
-      type="button"
-      onClick={onClick}
-      className="
-        p-0 m-0
-        border-none
-        focus:outline-none
-        focus:ring-0
-        outline-none
-        flex-1
-      "
-      style={{ border: "none", background: "transparent" }}
+      className="relative block w-full p-0 border-none outline-none"
+      onClick={handleClick}
+      style={{ background: "transparent" }}
     >
+      {/* veldafbeelding */}
       <img
         src={imgSrc}
         alt={title}
-        className={`
-          w-full
-          h-full
-          object-cover
-          transition-opacity
-          duration-200
-          select-none
-          pointer-events-none
-          ${active ? "opacity-100" : "opacity-40"}
-        `}
+        className="w-full h-auto select-none pointer-events-none"
         draggable={false}
       />
+
+      {/* DEBUG heatmap markers */}
+      {markers.map((m) => (
+        <div
+          key={m.id}
+          style={{
+            position: "absolute",
+            width: "20px",
+            height: "20px",
+            left: `${m.x}%`,
+            top: `${m.y}%`,
+            transform: "translate(-50%, -50%)",
+            background: "yellow",
+            border: "3px solid red",
+            borderRadius: "9999px",
+            zIndex: 9999,
+            pointerEvents: "none",
+          }}
+        />
+      ))}
+
+      {/* steal button overlay */}
+      {children && (
+        <div className="absolute bottom-2 left-0 right-0 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto w-full max-w-xs">
+            {children}
+          </div>
+        </div>
+      )}
     </button>
   );
 }
