@@ -2939,34 +2939,6 @@ type FieldImageCardProps = {
   children?: React.ReactNode;
 };
 
-function getFillColor(ev: FieldEvent) {
-  switch (ev.actie) {
-    case "schot":
-      return "blue";
-    case "doorloop":
-      return "pink";
-    case "strafworp":
-      return "purple";
-    case "vrije":
-      return "brown";
-    default:
-      return "gray";
-  }
-}
-
-function getBorderColor(ev: FieldEvent) {
-  switch (ev.resultaat) {
-    case "raak":
-      return "green";
-    case "mis":
-      return "red";
-    case "korf":
-      return "orange";
-    default:
-      return "black";
-  }
-}
-
 function FieldImageCard({
   title,
   imgSrc,
