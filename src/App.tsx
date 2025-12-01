@@ -442,7 +442,12 @@ useEffect(() => {
     }));
   };
 
-  const setVakPos = (vak: VakSide, pos: number, spelerId: string | null) => {
+  const setVakPos = (
+    vak: VakSide,
+    pos: number,
+    spelerId: string | null,
+    logWissel: boolean = true           // 👈 nieuwe optionele flag
+  ) => {
     setState((s) => {
       const arr = vak === "aanvallend" ? [...s.aanval] : [...s.verdediging];
       const prevId = arr[pos] || null;
@@ -450,42 +455,43 @@ useEffect(() => {
   
       const logs: LogEvent[] = [];
   
-      // ✅ gebruik de halfMinuten uit de actuele state 's'
-      const halfMinuten = Number.isFinite(s.halfMinuten)
-        ? s.halfMinuten
-        : DEFAULT_STATE.halfMinuten;
-      const halfTotal = halfMinuten * 60;
+      // ✅ alleen wissels loggen als logWissel = true
+      if (logWissel) {
+        const halfMinuten = Number.isFinite(s.halfMinuten)
+          ? s.halfMinuten
+          : DEFAULT_STATE.halfMinuten;
+        const halfTotal = halfMinuten * 60;
   
-      // ✅ geen halfElapsedSeconden meer → gewoon tijdSeconden
-      const resterend = Math.max(halfTotal - s.tijdSeconden, 0);
-      const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
+        const resterend = Math.max(halfTotal - s.tijdSeconden, 0);
+        const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
   
-      if (prevId && prevId !== spelerId) {
-        logs.push({
-          id: uid("ev"),
-          tijdSeconden: s.tijdSeconden,
-          vak,
-          soort: "Wissel",
-          reden: "Wissel uit",
-          spelerId: prevId,
-          resterendSeconden: resterend,
-          wedstrijdMinuut: minuut,
-          pos: pos + 1,
-        });
-      }
+        if (prevId && prevId !== spelerId) {
+          logs.push({
+            id: uid("ev"),
+            tijdSeconden: s.tijdSeconden,
+            vak,
+            soort: "Wissel",
+            reden: "Wissel uit",
+            spelerId: prevId,
+            resterendSeconden: resterend,
+            wedstrijdMinuut: minuut,
+            pos: pos + 1,
+          });
+        }
   
-      if (spelerId && prevId !== spelerId) {
-        logs.push({
-          id: uid("ev"),
-          tijdSeconden: s.tijdSeconden,
-          vak,
-          soort: "Wissel",
-          reden: "Wissel in",
-          spelerId,
-          resterendSeconden: resterend,
-          wedstrijdMinuut: minuut,
-          pos: pos + 1,
-        });
+        if (spelerId && prevId !== spelerId) {
+          logs.push({
+            id: uid("ev"),
+            tijdSeconden: s.tijdSeconden,
+            vak,
+            soort: "Wissel",
+            reden: "Wissel in",
+            spelerId,
+            resterendSeconden: resterend,
+            wedstrijdMinuut: minuut,
+            pos: pos + 1,
+          });
+        }
       }
   
       const next =
@@ -843,14 +849,12 @@ const exportToExcel = () => {
       e.soort === "Kans" &&
       e.vak === "aanvallend" &&
       (e.reden === "Gescoord" ||
-        e.reden === "Korf" ||
         e.reden === "Doelpunt");
 
     const isUitGoal =
       e.soort === "Gemis" &&
       e.vak === "verdedigend" &&
       (e.reden === "Doorgelaten" ||
-        e.reden === "Korf" ||
         e.reden === "Doelpunt");
 
     if (isThuisGoal) scoreThuis++;
@@ -1376,11 +1380,17 @@ function VakindelingTab({
   toegewezen: Set<string>;
   aanval: (string | null)[];
   verdediging: (string | null)[];
-  setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
+  setVakPos: (
+    vak: VakSide,
+    pos: number,
+    spelerId: string | null,
+    logWissel?: boolean
+  ) => void;
   wisselVakken: () => void;
   autoVakWisselNa2: boolean;
   setAutoVakWisselNa2: (value: boolean) => void;
 }) {
+
 
   const beschikbare = spelers.filter((s) => !toegewezen.has(s.id));
 
@@ -1418,7 +1428,12 @@ function VakBox({
   titel: string;
   vak: VakSide;
   posities: (string | null)[];
-  setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
+  setVakPos: (
+    vak: VakSide,
+    pos: number,
+    spelerId: string | null,
+    logWissel?: boolean
+  ) => void;
   spelers: Player[];
   toegewezen: Set<string>;
 }) {
@@ -1457,7 +1472,9 @@ function VakBox({
                   isValid ? "" : "border-red-400"
                 }`}
                 value={spelerId || ""}
-                onChange={(e) => setVakPos(vak, i, e.target.value || null)}
+                onChange={(e) =>
+                  setVakPos(vak, i, e.target.value || null, false) // 👈 geen logging
+                }
               >
                 <option value="">— Kies speler —</option>
                 {opties.map((s) => (
@@ -1493,7 +1510,12 @@ function WedstrijdTab({
   spelersMap: Map<string, Player>;
   wisselVakken: () => void;
   bank: Player[];
-  setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
+  setVakPos: (
+    vak: VakSide,
+    pos: number,
+    spelerId: string | null,
+    logWissel?: boolean
+  ) => void;
   toggleKlok: (aan: boolean) => void;
   resetKlok: () => void;
   openVakActionModal: (vak: VakSide) => void;
@@ -2157,7 +2179,6 @@ function InsightsTab({
   const goalEvents = state.log.filter(
     (e) =>
       (e.reden === "Gescoord" ||
-        e.reden === "Korf" ||
         e.reden === "Doelpunt") &&
       e.spelerId &&
       e.spelerId !== TEGENSTANDER_ID
@@ -2291,14 +2312,12 @@ function InsightsTab({
     const isScoreForThuis =
       team === "thuis" &&
       (e.reden === "Gescoord" ||
-        e.reden === "Doelpunt" ||
-        e.reden === "Korf");
+        e.reden === "Doelpunt");
 
     const isScoreForUit =
       team === "uit" &&
       (e.reden === "Gescoord" ||
-        e.reden === "Doelpunt" ||
-        e.reden === "Korf" ||
+        e.reden === "Doelpunt"||
         e.reden === "Doorgelaten");
 
     if (isScoreForThuis) hitsThuis++;
@@ -2490,7 +2509,12 @@ type SpelerCircleRowProps = {
   index: number;
   spelersMap: Map<string, Player>;
   bank: Player[];
-  setVakPos: (vak: VakSide, pos: number, spelerId: string | null) => void;
+  setVakPos: (
+    vak: VakSide,
+    pos: number,
+    spelerId: string | null,
+    logWissel?: boolean
+  ) => void;
 };
 
 function SpelerCircleRow({
