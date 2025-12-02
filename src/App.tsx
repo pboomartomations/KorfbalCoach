@@ -152,6 +152,7 @@ type AppState = {
   currentAttackId: string | null;
   fieldEvents: FieldEvent[];  
   opponentName: string;
+  matchEnded: boolean;  
 };
 
 const DEFAULT_STATE: AppState = {
@@ -175,7 +176,8 @@ const DEFAULT_STATE: AppState = {
   attacks: [],
   currentAttackId: null,
   fieldEvents: [], 
-  opponentName: "",    
+  opponentName: "",   
+  matchEnded: false,    
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
@@ -341,6 +343,7 @@ function sanitizeState(raw: any): AppState {
 
     opponentName:
       typeof s.opponentName === "string" ? s.opponentName : "",
+      matchEnded: bool(s.matchEnded, false),
   };
 }
 
@@ -1046,6 +1049,8 @@ const attackRows = state.attacks.map((a) => {
 
     const wisselRows = wisselEvents.map((e) => {
       const score = scoreAtEvent.get(e.id);
+
+      
     
       const rawTeam: "thuis" | "uit" | undefined =
         e.team ??
@@ -1081,12 +1086,69 @@ const attackRows = state.attacks.map((a) => {
     });
 
   const wisselSheet = XLSX.utils.json_to_sheet(wisselRows);
+    // ---------- 4) MATCH SUMMARY SHEET ----------
+    const totalPoss = state.possessionThuisSeconden + state.possessionUitSeconden;
+    const possThuisPct =
+      totalPoss > 0
+        ? (state.possessionThuisSeconden / totalPoss) * 100
+        : 0;
+    const possUitPct =
+      totalPoss > 0
+        ? (state.possessionUitSeconden / totalPoss) * 100
+        : 0;
 
+    const nowTime = state.tijdSeconden;
+    const computeAttackSeconds = (team: AttackTeam) => {
+      let total = 0;
+      for (const a of state.attacks) {
+        if (a.team !== team || a.vak !== "aanvallend") continue;
+        const end = a.endSeconden != null ? a.endSeconden : nowTime;
+        if (end > a.startSeconden) {
+          total += end - a.startSeconden;
+        }
+      }
+      return total;
+    };
+
+    const attackThuisSec = computeAttackSeconds("thuis");
+    const attackUitSec = computeAttackSeconds("uit");
+    const totalAttackSec = attackThuisSec + attackUitSec;
+    const attackThuisPct =
+      totalAttackSec > 0 ? (attackThuisSec / totalAttackSec) * 100 : 0;
+    const attackUitPct =
+      totalAttackSec > 0 ? (attackUitSec / totalAttackSec) * 100 : 0;
+
+    const matchSummaryRows = [
+      {
+        wedstrijd_id: wedstrijdId,
+        datum: new Date().toISOString(),
+        tegenstander: state.opponentName || "Tegenstander",
+        half_duur_minuten: Number.isFinite(state.halfMinuten)
+          ? state.halfMinuten
+          : DEFAULT_STATE.halfMinuten,
+        score_thuis: state.scoreThuis,
+        score_uit: state.scoreUit,
+        bezit_thuis_seconden: state.possessionThuisSeconden,
+        bezit_uit_seconden: state.possessionUitSeconden,
+        bezit_thuis_pct: totalPoss > 0 ? possThuisPct.toFixed(1) : "",
+        bezit_uit_pct: totalPoss > 0 ? possUitPct.toFixed(1) : "",
+        aanval_thuis_seconden: attackThuisSec,
+        aanval_uit_seconden: attackUitSec,
+        aanval_thuis_pct:
+          totalAttackSec > 0 ? attackThuisPct.toFixed(1) : "",
+        aanval_uit_pct:
+          totalAttackSec > 0 ? attackUitPct.toFixed(1) : "",
+        wedstrijd_afgesloten: state.matchEnded ? "ja" : "nee",
+      },
+    ];
+
+    const matchSheet = XLSX.utils.json_to_sheet(matchSummaryRows);
   // ---------- 4) WORKBOOK + BESTAND OPSLAAN ----------
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, eventsSheet, "Events");
   XLSX.utils.book_append_sheet(wb, attacksSheet, "Attacks");
   XLSX.utils.book_append_sheet(wb, wisselSheet, "Wissels");
+  XLSX.utils.book_append_sheet(wb, matchSheet, "Wedstrijden");
 
   const filename = `korfbal-wedstrijd-${new Date()
     .toISOString()
@@ -1105,6 +1167,29 @@ const resetAlles = () => {
     currentAttackId: null,
   });
 };
+
+const eindeWedstrijd = () => {
+  setState((prev) => {
+    const now = prev.tijdSeconden;
+    let attacks = [...prev.attacks];
+
+    if (prev.currentAttackId) {
+      const idx = attacks.findIndex((a) => a.id === prev.currentAttackId);
+      if (idx >= 0 && attacks[idx].endSeconden == null) {
+        attacks[idx] = { ...attacks[idx], endSeconden: now };
+      }
+    }
+
+    return {
+      ...prev,
+      klokLoopt: false,
+      matchEnded: true,
+      attacks,
+      currentAttackId: null,
+    };
+  });
+};
+
 const clearWedstrijd = () =>
 setState((s) => ({
   ...s,
@@ -1234,6 +1319,14 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
           setOpponentName={(value) =>
             setState((s) => ({ ...s, opponentName: value }))
           }
+          halfMinuten={state.halfMinuten}                       
+          setHalfMinuten={(value) =>
+            setState((s) => ({ ...s, halfMinuten: value }))
+          }
+          aanvalLinks={state.aanvalLinks}                        
+          setAanvalLinks={(value) =>
+            setState((s) => ({ ...s, aanvalLinks: value }))
+          }
         />
       )}
 
@@ -1250,6 +1343,7 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
           openVakActionModal={(vak) => setVakActionPopup({ vak })}
           openStealModal={() => setStealPopup({})}
           opponentName={state.opponentName}
+          onEndMatch={eindeWedstrijd}  
         />
       )}
 
@@ -1468,7 +1562,11 @@ function VakindelingTab({
   autoVakWisselNa2,
   setAutoVakWisselNa2,
   opponentName,
-  setOpponentName,
+  setOpponentName,  
+  halfMinuten,
+  setHalfMinuten,
+  aanvalLinks,
+  setAanvalLinks,
 }: {
   spelers: Player[];
   toegewezen: Set<string>;
@@ -1485,6 +1583,10 @@ function VakindelingTab({
   setAutoVakWisselNa2: (value: boolean) => void;
   opponentName: string;
   setOpponentName: (value: string) => void;
+  halfMinuten: number;
+  setHalfMinuten: (value: number) => void;
+  aanvalLinks: boolean;
+  setAanvalLinks: (value: boolean) => void;
 }) {
 
 
@@ -1494,7 +1596,7 @@ function VakindelingTab({
     <div className="grid md:grid-cols-2 gap-4">
       <VakBox titel="Aanvallend vak" vak="aanvallend" posities={aanval} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
       <VakBox titel="Verdedigend vak" vak="verdedigend" posities={verdediging} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
-      <div className="md:col-span-2 flex flex-col gap-3 mt-2">
+      <div className="md:col-span-2 flex flex-col gap-4 mt-2">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div className="text-sm text-gray-600">
             Bank: {beschikbare.map((s) => s.naam).join(", ") || "—"}
@@ -1517,6 +1619,43 @@ function VakindelingTab({
             >
               Vakken wisselen
             </button>
+          </div>
+        </div>
+
+        {/* Wedstrijdduur + aanval links/rechts */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Wedstrijdduur per helft:</span>
+            <Button
+              size="sm"
+              onClick={() =>
+                setHalfMinuten(Math.max(1, (Number.isFinite(halfMinuten) ? halfMinuten : DEFAULT_STATE.halfMinuten) - 1))
+              }
+            >
+              −
+            </Button>
+            <span className="w-10 text-center text-sm">
+              {Number.isFinite(halfMinuten) ? halfMinuten : DEFAULT_STATE.halfMinuten}
+            </span>
+            <Button
+              size="sm"
+              onClick={() =>
+                setHalfMinuten(Math.min(60, (Number.isFinite(halfMinuten) ? halfMinuten : DEFAULT_STATE.halfMinuten) + 1))
+              }
+            >
+              +
+            </Button>
+            <span className="text-sm">minuten</span>
+          </div>
+
+          <div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setAanvalLinks(!aanvalLinks)}
+            >
+              Aanval {aanvalLinks ? "links" : "rechts"} starten
+            </Button>
           </div>
         </div>
 
@@ -1625,6 +1764,7 @@ function WedstrijdTab({
   openVakActionModal,
   openStealModal,
   opponentName,
+  onEndMatch,   
 }: {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
@@ -1642,6 +1782,7 @@ function WedstrijdTab({
   openVakActionModal: (vak: VakSide) => void;
   openStealModal: () => void;
   opponentName: string;
+  onEndMatch: () => void; 
 }) {
   const handleVakClick = (vak: VakSide) => {
     // Klik je op een NIET-actief vak → nieuwe aanval starten in dat vak
@@ -1706,6 +1847,38 @@ function WedstrijdTab({
     Math.min(halfTotal, state.tijdSeconden - halfStart)
   );
   const resterend = Math.max(halfTotal - halfElapsed, 0);
+
+  const totalPoss = state.possessionThuisSeconden + state.possessionUitSeconden;
+  const possThuisPct =
+    totalPoss > 0
+      ? (state.possessionThuisSeconden / totalPoss) * 100
+      : 0;
+  const possUitPct =
+    totalPoss > 0
+      ? (state.possessionUitSeconden / totalPoss) * 100
+      : 0;
+
+  const nowTime = state.tijdSeconden;
+  const computeAttackSeconds = (team: AttackTeam) => {
+    let total = 0;
+    for (const a of state.attacks) {
+      if (a.team !== team || a.vak !== "aanvallend") continue;
+      const end = a.endSeconden != null ? a.endSeconden : nowTime;
+      if (end > a.startSeconden) {
+        total += end - a.startSeconden;
+      }
+    }
+    return total;
+  };
+
+  const attackThuisSec = computeAttackSeconds("thuis");
+  const attackUitSec = computeAttackSeconds("uit");
+  const totalAttackSec = attackThuisSec + attackUitSec;
+  const attackThuisPct =
+    totalAttackSec > 0 ? (attackThuisSec / totalAttackSec) * 100 : 0;
+  const attackUitPct =
+    totalAttackSec > 0 ? (attackUitSec / totalAttackSec) * 100 : 0;
+
 
   // 🔹 Wanneer is de wedstrijd "niet gestart"?
   //   → tijd = 0, 1e helft, geen log/aanvallen
@@ -1781,56 +1954,13 @@ function WedstrijdTab({
                 2e helft
               </Button>
 
-              {/* Aanval links/rechts – zelfde stijl als andere knoppen */}
-              <div className="flex gap-2 items-center">
-                <Button
-                  size="md"
-                  variant="secondary"
-                  onClick={() =>
-                    setState((s) => ({ ...s, aanvalLinks: !s.aanvalLinks }))
-                  }
-                >
-                  Aanval links/rechts
-                </Button>
-              </div>
-
-              {/* Duur instellen */}
-              <div className="flex items-center gap-2 ml-2">
-                <div className="text-lg">Duur</div>
-                <Button
-                  size="md"
-                  disabled={state.klokLoopt}
-                  onClick={() =>
-                    setState((s) => {
-                      const hm = Number.isFinite(s.halfMinuten)
-                        ? s.halfMinuten
-                        : DEFAULT_STATE.halfMinuten;
-                      return { ...s, halfMinuten: Math.max(1, hm - 1) };
-                    })
-                  }
-                >
-                  −
-                </Button>
-                <div className="w-10 text-center">
-                  {Number.isFinite(state.halfMinuten)
-                    ? state.halfMinuten
-                    : DEFAULT_STATE.halfMinuten}
-                </div>
-                <Button
-                  size="md"
-                  disabled={state.klokLoopt}
-                  onClick={() =>
-                    setState((s) => {
-                      const hm = Number.isFinite(s.halfMinuten)
-                        ? s.halfMinuten
-                        : DEFAULT_STATE.halfMinuten;
-                      return { ...s, halfMinuten: Math.min(60, hm + 1) };
-                    })
-                  }
-                >
-                  +
-                </Button>
-                <div className="text-lg">Minuten</div>
+              <Button
+                size="md"
+                variant="danger"
+                onClick={onEndMatch}
+              >
+                Einde wedstrijd
+              </Button>
               </div>
             </div>
           </div>
@@ -1878,6 +2008,13 @@ function WedstrijdTab({
                       +
                     </Button>
                   </div>
+                  <div className="text-xs text-blue-900 mt-1">
+                    Balbezit: {totalPoss > 0 ? possThuisPct.toFixed(1) : "0.0"}%
+                  </div>
+                  <div className="text-xs text-blue-900">
+                    Aanvalstijd t.o.v. tegenstander:{" "}
+                    {totalAttackSec > 0 ? attackThuisPct.toFixed(1) : "0.0"}%
+                  </div>
                 </div>
               </div>
 
@@ -1913,6 +2050,13 @@ function WedstrijdTab({
                     >
                       +
                     </Button>
+                  </div>
+                  <div className="text-xs text-amber-900 mt-1">
+                    Balbezit: {totalPoss > 0 ? possUitPct.toFixed(1) : "0.0"}%
+                  </div>
+                  <div className="text-xs text-amber-900">
+                    Aanvalstijd t.o.v. Korbis:{" "}
+                    {totalAttackSec > 0 ? attackUitPct.toFixed(1) : "0.0"}%
                   </div>
                 </div>
               </div>
@@ -2221,7 +2365,6 @@ function WedstrijdTab({
           )}
         </div>
       </div>
-    </div>
   );
 }
 
