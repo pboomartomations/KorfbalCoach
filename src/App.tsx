@@ -50,6 +50,11 @@ function Button({
 const GESLACHTEN: readonly ["Dame", "Heer"] = ["Dame", "Heer"];
 const TEGENSTANDER_ID = "__tegenstander__";
 
+const TEAM_LABELS: Record<"thuis" | "uit", string> = {
+  thuis: "Korbis",
+  uit: "Tegenstander",
+};
+
 type FieldEvent = {
   id: string;
   vak: VakSide;
@@ -88,44 +93,42 @@ type LogReden =
   | "Doelpunt";
 
 
-  type AttackTeam = "thuis" | "uit";
+type AttackTeam = "thuis" | "uit";
 
-  type AttackMeta = {
-    id: string;              // interne id
-    index: number;           // 1,2,3,... (aanvalnummer)
-    team: AttackTeam;        // thuis of uit
-    vak: VakSide;            // aanvallend / verdedigend
-    startSeconden: number;   // starttijd vd aanval (wedstrijdseconden)
-    endSeconden?: number;    // optional: eindtijd
-  };
+type AttackMeta = {
+  id: string;              // interne id
+  index: number;           // 1,2,3,... (aanvalnummer)
+  team: AttackTeam;        // thuis of uit
+  vak: VakSide;            // aanvallend / verdedigend
+  startSeconden: number;   // starttijd vd aanval (wedstrijdseconden)
+  endSeconden?: number;    // optional: eindtijd
+};
 
-  type LogEvent = {
-    id: string;
-    tijdSeconden: number;
-    vak?: VakSide;
-    soort: "Gemis" | "Kans" | "Wissel" | "Balbezit" | "Schot" | "Rebound";
-    actie?: "Schot" | "Doorloop" | "Vrijebal" | "Strafworp";
-    reden: LogReden;
-    spelerId?: string;
-    resterendSeconden?: number;
-    wedstrijdMinuut?: number;
-    pos?: number;
-    team?: "thuis" | "uit";
-    possThuis?: number;
-    possUit?: number;
-    type?: "Schot" | "Rebound";
-    resultaat?: "Raak" | "Mis" | "Korf";   
-    attackId?: string;
-    attackIndex?: number;
-  };
+type LogEvent = {
+  id: string;
+  tijdSeconden: number;
+  vak?: VakSide;
+  soort: "Gemis" | "Kans" | "Wissel" | "Balbezit" | "Schot" | "Rebound";
+  actie?: "Schot" | "Doorloop" | "Vrijebal" | "Strafworp";
+  reden: LogReden;
+  spelerId?: string;
+  resterendSeconden?: number;
+  wedstrijdMinuut?: number;
+  pos?: number;
+  team?: "thuis" | "uit";
+  possThuis?: number;
+  possUit?: number;
+  type?: "Schot" | "Rebound";
+  resultaat?: "Raak" | "Mis" | "Korf";   
+  attackId?: string;
+  attackIndex?: number;
+};
 
-  
-  type TeamFileV1 = {
-    version: 1;
-    createdAt: string;
-    spelers: Player[];
-  };
-  
+type TeamFileV1 = {
+  version: 1;
+  createdAt: string;
+  spelers: Player[];
+};
 
 type AppState = {
   spelers: Player[];
@@ -148,6 +151,7 @@ type AppState = {
   attacks: AttackMeta[];
   currentAttackId: string | null;
   fieldEvents: FieldEvent[];  
+  opponentName: string;
 };
 
 const DEFAULT_STATE: AppState = {
@@ -170,7 +174,8 @@ const DEFAULT_STATE: AppState = {
   activeVak: "aanvallend",
   attacks: [],
   currentAttackId: null,
-  fieldEvents: [],   
+  fieldEvents: [], 
+  opponentName: "",    
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
@@ -261,7 +266,18 @@ function detectVakForSpeler(state: AppState, spelerId?: string): VakSide | undef
   return undefined;
 }
 
+function getTeamDisplayName(
+  team: "thuis" | "uit",
+  opponentName: string
+) {
+  if (team === "thuis") return TEAM_LABELS.thuis;
+  return opponentName || TEAM_LABELS.uit;
+}
+
+
+//////////////////////////////////////////////////////////////////////////////
 // -- Hydration/migratie helper ----------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
 function sanitizeState(raw: any): AppState {
   const s: any = typeof raw === "object" && raw ? raw : {};
   const toArr4 = (a: any): (string | null)[] =>
@@ -318,15 +334,19 @@ function sanitizeState(raw: any): AppState {
     attacks: Array.isArray(s.attacks)
       ? (s.attacks as AttackMeta[])
       : DEFAULT_STATE.attacks,
-    currentAttackId:
+      currentAttackId:
       typeof s.currentAttackId === "string"
         ? s.currentAttackId
         : DEFAULT_STATE.currentAttackId,
+
+    opponentName:
+      typeof s.opponentName === "string" ? s.opponentName : "",
   };
 }
 
-
+//////////////////////////////////////////////////////////////////////////////
 // --- Main component --------------------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => {
@@ -357,7 +377,11 @@ export default function App() {
 
   // Persist
   // Timer (intern: op-tellen; UI toont resterend) + balbezit
-useEffect(() => {
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {}
+  
   if (!state.klokLoopt) return;
 
   const id = window.setInterval(() => {
@@ -427,7 +451,10 @@ useEffect(() => {
 
   const bank = state.spelers.filter((p) => !toegewezenIds.has(p.id));
 
-  // Actions ---------------------------------------------------------------
+  //////////////////////////////////////////////////////////////////////////////
+  // Actions -------------------------------------------------------------------
+  //////////////////////////////////////////////////////////////////////////////
+
   const addSpeler = (naam: string, geslacht: Geslacht, foto?: string) => {
     const p: Player = { id: uid("sp"), naam, geslacht, foto };
     setState((s) => ({ ...s, spelers: [...s.spelers, p] }));
@@ -446,7 +473,7 @@ useEffect(() => {
     vak: VakSide,
     pos: number,
     spelerId: string | null,
-    logWissel: boolean = true           // 👈 nieuwe optionele flag
+    logWissel: boolean = true // 👈 optioneel
   ) => {
     setState((s) => {
       const arr = vak === "aanvallend" ? [...s.aanval] : [...s.verdediging];
@@ -476,6 +503,7 @@ useEffect(() => {
             resterendSeconden: resterend,
             wedstrijdMinuut: minuut,
             pos: pos + 1,
+            team: vak === "aanvallend" ? "thuis" : "uit",
           });
         }
   
@@ -490,6 +518,7 @@ useEffect(() => {
             resterendSeconden: resterend,
             wedstrijdMinuut: minuut,
             pos: pos + 1,
+            team: vak === "aanvallend" ? "thuis" : "uit",
           });
         }
       }
@@ -545,8 +574,9 @@ useEffect(() => {
       soort,
       reden,
       spelerId,
+      team: vak === "aanvallend" ? "thuis" : "uit",  // aanval = Korbis, verdediging = Tegenstander
       actie,
-      resultaat,                 // 👈 nieuw
+      resultaat,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
       attackId,
@@ -707,8 +737,8 @@ useEffect(() => {
   
     // vak bepalen obv speler (als geen speler: aanvallend aanhouden)
     const vak = detectVakForSpeler(state, spelerId) ?? "aanvallend";
+    const team: "thuis" | "uit" = vak === "aanvallend" ? "thuis" : "uit";
 
-  
     // reden voor in de log
     const reden: LogReden =
       type === "Schot"
@@ -724,6 +754,7 @@ useEffect(() => {
       soort: type, // "Schot" of "Rebound"
       reden,
       spelerId,
+      team,
       resterendSeconden: resterend,
       wedstrijdMinuut: minuut,
       type,
@@ -837,6 +868,11 @@ const exportTeam = () => {
 };
 
 const exportToExcel = () => {
+    // Uniek ID voor deze export / wedstrijd
+    const wedstrijdId = `WED-${new Date()
+      .toISOString()
+      .replace(/[-:.TZ]/g, "")
+      .slice(0, 14)}`;
   // ---------- 0) TUSSENSTAND PER EVENT OPBOUWEN ----------
   // We lopen chronologisch door de log (oud → nieuw)
   const sortedForScore = state.log.slice().reverse();
@@ -920,17 +956,32 @@ const exportToExcel = () => {
 
     const uitkomstLabel = e.resultaat ?? "";
 
+    const rawTeam: "thuis" | "uit" | undefined =
+    e.team ??
+    (e.vak === "aanvallend"
+      ? "thuis"
+      : e.vak === "verdedigend"
+      ? "uit"
+      : undefined);
+
+    const teamLabel = rawTeam
+      ? rawTeam === "thuis"
+        ? "Korbis"
+        : state.opponentName || "Tegenstander"
+      : "";
+
     return {
+      wedstrijd_id: wedstrijdId,   // 👈 nieuw
       id: e.id,
       tijd_verstreken: formatTime(e.tijdSeconden),
       klok_resterend: formatTime(resterend),
       wedstrijd_minuut:
         e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
       vak: e.vak ?? "",
-      team: e.team ?? "",
-      actie: actieLabel,          // 👈 nieuwe kolom
-      uitkomst: uitkomstLabel,    // 👈 nieuwe kolom
-      reden: e.reden,             // reden houden we ook nog
+      team: teamLabel,
+      actie: actieLabel,
+      uitkomst: uitkomstLabel,
+      reden: e.reden,
       spelerId: e.spelerId || "",
       spelerNaam:
         e.spelerId === TEGENSTANDER_ID
@@ -938,13 +989,12 @@ const exportToExcel = () => {
           : e.spelerId
           ? spelersMap.get(e.spelerId)?.naam || ""
           : "",
-      score_thuis: score?.thuis ?? "", // 👈 tussenstand
-      score_uit: score?.uit ?? "",     // 👈 tussenstand
+      score_thuis: score?.thuis ?? "",
+      score_uit: score?.uit ?? "",
       x_pct: fieldEv ? Number(fieldEv.x.toFixed(1)) : "",
       y_pct: fieldEv ? Number(fieldEv.y.toFixed(1)) : "",
       aanval_nr: e.attackIndex ?? "",
-      aanval_team: attackMeta?.team ?? "",
-      aanval_vak: attackMeta?.vak ?? "",
+      // aanval_team en aanval_vak zijn nu weg 👍
       aanval_start: attackMeta ? formatTime(attackMeta.startSeconden) : "",
       aanval_einde:
         attackMeta?.endSeconden != null
@@ -953,35 +1003,38 @@ const exportToExcel = () => {
       aanval_duur:
         aanvalDuurSeconden != null ? formatTime(aanvalDuurSeconden) : "",
     };
-  });
+    });
 
   const eventsSheet = XLSX.utils.json_to_sheet(eventRows);
 
-  // ---------- 2) ATTACKS SHEET (zoals je 'm al had) ----------
-  const attackRows = state.attacks.map((a) => {
-    const eventsInAttack = state.log.filter((e) => e.attackId === a.id);
+// ---------- 2) ATTACKS SHEET (zoals je 'm al had) ---------- 
+const attackRows = state.attacks.map((a) => {
+	const eventsInAttack = state.log.filter((e) => e.attackId === a.id); 
+	const schoten = eventsInAttack.filter((e) => e.actie === "Schot").length; 
+	const doorloop = eventsInAttack.filter((e) => e.actie === "Doorloop").length; 
+	const vrije = eventsInAttack.filter((e) => e.actie === "Vrijebal").length; 
+	const straf = eventsInAttack.filter((e) => e.actie === "Strafworp").length; 
+	const duurSeconden = a.endSeconden != null ? a.endSeconden - a.startSeconden : undefined; 
+	
+  const teamLabel =
+  a.team === "thuis"
+    ? "Korbis"
+    : state.opponentName || "Tegenstander";
 
-    const schoten = eventsInAttack.filter((e) => e.actie === "Schot").length;
-    const doorloop = eventsInAttack.filter((e) => e.actie === "Doorloop").length;
-    const vrije = eventsInAttack.filter((e) => e.actie === "Vrijebal").length;
-    const straf = eventsInAttack.filter((e) => e.actie === "Strafworp").length;
-
-    const duurSeconden =
-      a.endSeconden != null ? a.endSeconden - a.startSeconden : undefined;
-
-    return {
-      aanval_nr: a.index,
-      team: a.team,
-      vak: a.vak,
-      start: formatTime(a.startSeconden),
-      einde: a.endSeconden != null ? formatTime(a.endSeconden) : "",
-      duur: duurSeconden != null ? formatTime(duurSeconden) : "",
-      schoten,
-      doorloop,
-      vrije_ballen: vrije,
-      strafworpen: straf,
-    };
-  });
+  return {
+    wedstrijd_id: wedstrijdId,         // 👈 nieuw
+    aanval_nr: a.index,
+    team: teamLabel,
+    vak: a.vak === "aanvallend" ? "Aanvallend" : "Verdedigend",
+    start: formatTime(a.startSeconden),
+    einde: a.endSeconden != null ? formatTime(a.endSeconden) : "",
+    duur: duurSeconden != null ? formatTime(duurSeconden) : "",
+    schoten,
+    doorloop,
+    vrije_ballen: vrije,
+    strafworpen: straf,
+  };
+	});
 
   const attacksSheet = XLSX.utils.json_to_sheet(attackRows);
 
@@ -991,25 +1044,41 @@ const exportToExcel = () => {
     .reverse()
     .filter((e) => e.soort === "Wissel");
 
-  const wisselRows = wisselEvents.map((e) => {
-    const score = scoreAtEvent.get(e.id);
-
-    return {
-      id: e.id,
-      tijd_verstreken: formatTime(e.tijdSeconden),
-      wedstrijd_minuut:
-        e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
-      vak: e.vak ?? "",
-      positie: e.pos ?? "",
-      wissel: e.reden, // "Wissel in" / "Wissel uit"
-      spelerId: e.spelerId || "",
-      spelerNaam: e.spelerId
-        ? spelersMap.get(e.spelerId)?.naam || ""
-        : "",
-      score_thuis: score?.thuis ?? "",
-      score_uit: score?.uit ?? "",
-    };
-  });
+    const wisselRows = wisselEvents.map((e) => {
+      const score = scoreAtEvent.get(e.id);
+    
+      const rawTeam: "thuis" | "uit" | undefined =
+        e.team ??
+        (e.vak === "aanvallend"
+          ? "thuis"
+          : e.vak === "verdedigend"
+          ? "uit"
+          : undefined);
+    
+      const teamLabel = rawTeam
+        ? rawTeam === "thuis"
+          ? "Korbis"
+          : state.opponentName || "Tegenstander"
+        : "";
+    
+      return {
+        wedstrijd_id: wedstrijdId,     // 👈 nieuw
+        id: e.id,
+        tijd_verstreken: formatTime(e.tijdSeconden),
+        wedstrijd_minuut:
+          e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
+        vak: e.vak ?? "",
+        team: teamLabel,
+        positie: e.pos ?? "",
+        wissel: e.reden,
+        spelerId: e.spelerId || "",
+        spelerNaam: e.spelerId
+          ? spelersMap.get(e.spelerId)?.naam || ""
+          : "",
+        score_thuis: score?.thuis ?? "",
+        score_uit: score?.uit ?? "",
+      };
+    });
 
   const wisselSheet = XLSX.utils.json_to_sheet(wisselRows);
 
@@ -1027,51 +1096,55 @@ const exportToExcel = () => {
 };
 
 
-  const resetAlles = () => {
-    if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
-    try { localStorage.removeItem(STORAGE_KEY); } catch {}
-    setState({ 
-      ...DEFAULT_STATE,
-      attacks: [],
-      currentAttackId: null,
-    });
-  };
-  const clearWedstrijd = () =>
-  setState((s) => ({
-    ...s,
-
-    // 🔢 Scores terug op 0
-    scoreThuis: 0,
-    scoreUit: 0,
-
-    // ⏱ Tijd resetten + klok uit
-    tijdSeconden: 0,
-    klokLoopt: false,
-    currentHalf: 1,
-
-    // 🏀 Balbezit resetten
-    possessionOwner: null,
-    possessionThuisSeconden: 0,
-    possessionUitSeconden: 0,
-
-    // 📜 Logs & overzichten leegmaken
-    log: [],
+const resetAlles = () => {
+  if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
+  try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  setState({ 
+    ...DEFAULT_STATE,
     attacks: [],
     currentAttackId: null,
-    goalsSinceLastSwitch: 0,
+  });
+};
+const clearWedstrijd = () =>
+setState((s) => ({
+  ...s,
 
-    // 🎯 Heatmap leegmaken
-    fieldEvents: [],
+  // 🔢 Scores terug op 0
+  scoreThuis: 0,
+  scoreUit: 0,
 
-    // 🔁 Veldoriëntatie & actief vak terug naar start
-    aanvalLinks: DEFAULT_STATE.aanvalLinks,
-    activeVak: "aanvallend",
-  }));
-  // Afgeleide arrays voor modal
-  const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
-  const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
+  // ⏱ Tijd resetten + klok uit
+  tijdSeconden: 0,
+  klokLoopt: false,
+  currentHalf: 1,
 
-  // UI ----------------------------------------------------------------------
+  // 🏀 Balbezit resetten
+  possessionOwner: null,
+  possessionThuisSeconden: 0,
+  possessionUitSeconden: 0,
+
+  // 📜 Logs & overzichten leegmaken
+  log: [],
+  attacks: [],
+  currentAttackId: null,
+  goalsSinceLastSwitch: 0,
+
+  // 🎯 Heatmap leegmaken
+  fieldEvents: [],
+
+  // 🔁 Veldoriëntatie & actief vak terug naar start
+  aanvalLinks: DEFAULT_STATE.aanvalLinks,
+  activeVak: "aanvallend",
+}));
+
+// Afgeleide arrays voor modal
+const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
+const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
+
+
+  //////////////////////////////////////////////////////////////////////////////
+  // UI ------------------------------------------------------------------------
+  //////////////////////////////////////////////////////////////////////////////
   return (
     <div className="p-3 md:p-6 max-w-5xl mx-auto">
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
@@ -1117,11 +1190,12 @@ const exportToExcel = () => {
     </div>
 
       </header>
+
       {/* Tabs */}
       <div className="flex gap-2 mb-4">
       {([
           { id: "spelers", label: "Spelers" },
-          { id: "vakken", label: "Vakindeling" },
+          { id: "vakken", label: "Wedstrijdinstellingen" },
           { id: "wedstrijd", label: "Wedstrijd" },
           { id: "insights", label: "Insights" },
         ] as const).map((t) => (
@@ -1153,7 +1227,13 @@ const exportToExcel = () => {
           setVakPos={setVakPos}
           wisselVakken={wisselVakken}
           autoVakWisselNa2={state.autoVakWisselNa2}
-          setAutoVakWisselNa2={(value) => setState((s) => ({ ...s, autoVakWisselNa2: value }))}   
+          setAutoVakWisselNa2={(value) =>
+            setState((s) => ({ ...s, autoVakWisselNa2: value }))
+          }
+          opponentName={state.opponentName}
+          setOpponentName={(value) =>
+            setState((s) => ({ ...s, opponentName: value }))
+          }
         />
       )}
 
@@ -1169,13 +1249,20 @@ const exportToExcel = () => {
           resetKlok={resetKlok}
           openVakActionModal={(vak) => setVakActionPopup({ vak })}
           openStealModal={() => setStealPopup({})}
+          opponentName={state.opponentName}
         />
       )}
 
       {tab === "insights" && (
-        <InsightsTab state={state} spelersMap={spelersMap} />
+        <InsightsTab
+          state={state}
+          spelersMap={spelersMap}
+          opponentName={state.opponentName}
+        />
       )}
 
+
+      {/* Pop-Ups */}
       {popup && (
         <ReasonModal
           vak={popup.vak}
@@ -1190,14 +1277,16 @@ const exportToExcel = () => {
       )}
       {possPopup && (
         <PossessionModal
-          team={possPopup.team}
-          spelers={veldSpelers}
-          onClose={() => setPossPopup(null)}
-          onSave={(reden, spelerId) => {
-            logBalbezit(possPopup.team, reden, spelerId);
-            setPossPopup(null);
-          }}
-        />
+        team={possPopup.team}
+        spelers={veldSpelers}
+        opponentName={state.opponentName}
+        onClose={() => setPossPopup(null)}
+        onSave={(reden, spelerId) => {
+          logBalbezit(possPopup.team, reden, spelerId);
+          setPossPopup(null);
+        }}
+      />
+      
       )}
 
       {shotPopup && (
@@ -1236,6 +1325,7 @@ const exportToExcel = () => {
           }}
         />
       )}
+
       {/* 👇 Verborgen file input voor team-import */}
       <input
         type="file"
@@ -1247,8 +1337,9 @@ const exportToExcel = () => {
     </div>
   );
 }
-
+//////////////////////////////////////////////////////////////////////////////
 // --- Spelers Tab -----------------------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
 function SpelersTab({
   spelers,
   addSpeler,
@@ -1364,8 +1455,9 @@ function SpelersTab({
   );
 }
 
-
+//////////////////////////////////////////////////////////////////////////////
 // --- Vakindeling Tab -------------------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
 function VakindelingTab({
   spelers,
   toegewezen,
@@ -1375,6 +1467,8 @@ function VakindelingTab({
   wisselVakken,
   autoVakWisselNa2,
   setAutoVakWisselNa2,
+  opponentName,
+  setOpponentName,
 }: {
   spelers: Player[];
   toegewezen: Set<string>;
@@ -1389,18 +1483,24 @@ function VakindelingTab({
   wisselVakken: () => void;
   autoVakWisselNa2: boolean;
   setAutoVakWisselNa2: (value: boolean) => void;
+  opponentName: string;
+  setOpponentName: (value: string) => void;
 }) {
 
 
   const beschikbare = spelers.filter((s) => !toegewezen.has(s.id));
-
+  //JSX VakindelingTab
   return (
     <div className="grid md:grid-cols-2 gap-4">
       <VakBox titel="Aanvallend vak" vak="aanvallend" posities={aanval} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
       <VakBox titel="Verdedigend vak" vak="verdedigend" posities={verdediging} setVakPos={setVakPos} spelers={spelers} toegewezen={toegewezen} />
-      <div className="md:col-span-2 flex items-center justify-between mt-2">
-        <div className="text-sm text-gray-600">Bank: {beschikbare.map((s) => s.naam).join(", ") || "—"}</div>
-          <div className="flex items-center gap-4">
+      <div className="md:col-span-2 flex flex-col gap-3 mt-2">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="text-sm text-gray-600">
+            Bank: {beschikbare.map((s) => s.naam).join(", ") || "—"}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4">
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -1408,10 +1508,30 @@ function VakindelingTab({
                 checked={autoVakWisselNa2}
                 onChange={(e) => setAutoVakWisselNa2(e.target.checked)}
               />
-            <span>Automatisch wisselen na 2 doelpunten</span>
-        </label>
-      </div>
-        <button className="px-3 py-2 border rounded-xl" onClick={wisselVakken}>Vakken wisselen</button>
+              <span>Automatisch wisselen na 2 doelpunten</span>
+            </label>
+
+            <button
+              className="px-3 py-2 border rounded-xl text-sm"
+              onClick={wisselVakken}
+            >
+              Vakken wisselen
+            </button>
+          </div>
+        </div>
+
+        {/* Tegenstander naam */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <label className="text-sm font-medium">
+            Naam tegenstander:
+          </label>
+          <input
+            className="border rounded-lg px-2 py-1 text-sm w-full sm:max-w-xs"
+            placeholder="Bijv. TOP, PKC..."
+            value={opponentName}
+            onChange={(e) => setOpponentName(e.target.value)}
+          />
+        </div>
       </div>
     </div>
   );
@@ -1490,9 +1610,9 @@ function VakBox({
     </div>
   );
 }
-
-
+//////////////////////////////////////////////////////////////////////////////
 // --- Wedstrijd Tab ---------------------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
 function WedstrijdTab({
   state,
   setState,
@@ -1504,6 +1624,7 @@ function WedstrijdTab({
   resetKlok,
   openVakActionModal,
   openStealModal,
+  opponentName,
 }: {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
@@ -1520,6 +1641,7 @@ function WedstrijdTab({
   resetKlok: () => void;
   openVakActionModal: (vak: VakSide) => void;
   openStealModal: () => void;
+  opponentName: string;
 }) {
   const handleVakClick = (vak: VakSide) => {
     // Klik je op een NIET-actief vak → nieuwe aanval starten in dat vak
@@ -1727,7 +1849,7 @@ function WedstrijdTab({
               <div className="rounded-2xl border bg-blue-50 p-4">
                 <div className="flex items-center gap-3 justify-between">
                   <div className="text-lg font-semibold text-blue-800">
-                    Thuis
+                    Korbis
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
@@ -1763,7 +1885,7 @@ function WedstrijdTab({
               <div className="rounded-2xl border bg-amber-50 p-4">
                 <div className="flex items-center gap-3 justify-between">
                   <div className="text-lg font-semibold text-amber-800">
-                    Uit
+                    {opponentName || "Tegenstander"}
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
@@ -2102,18 +2224,33 @@ function WedstrijdTab({
     </div>
   );
 }
+
 function InsightsTab({
   state,
   spelersMap,
+  opponentName,
 }: {
   state: AppState;
   spelersMap: Map<string, Player>;
+  opponentName: string;
 }) {
-  // helper: team bij een logevent via attackId
+
+  // 👇 helper om het team bij een event te bepalen
   const getTeamForEvent = (e: LogEvent): AttackTeam | undefined => {
-    if (!e.attackId) return undefined;
-    const a = state.attacks.find((att) => att.id === e.attackId);
-    return a?.team;
+    // 1) Als het event zelf een team heeft, gebruik die
+    if (e.team === "thuis" || e.team === "uit") return e.team;
+
+    // 2) Als er een attackId is, haal het team van die aanval
+    if (e.attackId) {
+      const attack = state.attacks.find((a) => a.id === e.attackId);
+      if (attack) return attack.team;
+    }
+
+    // 3) Fallback: op basis van vak
+    if (e.vak === "aanvallend") return "thuis";
+    if (e.vak === "verdedigend") return "uit";
+
+    return undefined;
   };
 
   // -----------------------------------------
@@ -2250,7 +2387,9 @@ function InsightsTab({
     "Strafworp",
   ];
 
-  const actionCounts = {
+  type ActionKind = (typeof ACTIONS)[number];
+
+  const actionCounts: Record<AttackTeam, Record<ActionKind, number>> = {
     thuis: {
       Schot: 0,
       Doorloop: 0,
@@ -2278,7 +2417,8 @@ function InsightsTab({
         : "thuis";
     const team = teamFromAttack ?? fallbackTeam;
 
-    actionCounts[team][e.actie]++;
+    const action = e.actie as ActionKind;
+    actionCounts[team][action]++;
   });
 
   // -----------------------------------------
@@ -2336,8 +2476,14 @@ function InsightsTab({
 
       {/* Rij 1: Schot vs Doorloop per team */}
       <div className="grid gap-6 md:grid-cols-2">
-        <PieChart title="Thuis: Schot vs Doorloop" slices={thuisSlices} />
-        <PieChart title="Uit: Schot vs Doorloop" slices={uitSlices} />
+      <PieChart
+        title="Korbis: Schot vs Doorloop"
+        slices={thuisSlices}
+      />
+      <PieChart
+        title={`${opponentName || "Tegenstander"}: Schot vs Doorloop`}
+        slices={uitSlices}
+      />
       </div>
 
       {/* Rij 2: Doelpunten en tegendoelpunten per speler */}
@@ -2359,8 +2505,8 @@ function InsightsTab({
             <thead className="bg-gray-50">
               <tr>
                 <th className="text-left p-1">Actie</th>
-                <th className="text-right p-1">Thuis</th>
-                <th className="text-right p-1">Uit</th>
+                <th className="text-right p-1">Korbis</th>
+                <th className="text-right p-1">{opponentName || "Tegenstander"}</th>
               </tr>
             </thead>
             <tbody>
@@ -2397,7 +2543,7 @@ function InsightsTab({
             </thead>
             <tbody>
               <tr className="border-t">
-                <td className="p-1">Thuis</td>
+                <td className="p-1">Korbis</td>
                 <td className="p-1 text-right">{attemptsThuis}</td>
                 <td className="p-1 text-right">{hitsThuis}</td>
                 <td className="p-1 text-right">
@@ -2405,7 +2551,7 @@ function InsightsTab({
                 </td>
               </tr>
               <tr className="border-t">
-                <td className="p-1">Uit</td>
+                <td className="p-1">{opponentName || "Tegenstander"}</td>
                 <td className="p-1 text-right">{attemptsUit}</td>
                 <td className="p-1 text-right">{hitsUit}</td>
                 <td className="p-1 text-right">
@@ -2466,7 +2612,9 @@ function InsightsTab({
                   <tr key={a.id} className="border-t">
                     <td className="p-1">{a.index}</td>
                     <td className="p-1">
-                      {a.team === "thuis" ? "Thuis" : "Uit"}
+                      {a.team === "thuis"
+                        ? "Korbis"
+                        : opponentName || "Tegenstander"}
                     </td>
                     <td className="p-1">
                       {a.vak === "aanvallend"
@@ -2500,8 +2648,6 @@ function InsightsTab({
     </div>
   );
 }
-
-
 
 type SpelerCircleRowProps = {
   id: string | null;
@@ -2581,9 +2727,9 @@ function SpelerCircleRow({
   );
 }
 
-
-
-// --- Modal ---------------------------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
+// --- Modal -----------------------------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
 function VakActionModal({
   vak,
   spelers,
@@ -2935,11 +3081,13 @@ function PossessionModal({
   spelers,
   onClose,
   onSave,
+  opponentName,
 }: {
   team: "thuis" | "uit";
   spelers: Player[];
   onClose: () => void;
   onSave: (reden: LogReden, spelerId?: string) => void;
+  opponentName: string;
 }) {
   const [speler, setSpeler] = useState<string | undefined>(undefined);
 
@@ -2951,10 +3099,10 @@ function PossessionModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-xl">
-        <div className="text-2xl font-semibold mb-4">
-          Nieuw balbezit – {team === "thuis" ? "Thuis" : "Uit"}
-        </div>
-
+      <div className="text-2xl font-semibold mb-4">
+        Nieuw balbezit –{" "}
+        {getTeamDisplayName(team, opponentName)}
+      </div>
         {/* Speler kiezen */}
         <div className="space-y-2 mb-4">
           <div className="text-sm">Kies speler (optioneel)</div>
@@ -3103,6 +3251,7 @@ function StealModal({
     </div>
   );
 }
+
 function ShotReboundModal({
   type,
   spelers,
@@ -3354,8 +3503,9 @@ function PieChart({
     </div>
   );
 }
+//////////////////////////////////////////////////////////////////////////////
 // --- UI bits ---------------------------------------------------------------
-
+//////////////////////////////////////////////////////////////////////////////
 function Avatar({ url, naam }: { url?: string; naam: string }) {
   if (url) return <img src={url} alt={naam} className="w-10 h-10 rounded-full object-cover" />;
   const init = naam.split(" ").map((x) => x[0]).join("").slice(0, 2).toUpperCase();
