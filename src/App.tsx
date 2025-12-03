@@ -130,6 +130,7 @@ type TeamFileV1 = {
   spelers: Player[];
 };
 
+
 type AppState = {
   spelers: Player[];
   aanval: (string | null)[];
