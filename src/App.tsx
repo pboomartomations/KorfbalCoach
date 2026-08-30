@@ -644,10 +644,13 @@ export default function App() {
         }
       }
 
-      // ⚪ alleen bal-kant wisselen na goal:
-      if (goalScored) {
-        const nextVak =
+      // 🔄 Na doelpunt OF verdedigd eindigt de aanval
+      const aanvalEindigt = goalScored || resultaat === "Verdedigd";
+
+      if (aanvalEindigt) {
+        const nextVak: VakSide =
           s.activeVak === "aanvallend" ? "verdedigend" : "aanvallend";
+
         next = startAttackForVak(next, nextVak);
       }
 
@@ -2045,7 +2048,7 @@ function WedstrijdTab({
     openVakActionModal(vak);
   };
 
-  
+
   // 🔹 helper om een veld-event (heatmap puntje) toe te voegen
   const addFieldEvent = (vak: VakSide, xPct: number, yPct: number) => {
     setState((s) => {
