@@ -1381,38 +1381,42 @@ const eindeWedstrijd = () => {
   });
 };
 
-const clearWedstrijd = () =>
-setState((s) => ({
-  ...s,
+const clearWedstrijd = () => {}
+  if (
+    !confirm(
+      "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren."
+    )
+  ) {
+    return;
+  }
+  setState((s) => ({
+    ...s,
 
-  // 🔢 Scores terug op 0
-  scoreThuis: 0,
-  scoreUit: 0,
+    scoreThuis: 0,
+    scoreUit: 0,
 
-  // ⏱ Tijd resetten + klok uit
-  tijdSeconden: 0,
-  klokLoopt: false,
-  currentHalf: 1,
+    tijdSeconden: 0,
+    klokLoopt: false,
+    currentHalf: 1,
 
-  // 🏀 Balbezit resetten
-  possessionOwner: null,
-  possessionThuisSeconden: 0,
-  possessionUitSeconden: 0,
+    possessionOwner: null,
+    possessionThuisSeconden: 0,
+    possessionUitSeconden: 0,
 
-  // 📜 Logs & overzichten leegmaken
-  log: [],
-  attacks: [],
-  currentAttackId: null,
-  goalsSinceLastSwitch: 0,
+    log: [],
+    attacks: [],
+    currentAttackId: null,
+    goalsSinceLastSwitch: 0,
 
-  // 🎯 Heatmap leegmaken
-  fieldEvents: [],
-  markerGroup: 0,
+    fieldEvents: [],
+    markerGroup: 0,
 
-  // 🔁 Veldoriëntatie & actief vak terug naar start
-  aanvalLinks: DEFAULT_STATE.aanvalLinks,
-  activeVak: "aanvallend",
-}));
+    aanvalLinks: DEFAULT_STATE.aanvalLinks,
+    activeVak: "aanvallend",
+
+    // wedstrijd weer vrijgeven
+    matchEnded: false,
+  }));
 
 // Afgeleide arrays voor modal
 const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
@@ -1464,7 +1468,7 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
         Laad Excel database
       </Button>
       <Button variant="danger" onClick={clearWedstrijd}>
-        Clear wedstrijd
+        Nieuwe wedstrijd
       </Button>
       <Button variant="danger" onClick={resetAlles}>
         Reset alles
