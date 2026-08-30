@@ -62,6 +62,7 @@ type FieldEvent = {
   y: number; // 0–100
   tijdSeconden: number;
   attackId?: string;
+  markerGroup: number;
 
   actie?: "schot" | "doorloop" | "strafworp" | "vrije";
   resultaat?: "raak" | "mis" | "korf" | "verdedigd";
@@ -154,6 +155,7 @@ type AppState = {
   attacks: AttackMeta[];
   currentAttackId: string | null;
   fieldEvents: FieldEvent[];  
+  markerGroup: number;
   opponentName: string;
   homeAway: "thuis" | "uit";
   matchEnded: boolean;  
@@ -180,6 +182,7 @@ const DEFAULT_STATE: AppState = {
   attacks: [],
   currentAttackId: null,
   fieldEvents: [], 
+  markerGroup: 0,
   opponentName: "",   
   homeAway: "thuis", 
   matchEnded: false,    
@@ -306,10 +309,16 @@ function sanitizeState(raw: any): AppState {
     klokLoopt: bool(s.klokLoopt, DEFAULT_STATE.klokLoopt),
     halfMinuten: num(s.halfMinuten, DEFAULT_STATE.halfMinuten),
     log: Array.isArray(s.log) ? (s.log as LogEvent[]) : [],
-    fieldEvents: Array.isArray(s.fieldEvents)
-    ? (s.fieldEvents as FieldEvent[])
-    : DEFAULT_STATE.fieldEvents,
 
+    fieldEvents: Array.isArray(s.fieldEvents)
+      ? (s.fieldEvents as FieldEvent[])
+      : DEFAULT_STATE.fieldEvents,
+    
+    markerGroup: num(
+      s.markerGroup,
+      DEFAULT_STATE.markerGroup
+    ),
+    
     possessionOwner:
       s.possessionOwner === "thuis" || s.possessionOwner === "uit"
         ? s.possessionOwner
@@ -554,9 +563,21 @@ export default function App() {
   };
 
   const wisselVakken = () =>
-    setState((s) => ({ ...s, aanval: s.verdediging, verdediging: s.aanval, goalsSinceLastSwitch:0 }));
+  setState((s) => ({
+    ...s,
+    aanval: s.verdediging,
+    verdediging: s.aanval,
+    goalsSinceLastSwitch: 0,
 
-  const toggleKlok = (aan: boolean) => setState((s) => ({ ...s, klokLoopt: aan }));
+    // nieuwe veldperiode -> oude markers niet meer tonen
+    markerGroup: s.markerGroup + 1,
+  }));
+
+  const toggleKlok = (aan: boolean) =>
+  setState((s) => ({
+    ...s,
+    klokLoopt: aan,
+  }));
 
   const resetKlok = () =>
   setState((s) => ({
@@ -1374,6 +1395,7 @@ setState((s) => ({
 
   // 🎯 Heatmap leegmaken
   fieldEvents: [],
+  markerGroup: 0,
 
   // 🔁 Veldoriëntatie & actief vak terug naar start
   aanvalLinks: DEFAULT_STATE.aanvalLinks,
@@ -1422,7 +1444,6 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
       </Button>
       <Button variant="secondary" onClick={exportToExcel}>
         Export naar Excel
-      
       </Button>
       <Button
         variant="secondary"
@@ -2061,6 +2082,7 @@ function WedstrijdTab({
         y: yPct,
         tijdSeconden: s.tijdSeconden,
         attackId,
+        markerGroup: s.markerGroup,
         // actie/resultaat komen na de popup
       };
       return { ...s, fieldEvents: [...s.fieldEvents, newEvent] };
@@ -2073,12 +2095,17 @@ function WedstrijdTab({
     : `${opponentName || "Tegenstander"} - Korbis`;
 
 
-  const aanvalMarkers = state.fieldEvents.filter(
-    (e) => e.vak === "aanvallend"
-  );
-  const verdedigMarkers = state.fieldEvents.filter(
-    (e) => e.vak === "verdedigend"
-  );
+    const zichtbareFieldEvents = state.fieldEvents.filter(
+      (e) => e.markerGroup === state.markerGroup
+    );
+    
+    const aanvalMarkers = zichtbareFieldEvents.filter(
+      (e) => e.vak === "aanvallend"
+    );
+    
+    const verdedigMarkers = zichtbareFieldEvents.filter(
+      (e) => e.vak === "verdedigend"
+    );
 
   const countGeslachtInVak = (ids: (string | null)[]) => {
     let dames = 0;
@@ -2253,6 +2280,9 @@ const attackUitPct =
                       tijdSeconden: nieuweTijd,
                       klokLoopt: false,      // jij drukt daarna zelf weer op Start
                       aanvalLinks: !s.aanvalLinks,
+
+                      // nieuwe veldperiode voor de tweede helft
+                      markerGroup: s.markerGroup + 1,
                     };
                   })
                 }
