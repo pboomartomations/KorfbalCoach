@@ -2303,7 +2303,23 @@ const attackUitPct =
         <div className="flex flex-col gap-4">
 
           {/* Tijd + duur + start/pauze */}
-          <div className="flex flex-wrap items-start gap-3 justify-between">
+          <div className="relative flex flex-wrap items-center gap-3 justify-between">
+            {/* Pauze-symbool */}
+            {state.klokLoopt && !state.matchEnded && (
+              <div
+                className="
+                  absolute
+                  left-1/2 top-1/2
+                  -translate-x-1/2 -translate-y-1/2
+                  flex gap-2
+                  pointer-events-none
+                "
+                aria-hidden="true"
+              >
+                <span className="block w-2 h-8 bg-gray-900 rounded-sm" />
+                <span className="block w-2 h-8 bg-gray-900 rounded-sm" />
+              </div>
+            )}
             {/* Tijd */}
             <div>
               <div className="text-2xl font-bold">
