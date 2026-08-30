@@ -2264,7 +2264,18 @@ const attackUitPct =
         className={`relative border rounded-2xl p-4 ${
           state.klokLoopt ? "cursor-pointer hover:bg-gray-50" : ""
         }`}
-        onClick={() => {
+        onClick={(e) => {
+          const target = e.target as HTMLElement;
+        
+          // Niet pauzeren als de klik op een knop, input of ander interactief element was
+          if (
+            target.closest(
+              "button, input, select, textarea, [role='dialog'], [data-no-pause]"
+            )
+          ) {
+            return;
+          }
+        
           if (state.klokLoopt && !state.matchEnded) {
             toggleKlok(false);
           }
@@ -2274,11 +2285,18 @@ const attackUitPct =
         {/* Pauze-symbool midden in de balk */}
         {state.klokLoopt && !state.matchEnded && (
           <div
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex gap-2 pointer-events-none"
+            className="
+              absolute
+              left-1/2 top-1/2
+              -translate-x-1/2 -translate-y-1/2
+              z-20
+              flex gap-2
+              pointer-events-none
+            "
             aria-hidden="true"
           >
-            <span className="block w-1.5 h-7 bg-black rounded-sm" />
-            <span className="block w-1.5 h-7 bg-black rounded-sm" />
+            <span className="block w-2 h-8 bg-gray-900 rounded-sm" />
+            <span className="block w-2 h-8 bg-gray-900 rounded-sm" />
           </div>
         )}
 
