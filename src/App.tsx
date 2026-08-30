@@ -2261,8 +2261,8 @@ const attackUitPct =
         )}
       {/* Score + tijd + controls */}
       <div
-        className={`border rounded-2xl p-4 ${
-          state.klokLoopt ? "cursor-pointer" : ""
+        className={`relative border rounded-2xl p-4 ${
+          state.klokLoopt ? "cursor-pointer hover:bg-gray-50" : ""
         }`}
         onClick={() => {
           if (state.klokLoopt && !state.matchEnded) {
@@ -2270,6 +2270,18 @@ const attackUitPct =
           }
         }}
       >
+
+        {/* Pauze-symbool midden in de balk */}
+        {state.klokLoopt && !state.matchEnded && (
+          <div
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex gap-2 pointer-events-none"
+            aria-hidden="true"
+          >
+            <span className="block w-1.5 h-7 bg-black rounded-sm" />
+            <span className="block w-1.5 h-7 bg-black rounded-sm" />
+          </div>
+        )}
+
         <div className="flex flex-col gap-4">
 
           {/* Tijd + duur + start/pauze */}
@@ -2288,32 +2300,6 @@ const attackUitPct =
             {/* Knoppen + duur */}
             <div className="flex gap-2 items-center flex-wrap">
               {/* Start / Pauze */}
-              {state.klokLoopt && !state.matchEnded && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleKlok(false);
-                  }}
-                  aria-label="Pauze"
-                  title="Pauze"
-                  className="
-                    w-12 h-12
-                    rounded-xl
-                    bg-blue-600
-                    text-white
-                    flex items-center justify-center
-                    hover:bg-blue-700
-                    transition
-                    shadow-sm
-                  "
-                >
-                  <span className="flex gap-1">
-                    <span className="block w-1.5 h-5 bg-white rounded-sm" />
-                    <span className="block w-1.5 h-5 bg-white rounded-sm" />
-                  </span>
-                </button>
-              )}
 
               <Button
                 size="md"
