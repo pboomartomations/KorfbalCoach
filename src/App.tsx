@@ -2045,6 +2045,7 @@ function WedstrijdTab({
     openVakActionModal(vak);
   };
 
+  
   // 🔹 helper om een veld-event (heatmap puntje) toe te voegen
   const addFieldEvent = (vak: VakSide, xPct: number, yPct: number) => {
     setState((s) => {
