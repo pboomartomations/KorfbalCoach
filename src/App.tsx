@@ -89,6 +89,7 @@ type LogReden =
   | "Schot afgevangen"
   | "Gemist Schot"
   | "Rebound"
+  | "Geen Rebound"
   | "Korf"
   | "Doelpunt"
   | "Verdedigd";
@@ -382,6 +383,11 @@ export default function App() {
   const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
   const [vakActionPopup, setVakActionPopup] =
   useState<null | { vak: VakSide }>(null);
+  const [pendingFieldClick, setPendingFieldClick] = useState<null | {
+    vak: VakSide;
+    x: number;
+    y: number;
+  }>(null);
   const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const teamFileInputRef = useRef<HTMLInputElement | null>(null);
   type DatabaseSheets = {
@@ -568,6 +574,7 @@ export default function App() {
     currentHalf: 1,
     aanvalLinks: DEFAULT_STATE.aanvalLinks,
   }));
+
 
 
   // 🔹 LOSSE functie voor gewone Gemis/Kans/Wissel events
@@ -1134,8 +1141,8 @@ const exportToExcel = () => {
           : e.spelerId
           ? spelersMap.get(e.spelerId)?.naam || ""
           : "",
-      score_thuis: score?.thuis ?? "",
-      score_uit: score?.uit ?? "",
+      score_korbis: score?.thuis ?? "",
+      score_tegenstander: score?.uit ?? "",
       x_pct: fieldEv ? Number(fieldEv.x.toFixed(1)) : "",
       y_pct: fieldEv ? Number(fieldEv.y.toFixed(1)) : "",
       aanval_nr: e.attackIndex ?? "",
@@ -1216,8 +1223,8 @@ const exportToExcel = () => {
       wissel: e.reden,
       spelerId: e.spelerId || "",
       spelerNaam: e.spelerId ? spelersMap.get(e.spelerId)?.naam || "" : "",
-      score_thuis: score?.thuis ?? "",
-      score_uit: score?.uit ?? "",
+      score_korbis: score?.thuis ?? "",
+      score_tegenstander: score?.uit ?? "",
     };
   });
 
@@ -1270,8 +1277,8 @@ const exportToExcel = () => {
       half_duur_minuten: Number.isFinite(state.halfMinuten)
         ? state.halfMinuten
         : DEFAULT_STATE.halfMinuten,
-      score_thuis: state.scoreThuis,
-      score_uit: state.scoreUit,
+      score_korbis: state.scoreThuis,
+      score_tegenstander: state.scoreUit,
       bezit_thuis_seconden: state.possessionThuisSeconden,
       bezit_uit_seconden: state.possessionUitSeconden,
       bezit_thuis_pct: totalPoss > 0 ? possThuisPct.toFixed(1) : "",
@@ -1540,19 +1547,6 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
             setPossPopup(null);
           }}
         />
-      )}
-      {possPopup && (
-        <PossessionModal
-        team={possPopup.team}
-        spelers={veldSpelers}
-        opponentName={state.opponentName}
-        onClose={() => setPossPopup(null)}
-        onSave={(reden, spelerId) => {
-          logBalbezit(possPopup.team, reden, spelerId);
-          setPossPopup(null);
-        }}
-      />
-      
       )}
 
       {shotPopup && (
@@ -2095,7 +2089,7 @@ function WedstrijdTab({
   const verdCounts = countGeslachtInVak(state.verdediging);
   const aanvValid = aanvCounts.dames === 2 && aanvCounts.heren === 2;
   const verdValid = verdCounts.dames === 2 && verdCounts.heren === 2;
-
+  const nowTime = state.tijdSeconden;
   const halfMinuten = Number.isFinite(state.halfMinuten)
     ? state.halfMinuten
     : DEFAULT_STATE.halfMinuten;
@@ -2118,18 +2112,21 @@ function WedstrijdTab({
       ? (state.possessionUitSeconden / totalPoss) * 100
       : 0;
 
-  const nowTime = state.tijdSeconden;
-  const computeAttackSeconds = (team: AttackTeam) => {
-    let total = 0;
-    for (const a of state.attacks) {
-      if (a.team !== team || a.vak !== "aanvallend") continue;
-      const end = a.endSeconden != null ? a.endSeconden : nowTime;
-      if (end > a.startSeconden) {
-        total += end - a.startSeconden;
-      }
-    }
-    return total;
-  };
+      const computeAttackSeconds = (team: AttackTeam) => {
+        let total = 0;
+        for (const a of state.attacks) {
+          const shouldCount =
+            team === "thuis"
+              ? a.team === "thuis" && a.vak === "aanvallend"
+              : a.team === "uit" && a.vak === "verdedigend";
+      
+          if (!shouldCount) continue;
+      
+          const end = a.endSeconden != null ? a.endSeconden : nowTime;
+          if (end > a.startSeconden) total += end - a.startSeconden;
+        }
+        return total;
+      };
 
   const attackThuisSec = computeAttackSeconds("thuis");
   const attackUitSec = computeAttackSeconds("uit");
@@ -2149,10 +2146,48 @@ const attackUitPct =
     state.log.length > 0 ||
     state.attacks.length > 0;
 
-  const wedstrijdNietGestart = !wedstrijdGestart;
+    const wedstrijdNietGestart = !wedstrijdGestart;
+    const wedstrijdOpPauze = wedstrijdGestart && !state.klokLoopt;
 
+    const showOverlay = wedstrijdNietGestart || wedstrijdOpPauze;
+
+    const overlayTitle = wedstrijdNietGestart
+      ? "Wedstrijd is nog niet gestart"
+      : "Wedstrijd staat op pauze";
+
+    const overlayButtonLabel = wedstrijdNietGestart ? "Start wedstrijd" : "Hervat wedstrijd";
+    
   return (
     <div className="space-y-4">
+      {showOverlay && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* dim layer */}
+          <div className="absolute inset-0 bg-black/60" />
+
+          {/* card */}
+          <div className="relative z-10 w-full max-w-xl mx-4 rounded-2xl bg-white p-6 shadow-2xl text-center">
+            <div className="text-3xl font-extrabold mb-2">{overlayTitle}</div>
+            <div className="text-sm text-gray-600 mb-6">
+              {wedstrijdNietGestart
+                ? "Druk op start om de timer te laten lopen en events te registreren."
+                : "Druk op hervatten om verder te gaan met de wedstrijd."}
+            </div>
+
+            <Button
+              variant="primary"
+              className="w-full text-xl py-4"
+              onClick={() => toggleKlok(true)}
+            >
+              {overlayButtonLabel}
+            </Button>
+
+            {/* optioneel: kleine knop om overlay weg te klikken zonder starten */}
+            <button className="mt-4 text-sm text-gray-500 underline" onClick={() => {}}>
+              Sluiten
+            </button> 
+          </div>
+        </div>
+      )}
       {/* Score + tijd + controls */}
       <div className="border rounded-2xl p-4">
         <div className="flex flex-col gap-4">
