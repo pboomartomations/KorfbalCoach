@@ -5267,6 +5267,7 @@ function HitMissBarChart({
 
           const raakHeight = raak > 0 ? Math.max(15, raakPerc) : 0;
           const misHeight = mis > 0 ? Math.max(15, misPerc) : 0;
+
           
           return (
             <div key={a}>
