@@ -2232,33 +2232,66 @@ const attackUitPct =
   
   const wedstrijdAfgelopen = state.matchEnded;
   
+  const eersteHelftAfgelopen =
+    state.currentHalf === 1 &&
+    resterend === 0 &&
+    !state.klokLoopt &&
+    !wedstrijdAfgelopen;
+
   const wedstrijdOpPauze =
     wedstrijdGestart &&
     !state.klokLoopt &&
-    !wedstrijdAfgelopen;
-  
+    !wedstrijdAfgelopen &&
+    !eersteHelftAfgelopen;
+
   const showOverlay =
     wedstrijdNietGestart ||
+    eersteHelftAfgelopen ||
     wedstrijdOpPauze ||
     wedstrijdAfgelopen;
-  
+
   const overlayTitle = wedstrijdAfgelopen
     ? "Wedstrijd afgelopen"
+    : eersteHelftAfgelopen
+    ? "Rust"
     : wedstrijdNietGestart
     ? "Wedstrijd is nog niet gestart"
     : "Wedstrijd staat op pauze";
-  
+
   const overlayText = wedstrijdAfgelopen
     ? `Eindstand: Korbis ${state.scoreThuis} - ${state.scoreUit} ${
         opponentName || "Tegenstander"
       }`
+    : eersteHelftAfgelopen
+    ? "De eerste helft is afgelopen. Start de tweede helft wanneer beide teams klaarstaan."
     : wedstrijdNietGestart
     ? "Druk op start om de timer te laten lopen en events te registreren."
     : "Druk op hervatten om verder te gaan met de wedstrijd.";
-  
-  const overlayButtonLabel = wedstrijdNietGestart
+
+  const overlayButtonLabel = eersteHelftAfgelopen
+    ? "Start 2e helft"
+    : wedstrijdNietGestart
     ? "Start wedstrijd"
-    : "Hervat wedstrijd";    
+    : "Hervat wedstrijd";
+
+  const startTweedeHelft = () => {
+    setState((s) => {
+      const halfMinuten = Number.isFinite(s.halfMinuten)
+        ? s.halfMinuten
+        : DEFAULT_STATE.halfMinuten;
+      const halfTotal = halfMinuten * 60;
+
+      return {
+        ...s,
+        currentHalf: 2,
+        tijdSeconden: Math.max(s.tijdSeconden, halfTotal),
+        klokLoopt: true,
+        aanvalLinks: !s.aanvalLinks,
+        markerGroup: s.markerGroup + 1,
+      };
+    });
+  };
+
     return (
       <div className="relative space-y-4">
     
@@ -2283,7 +2316,11 @@ const attackUitPct =
                 <Button
                   variant="primary"
                   className="w-full text-3xl font-extrabold py-7 min-h-[88px] rounded-2xl"
-                  onClick={() => toggleKlok(true)}
+                  onClick={() =>
+                    eersteHelftAfgelopen
+                      ? startTweedeHelft()
+                      : toggleKlok(true)
+                  }
                 >
                   {overlayButtonLabel}
                 </Button>
@@ -2804,6 +2841,8 @@ function InsightsTab({
   const ACTIONS = ["Schot", "Doorloop", "Vrijebal", "Strafworp"] as const;
   type ActionKind = (typeof ACTIONS)[number];
 
+  const [analysisMode, setAnalysisMode] = useState<"speler" | "team">("speler");
+
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>(
     () => state.spelers[0]?.id ?? ""
   );
@@ -3260,13 +3299,659 @@ function InsightsTab({
     })
   );
 
+  // ------------------------------------------------------------
+  // TEAMANALYSE
+  // ------------------------------------------------------------
+  const teamActionEvents = state.log.filter(
+    (e) => !!e.actie && ACTIONS.includes(e.actie as ActionKind) && !!e.resultaat
+  );
+
+  const homeActionEvents = teamActionEvents.filter(
+    (e) => getTeamForEvent(e) === "thuis"
+  );
+  const awayActionEvents = teamActionEvents.filter(
+    (e) => getTeamForEvent(e) === "uit"
+  );
+
+  const resultCount = (events: LogEvent[], result: NonNullable<LogEvent["resultaat"]>) =>
+    events.filter((e) => e.resultaat === result).length;
+
+  const homeAttempts = homeActionEvents.length;
+  const awayAttempts = awayActionEvents.length;
+  const homeGoals = resultCount(homeActionEvents, "Raak");
+  const awayGoals =
+    resultCount(awayActionEvents, "Raak") +
+    awayActionEvents.filter(
+      (e) => e.reden === "Doorgelaten" && e.resultaat !== "Raak"
+    ).length;
+  const homeKorf = resultCount(homeActionEvents, "Korf");
+  const awayKorf = resultCount(awayActionEvents, "Korf");
+  const homeDefended = resultCount(homeActionEvents, "Verdedigd");
+  const awayDefended = resultCount(awayActionEvents, "Verdedigd");
+
+  const homeScorePct = homeAttempts > 0 ? (homeGoals / homeAttempts) * 100 : 0;
+  const awayScorePct = awayAttempts > 0 ? (awayGoals / awayAttempts) * 100 : 0;
+  const homeQualityPct =
+    homeAttempts > 0 ? ((homeGoals + homeKorf) / homeAttempts) * 100 : 0;
+  const awayQualityPct =
+    awayAttempts > 0 ? ((awayGoals + awayKorf) / awayAttempts) * 100 : 0;
+
+  const homeAttacks = state.attacks.filter((a) => a.team === "thuis");
+  const awayAttacks = state.attacks.filter((a) => a.team === "uit");
+
+  const goalsPerAttack =
+    homeAttacks.length > 0 ? homeGoals / homeAttacks.length : 0;
+  const attemptsPerAttack =
+    homeAttacks.length > 0 ? homeAttempts / homeAttacks.length : 0;
+
+  const currentMatchSecond = state.tijdSeconden;
+  const attackDuration = (a: AttackMeta) =>
+    Math.max(
+      0,
+      (a.endSeconden != null ? a.endSeconden : currentMatchSecond) - a.startSeconden
+    );
+
+  const averageAttackDuration =
+    homeAttacks.length > 0
+      ? homeAttacks.reduce((sum, a) => sum + attackDuration(a), 0) /
+        homeAttacks.length
+      : 0;
+
+  const ownReboundEvents = state.log.filter(
+    (e) => e.soort === "Rebound" && e.vak === "aanvallend"
+  );
+  const wonRebounds = ownReboundEvents.filter((e) => e.reden === "Rebound");
+  const lostRebounds = ownReboundEvents.filter((e) => e.reden === "Geen Rebound");
+  const reboundPct =
+    ownReboundEvents.length > 0
+      ? (wonRebounds.length / ownReboundEvents.length) * 100
+      : 0;
+
+  // Tweede kans = na een geregistreerde aanvallende rebound wordt binnen
+  // dezelfde aanval later nog gescoord.
+  const secondChanceScores = wonRebounds.filter((rebound) =>
+    state.log.some(
+      (e) =>
+        e.attackId &&
+        e.attackId === rebound.attackId &&
+        e.tijdSeconden >= rebound.tijdSeconden &&
+        e.resultaat === "Raak" &&
+        getTeamForEvent(e) === "thuis"
+    )
+  ).length;
+  const secondChancePct =
+    wonRebounds.length > 0
+      ? (secondChanceScores / wonRebounds.length) * 100
+      : 0;
+
+  const teamSteals = state.log.filter(
+    (e) =>
+      e.vak === "verdedigend" &&
+      (e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept")
+  ).length;
+
+  const opponentDefendedPct =
+    awayAttempts > 0 ? (awayDefended / awayAttempts) * 100 : 0;
+
+  const halfTotal = Math.max(1, state.halfMinuten * 60);
+  const halfForEvent = (e: LogEvent) =>
+    e.tijdSeconden < halfTotal ? 1 : 2;
+
+  const halfStats = ([1, 2] as const).map((half) => {
+    const home = homeActionEvents.filter((e) => halfForEvent(e) === half);
+    const away = awayActionEvents.filter((e) => halfForEvent(e) === half);
+    const goalsHome = resultCount(home, "Raak");
+    const goalsAway =
+      resultCount(away, "Raak") +
+      away.filter((e) => e.reden === "Doorgelaten" && e.resultaat !== "Raak").length;
+    const korfHome = resultCount(home, "Korf");
+
+    return {
+      half,
+      homeAttempts: home.length,
+      homeGoals: goalsHome,
+      homeScorePct: home.length > 0 ? (goalsHome / home.length) * 100 : 0,
+      homeQualityPct:
+        home.length > 0 ? ((goalsHome + korfHome) / home.length) * 100 : 0,
+      awayAttempts: away.length,
+      awayGoals: goalsAway,
+      awayScorePct: away.length > 0 ? (goalsAway / away.length) * 100 : 0,
+    };
+  });
+
+  // Team-schotlocaties. We gebruiken het attackId om het team te bepalen.
+  const teamFieldShots = state.fieldEvents.filter((fe) => {
+    if (fe.actie !== "schot") return false;
+    if (fe.attackId) {
+      return state.attacks.find((a) => a.id === fe.attackId)?.team === "thuis";
+    }
+    return fe.vak === "aanvallend";
+  });
+
+  const teamZoneStats = SHOT_ZONES.map((zone) => {
+    const events = teamFieldShots.filter((fe) => getShotZone(fe) === zone);
+    const raak = events.filter((fe) => fe.resultaat === "raak").length;
+    const korfCount = events.filter((fe) => fe.resultaat === "korf").length;
+    const mis = events.filter((fe) => fe.resultaat === "mis").length;
+    const verdedigd = events.filter((fe) => fe.resultaat === "verdedigd").length;
+    return {
+      zone,
+      totaal: events.length,
+      raak,
+      korf: korfCount,
+      mis,
+      verdedigd,
+      scorePct: events.length > 0 ? (raak / events.length) * 100 : 0,
+      qualityPct:
+        events.length > 0 ? ((raak + korfCount) / events.length) * 100 : 0,
+    };
+  });
+
+  const totalPositionedTeamShots = teamZoneStats.reduce(
+    (sum, z) => sum + z.totaal,
+    0
+  );
+  const farTeamZone = teamZoneStats.find(
+    (z) => z.zone === "Ver afstandsschot"
+  );
+  const farShotShare =
+    farTeamZone && totalPositionedTeamShots > 0
+      ? (farTeamZone.totaal / totalPositionedTeamShots) * 100
+      : 0;
+
+  const teamStrengths: string[] = [];
+  const teamAttention: string[] = [];
+
+  if (homeAttempts >= 10 && homeScorePct >= 30) {
+    teamStrengths.push(
+      `Efficiënte aanval: ${homeGoals} uit ${homeAttempts} pogingen raak (${homeScorePct.toFixed(0)}%).`
+    );
+  }
+
+  if (homeAttempts >= 10 && homeQualityPct >= 65) {
+    teamStrengths.push(
+      `Goede schotkwaliteit: ${homeQualityPct.toFixed(0)}% van de pogingen was raak of korf.`
+    );
+  }
+
+  if (ownReboundEvents.length >= 6 && reboundPct >= 55) {
+    teamStrengths.push(
+      `Sterke aanvallende rebound: ${wonRebounds.length} van ${ownReboundEvents.length} reboundmomenten gewonnen (${reboundPct.toFixed(0)}%).`
+    );
+  }
+
+  if (wonRebounds.length >= 4 && secondChancePct >= 40) {
+    teamStrengths.push(
+      `Tweede kansen worden benut: na ${secondChanceScores} van ${wonRebounds.length} gewonnen rebounds volgde later in dezelfde aanval een doelpunt.`
+    );
+  }
+
+  if (awayAttempts >= 8 && opponentDefendedPct >= 25) {
+    teamStrengths.push(
+      `Verdedigende druk: ${awayDefended} van ${awayAttempts} pogingen van de tegenstander werden verdedigd (${opponentDefendedPct.toFixed(0)}%).`
+    );
+  }
+
+  if (teamSteals >= 4) {
+    teamStrengths.push(
+      `Actief verdedigd: ${teamSteals} onderscheppingen/afgevangen ballen geregistreerd.`
+    );
+  }
+
+  if (
+    halfStats[0].homeAttempts >= 5 &&
+    halfStats[1].homeAttempts >= 5 &&
+    halfStats[1].homeScorePct >= halfStats[0].homeScorePct + 10
+  ) {
+    teamStrengths.push(
+      `Sterkere tweede helft: scoringspercentage steeg van ${halfStats[0].homeScorePct.toFixed(0)}% naar ${halfStats[1].homeScorePct.toFixed(0)}%.`
+    );
+  }
+
+  if (homeAttempts >= 10 && homeScorePct < 20) {
+    if (homeQualityPct >= 60) {
+      teamAttention.push(
+        `Afwerking blijft achter: slechts ${homeScorePct.toFixed(0)}% raak, terwijl ${homeQualityPct.toFixed(0)}% raak of korf was. De richting is redelijk; de afronding kan scherper.`
+      );
+    } else {
+      teamAttention.push(
+        `Aanvallende efficiëntie: ${homeGoals} uit ${homeAttempts} pogingen raak (${homeScorePct.toFixed(0)}%).`
+      );
+    }
+  }
+
+  if (ownReboundEvents.length >= 6 && reboundPct < 35) {
+    teamAttention.push(
+      `Rebound onder druk: slechts ${wonRebounds.length} van ${ownReboundEvents.length} reboundmomenten gewonnen (${reboundPct.toFixed(0)}%). Aanvallen eindigen daardoor sneller.`
+    );
+  }
+
+  if (homeAttacks.length >= 6 && attemptsPerAttack < 1.4) {
+    teamAttention.push(
+      `Weinig vervolgkansen: gemiddeld ${attemptsPerAttack.toFixed(1)} poging per aanval. Kijk of langer balbezit en betere reboundpositie mogelijk zijn.`
+    );
+  }
+
+  if (
+    farTeamZone &&
+    totalPositionedTeamShots >= 8 &&
+    farTeamZone.totaal >= 3 &&
+    farShotShare >= 35 &&
+    farTeamZone.qualityPct < 50
+  ) {
+    teamAttention.push(
+      `Veel verre schoten: ${farShotShare.toFixed(0)}% van de schotten met locatie kwam uit de verre zone, met ${farTeamZone.qualityPct.toFixed(0)}% raak of korf. Overweeg vaker door te spelen naar een betere positie.`
+    );
+  }
+
+  if (awayAttempts >= 8 && opponentDefendedPct < 10 && awayScorePct >= 25) {
+    teamAttention.push(
+      `Weinig verdedigende druk: slechts ${awayDefended} van ${awayAttempts} pogingen van de tegenstander werden als verdedigd geregistreerd.`
+    );
+  }
+
+  if (
+    halfStats[0].homeAttempts >= 5 &&
+    halfStats[1].homeAttempts >= 5 &&
+    halfStats[1].homeScorePct + 10 <= halfStats[0].homeScorePct
+  ) {
+    teamAttention.push(
+      `Terugval in de tweede helft: scoringspercentage daalde van ${halfStats[0].homeScorePct.toFixed(0)}% naar ${halfStats[1].homeScorePct.toFixed(0)}%.`
+    );
+  }
+
+  const actionMix = ACTIONS.map((actie) => {
+    const events = homeActionEvents.filter((e) => e.actie === actie);
+    const raak = events.filter((e) => e.resultaat === "Raak").length;
+    return {
+      actie,
+      totaal: events.length,
+      raak,
+      pctVanActies:
+        homeAttempts > 0 ? (events.length / homeAttempts) * 100 : 0,
+      scorePct: events.length > 0 ? (raak / events.length) * 100 : 0,
+    };
+  });
+
+  const modeButtons = (
+    <div className="inline-flex rounded-xl border bg-white p-1 gap-1">
+      <button
+        type="button"
+        onClick={() => setAnalysisMode("speler")}
+        className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+          analysisMode === "speler"
+            ? "bg-blue-600 text-white"
+            : "text-gray-600 hover:bg-gray-50"
+        }`}
+      >
+        Speleranalyse
+      </button>
+      <button
+        type="button"
+        onClick={() => setAnalysisMode("team")}
+        className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+          analysisMode === "team"
+            ? "bg-blue-600 text-white"
+            : "text-gray-600 hover:bg-gray-50"
+        }`}
+      >
+        Teamanalyse
+      </button>
+    </div>
+  );
+
+  if (analysisMode === "team") {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold">Team Insights</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Coachingsgerichte analyse van Korbis tegen {opponentName || "de tegenstander"}.
+            </p>
+          </div>
+          {modeButtons}
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="border rounded-2xl p-4 bg-white">
+            <div className="text-xs font-semibold text-gray-500">Aanvalsrendering</div>
+            <div className="text-3xl font-extrabold mt-1">
+              {homeAttacks.length > 0 ? goalsPerAttack.toFixed(2) : "—"}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">doelpunten per aanval</div>
+          </div>
+          <div className="border rounded-2xl p-4 bg-white">
+            <div className="text-xs font-semibold text-gray-500">Scorepercentage</div>
+            <div className="text-3xl font-extrabold mt-1">
+              {homeAttempts > 0 ? `${homeScorePct.toFixed(0)}%` : "—"}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {homeGoals} uit {homeAttempts} pogingen
+            </div>
+          </div>
+          <div className="border rounded-2xl p-4 bg-white">
+            <div className="text-xs font-semibold text-gray-500">Schotkwaliteit</div>
+            <div className="text-3xl font-extrabold mt-1">
+              {homeAttempts > 0 ? `${homeQualityPct.toFixed(0)}%` : "—"}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">raak + korf</div>
+          </div>
+          <div className="border rounded-2xl p-4 bg-white">
+            <div className="text-xs font-semibold text-gray-500">Rebound</div>
+            <div className="text-3xl font-extrabold mt-1">
+              {ownReboundEvents.length > 0 ? `${reboundPct.toFixed(0)}%` : "—"}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {wonRebounds.length} gewonnen · {lostRebounds.length} niet
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="border rounded-2xl p-4 bg-green-50 border-green-200">
+            <div className="text-lg font-bold text-green-900 mb-3">Sterke punten</div>
+            {teamStrengths.length > 0 ? (
+              <ul className="space-y-2 text-sm">
+                {teamStrengths.slice(0, 6).map((item, index) => (
+                  <li key={index} className="flex gap-2">
+                    <span className="font-bold text-green-700">+</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="text-sm text-green-900/70">
+                Nog te weinig duidelijke signalen voor een sterk teaminzicht.
+              </div>
+            )}
+          </div>
+
+          <div className="border rounded-2xl p-4 bg-amber-50 border-amber-200">
+            <div className="text-lg font-bold text-amber-900 mb-3">Aandachtspunten</div>
+            {teamAttention.length > 0 ? (
+              <ul className="space-y-2 text-sm">
+                {teamAttention.slice(0, 6).map((item, index) => (
+                  <li key={index} className="flex gap-2">
+                    <span className="font-bold text-amber-700">!</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="text-sm text-amber-900/70">
+                Nog geen duidelijk aandachtspunt op basis van de geregistreerde data.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="border rounded-2xl p-4 bg-white">
+            <div className="text-lg font-bold">Aanvalsprofiel</div>
+            <div className="text-sm text-gray-500 mb-4">
+              Hoeveel kansen ontstaan per aanval en hoe lang duurt een aanval gemiddeld?
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">
+                  {homeAttacks.length > 0 ? attemptsPerAttack.toFixed(1) : "—"}
+                </div>
+                <div className="text-xs text-gray-500">pogingen / aanval</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">
+                  {homeAttacks.length > 0
+                    ? `${averageAttackDuration.toFixed(0)}s`
+                    : "—"}
+                </div>
+                <div className="text-xs text-gray-500">gem. aanvalsduur</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">{homeAttacks.length}</div>
+                <div className="text-xs text-gray-500">aanvallen</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">
+                  {wonRebounds.length > 0 ? `${secondChancePct.toFixed(0)}%` : "—"}
+                </div>
+                <div className="text-xs text-gray-500">score na rebound</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="border rounded-2xl p-4 bg-white">
+            <div className="text-lg font-bold">Verdedigend profiel</div>
+            <div className="text-sm text-gray-500 mb-4">
+              Druk op de pogingen van {opponentName || "de tegenstander"}.
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">
+                  {awayAttempts > 0 ? `${opponentDefendedPct.toFixed(0)}%` : "—"}
+                </div>
+                <div className="text-xs text-gray-500">verdedigd</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">{teamSteals}</div>
+                <div className="text-xs text-gray-500">onderscheppingen</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">{awayGoals}</div>
+                <div className="text-xs text-gray-500">tegendoelpunten</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <div className="text-2xl font-extrabold">
+                  {awayAttempts > 0 ? `${awayScorePct.toFixed(0)}%` : "—"}
+                </div>
+                <div className="text-xs text-gray-500">score% tegenstander</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="border rounded-2xl p-4 bg-white">
+            <div className="text-lg font-bold">Balbezit</div>
+            <div className="text-sm text-gray-500 mb-4">
+              Geregistreerde tijd in balbezit.
+            </div>
+            <div className="space-y-4">
+              {[
+                {
+                  label: "Korbis",
+                  seconds: state.possessionThuisSeconden,
+                  total:
+                    state.possessionThuisSeconden + state.possessionUitSeconden,
+                },
+                {
+                  label: opponentName || "Tegenstander",
+                  seconds: state.possessionUitSeconden,
+                  total:
+                    state.possessionThuisSeconden + state.possessionUitSeconden,
+                },
+              ].map((item) => {
+                const pct =
+                  item.total > 0 ? (item.seconds / item.total) * 100 : 0;
+                return (
+                  <div key={item.label}>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="font-semibold">{item.label}</span>
+                      <span>
+                        {formatTime(item.seconds)} · {item.total > 0 ? `${pct.toFixed(0)}%` : "—"}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                      <div
+                        className="h-full bg-blue-600"
+                        style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="border rounded-2xl overflow-hidden bg-white">
+          <div className="p-4 border-b">
+            <div className="text-lg font-bold">Schotzones Korbis</div>
+            <div className="text-sm text-gray-500">
+              Verdeling en rendement van gewone schoten met een veldpositie.
+            </div>
+          </div>
+          <div className="overflow-auto">
+            <table className="w-full text-sm min-w-[720px]">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left p-3">Zone</th>
+                  <th className="text-right p-3">Pogingen</th>
+                  <th className="text-right p-3">Raak</th>
+                  <th className="text-right p-3">Korf</th>
+                  <th className="text-right p-3">Mis</th>
+                  <th className="text-right p-3">Verdedigd</th>
+                  <th className="text-right p-3">Score %</th>
+                  <th className="text-right p-3">Kwaliteit %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teamZoneStats.map((zone) => (
+                  <tr key={zone.zone} className="border-t">
+                    <td className="p-3 font-semibold">{zone.zone}</td>
+                    <td className="p-3 text-right">{zone.totaal}</td>
+                    <td className="p-3 text-right">{zone.raak}</td>
+                    <td className="p-3 text-right">{zone.korf}</td>
+                    <td className="p-3 text-right">{zone.mis}</td>
+                    <td className="p-3 text-right">{zone.verdedigd}</td>
+                    <td className="p-3 text-right">
+                      {zone.totaal > 0 ? `${zone.scorePct.toFixed(0)}%` : "—"}
+                    </td>
+                    <td className="p-3 text-right">
+                      {zone.totaal > 0 ? `${zone.qualityPct.toFixed(0)}%` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="border rounded-2xl overflow-hidden bg-white">
+          <div className="p-4 border-b">
+            <div className="text-lg font-bold">1e helft versus 2e helft</div>
+            <div className="text-sm text-gray-500">
+              Hiermee zie je of rendement en wedstrijdbeeld veranderen na rust.
+            </div>
+          </div>
+          <div className="overflow-auto">
+            <table className="w-full text-sm min-w-[720px]">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left p-3">Periode</th>
+                  <th className="text-right p-3">Pogingen</th>
+                  <th className="text-right p-3">Goals</th>
+                  <th className="text-right p-3">Score %</th>
+                  <th className="text-right p-3">Kwaliteit %</th>
+                  <th className="text-right p-3">Pogingen tegen</th>
+                  <th className="text-right p-3">Goals tegen</th>
+                  <th className="text-right p-3">Score % tegen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {halfStats.map((row) => (
+                  <tr key={row.half} className="border-t">
+                    <td className="p-3 font-semibold">{row.half}e helft</td>
+                    <td className="p-3 text-right">{row.homeAttempts}</td>
+                    <td className="p-3 text-right">{row.homeGoals}</td>
+                    <td className="p-3 text-right">
+                      {row.homeAttempts > 0 ? `${row.homeScorePct.toFixed(0)}%` : "—"}
+                    </td>
+                    <td className="p-3 text-right">
+                      {row.homeAttempts > 0 ? `${row.homeQualityPct.toFixed(0)}%` : "—"}
+                    </td>
+                    <td className="p-3 text-right">{row.awayAttempts}</td>
+                    <td className="p-3 text-right">{row.awayGoals}</td>
+                    <td className="p-3 text-right">
+                      {row.awayAttempts > 0 ? `${row.awayScorePct.toFixed(0)}%` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="border rounded-2xl overflow-hidden bg-white">
+          <div className="p-4 border-b">
+            <div className="text-lg font-bold">Actiemix</div>
+            <div className="text-sm text-gray-500">
+              Hoe Korbis zijn aanvallende pogingen verdeelt.
+            </div>
+          </div>
+          <div className="overflow-auto">
+            <table className="w-full text-sm min-w-[620px]">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left p-3">Actie</th>
+                  <th className="text-right p-3">Aantal</th>
+                  <th className="text-right p-3">Aandeel</th>
+                  <th className="text-right p-3">Raak</th>
+                  <th className="text-right p-3">Score %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {actionMix.map((row) => (
+                  <tr key={row.actie} className="border-t">
+                    <td className="p-3 font-semibold">{row.actie}</td>
+                    <td className="p-3 text-right">{row.totaal}</td>
+                    <td className="p-3 text-right">
+                      {homeAttempts > 0 ? `${row.pctVanActies.toFixed(0)}%` : "—"}
+                    </td>
+                    <td className="p-3 text-right">{row.raak}</td>
+                    <td className="p-3 text-right">
+                      {row.totaal > 0 ? `${row.scorePct.toFixed(0)}%` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <details className="border rounded-2xl bg-white">
+          <summary className="cursor-pointer p-4 font-semibold">
+            Details en oude grafieken
+          </summary>
+          <div className="p-4 pt-0 space-y-6">
+            <div className="grid gap-6 md:grid-cols-2">
+              <PieChart title="Doelpunten per speler" slices={goalsSlices} />
+              <PieChart title="Tegendoelpunten per speler" slices={tegenSlices} />
+            </div>
+            <div className="grid gap-6 md:grid-cols-2">
+              <HitMissBarChart
+                title="Korbis – Raak vs niet raak per actie"
+                counts={hitMissCounts.thuis}
+              />
+              <HitMissBarChart
+                title={`${opponentName || "Tegenstander"} – Raak vs niet raak per actie`}
+                counts={hitMissCounts.uit}
+              />
+            </div>
+          </div>
+        </details>
+      </div>
+    );
+  }
+
   if (state.spelers.length === 0) {
     return (
-      <div className="border rounded-2xl p-6 bg-white">
-        <h2 className="text-xl font-bold mb-2">Insights per speler</h2>
-        <p className="text-sm text-gray-500">
-          Voeg eerst spelers toe om persoonlijke inzichten te kunnen tonen.
-        </p>
+      <div className="space-y-4">
+        <div className="flex justify-end">{modeButtons}</div>
+        <div className="border rounded-2xl p-6 bg-white">
+          <h2 className="text-xl font-bold mb-2">Insights per speler</h2>
+          <p className="text-sm text-gray-500">
+            Voeg eerst spelers toe om persoonlijke inzichten te kunnen tonen.
+          </p>
+        </div>
       </div>
     );
   }
@@ -3281,7 +3966,8 @@ function InsightsTab({
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+          {modeButtons}
           <label className="flex flex-col gap-1">
             <span className="text-xs font-semibold text-gray-500">Speler</span>
             <select
