@@ -5267,7 +5267,6 @@ function HitMissBarChart({
 
           const raakHeight = raak > 0 ? Math.max(15, raakPerc) : 0;
           const misHeight = mis > 0 ? Math.max(15, misPerc) : 0;
-
           
           return (
             <div key={a}>
@@ -5285,7 +5284,6 @@ function HitMissBarChart({
                     Raak<br />({raak})
                   </div>
                 </div>
-
                 {/* Mis (incl. korf) */}
                 <div className="flex-1 flex flex-col items-center justify-end h-full">
                   <div
