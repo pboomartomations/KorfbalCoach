@@ -2028,12 +2028,20 @@ function WedstrijdTab({
   onEndMatch: () => void; 
 }) {
   const handleVakClick = (vak: VakSide) => {
-    // Zorg dat er een aanval is in het vak waar je op klikt
-    if (state.activeVak !== vak || !state.currentAttackId) {
+    // Klik op NIET-actief vak:
+    // alleen dit vak actief maken / nieuwe aanval starten
+    if (state.activeVak !== vak) {
+      setState((s) => startAttackForVak(s, vak));
+      return;
+    }
+  
+    // Klik op ACTIEF vak:
+    // zorg dat er een aanval bestaat
+    if (!state.currentAttackId) {
       setState((s) => startAttackForVak(s, vak));
     }
   
-    // Altijd meteen de actie-popup openen
+    // Alleen bij het actieve vak de actie-popup openen
     openVakActionModal(vak);
   };
 
