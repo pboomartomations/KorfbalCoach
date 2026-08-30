@@ -5268,6 +5268,7 @@ function HitMissBarChart({
           const raakHeight = raak > 0 ? Math.max(15, raakPerc) : 0;
           const misHeight = mis > 0 ? Math.max(15, misPerc) : 0;
 
+          
           return (
             <div key={a}>
               <div className="text-xs mb-1 font-medium">{a}</div>
@@ -5303,7 +5304,6 @@ function HitMissBarChart({
     </div>
   );
 }
-
 
 //////////////////////////////////////////////////////////////////////////////
 // --- UI bits ---------------------------------------------------------------
