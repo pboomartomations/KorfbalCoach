@@ -2801,244 +2801,229 @@ function InsightsTab({
   spelersMap: Map<string, Player>;
   opponentName: string;
 }) {
+  const ACTIONS = ["Schot", "Doorloop", "Vrijebal", "Strafworp"] as const;
+  type ActionKind = (typeof ACTIONS)[number];
 
-  // 👇 helper om het team bij een event te bepalen
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string>(
+    () => state.spelers[0]?.id ?? ""
+  );
+
+  useEffect(() => {
+    if (state.spelers.length === 0) {
+      if (selectedPlayerId) setSelectedPlayerId("");
+      return;
+    }
+
+    if (!state.spelers.some((p) => p.id === selectedPlayerId)) {
+      setSelectedPlayerId(state.spelers[0].id);
+    }
+  }, [state.spelers, selectedPlayerId]);
+
+  const selectedPlayer = selectedPlayerId
+    ? spelersMap.get(selectedPlayerId)
+    : undefined;
+
+  const playerEvents = selectedPlayerId
+    ? state.log.filter((e) => e.spelerId === selectedPlayerId)
+    : [];
+
+  const attackingEvents = playerEvents.filter(
+    (e) =>
+      e.vak === "aanvallend" &&
+      !!e.actie &&
+      ACTIONS.includes(e.actie as ActionKind) &&
+      !!e.resultaat
+  );
+
+  const reboundEvents = playerEvents.filter(
+    (e) => e.soort === "Rebound" && e.reden === "Rebound"
+  );
+
+  const allReboundMoments = state.log.filter(
+    (e) => e.soort === "Rebound" && e.vak === "aanvallend"
+  );
+
+  const defensiveStops = playerEvents.filter(
+    (e) => e.vak === "verdedigend" && e.resultaat === "Verdedigd"
+  ).length;
+
+  const steals = playerEvents.filter(
+    (e) =>
+      e.vak === "verdedigend" &&
+      (e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept")
+  ).length;
+
+  const againstGoals = playerEvents.filter(
+    (e) => e.vak === "verdedigend" && e.reden === "Doorgelaten"
+  ).length;
+
+  const goals = attackingEvents.filter((e) => e.resultaat === "Raak").length;
+  const korf = attackingEvents.filter((e) => e.resultaat === "Korf").length;
+  const defended = attackingEvents.filter(
+    (e) => e.resultaat === "Verdedigd"
+  ).length;
+  const attempts = attackingEvents.length;
+
+  const scorePct = attempts > 0 ? (goals / attempts) * 100 : 0;
+  const qualityPct = attempts > 0 ? ((goals + korf) / attempts) * 100 : 0;
+  const reboundSharePct =
+    allReboundMoments.length > 0
+      ? (reboundEvents.length / allReboundMoments.length) * 100
+      : 0;
+
+  const actionStats = ACTIONS.map((actie) => {
+    const events = attackingEvents.filter((e) => e.actie === actie);
+    const raak = events.filter((e) => e.resultaat === "Raak").length;
+    const korfCount = events.filter((e) => e.resultaat === "Korf").length;
+    const mis = events.filter((e) => e.resultaat === "Mis").length;
+    const verdedigd = events.filter((e) => e.resultaat === "Verdedigd").length;
+    const totaal = events.length;
+
+    return {
+      actie,
+      totaal,
+      raak,
+      korf: korfCount,
+      mis,
+      verdedigd,
+      scorePct: totaal > 0 ? (raak / totaal) * 100 : 0,
+      qualityPct: totaal > 0 ? ((raak + korfCount) / totaal) * 100 : 0,
+    };
+  });
+
+  const strengths: string[] = [];
+  const attentionPoints: string[] = [];
+
+  if (attempts >= 5 && scorePct >= 40) {
+    strengths.push(
+      `Sterke afwerking: ${scorePct.toFixed(0)}% van ${attempts} pogingen is raak.`
+    );
+  }
+
+  if (attempts >= 5 && qualityPct >= 70) {
+    strengths.push(
+      `Hoge schotkwaliteit: ${qualityPct.toFixed(0)}% is raak of raakt de korf.`
+    );
+  }
+
+  actionStats.forEach((s) => {
+    if (s.totaal >= 3 && s.scorePct >= 50) {
+      strengths.push(
+        `${s.actie} is sterk: ${s.raak} uit ${s.totaal} raak (${s.scorePct.toFixed(0)}%).`
+      );
+    }
+  });
+
+  if (reboundEvents.length >= 3 && reboundSharePct >= 25) {
+    strengths.push(
+      `Veel reboundbijdrage: ${reboundEvents.length} rebounds (${reboundSharePct.toFixed(0)}% van de geregistreerde reboundmomenten).`
+    );
+  }
+
+  if (steals >= 2) {
+    strengths.push(`Verdedigend actief: ${steals} steals/onderscheppingen geregistreerd.`);
+  }
+
+  if (attempts >= 5 && scorePct < 20) {
+    attentionPoints.push(
+      `Afwerking: ${goals} uit ${attempts} pogingen raak (${scorePct.toFixed(0)}%).`
+    );
+  }
+
+  if (attempts >= 5 && defended / attempts >= 0.25) {
+    attentionPoints.push(
+      `${defended} van ${attempts} aanvallende acties werden als verdedigd geregistreerd.`
+    );
+  }
+
+  actionStats.forEach((s) => {
+    if (s.totaal >= 3 && s.scorePct < 20) {
+      attentionPoints.push(
+        `${s.actie}: ${s.raak} uit ${s.totaal} raak. Dit kan een gericht trainingspunt zijn.`
+      );
+    }
+  });
+
+  if (againstGoals >= 2) {
+    attentionPoints.push(
+      `Verdedigend terugkijken: ${againstGoals} keer is 'Doorgelaten' bij deze speler geregistreerd.`
+    );
+  }
+
+  // Persoonlijke veldmarkers koppelen aan de actie-events van de geselecteerde speler.
+  // FieldEvent bevat geen spelerId, dus we koppelen op aanval, vak, actie, resultaat en tijd.
+  const fieldMarkerIds = new Set<string>();
+  const playerFieldMarkers: FieldEvent[] = [];
+
+  const actionToField = (actie?: LogEvent["actie"]): FieldEvent["actie"] => {
+    if (actie === "Schot") return "schot";
+    if (actie === "Doorloop") return "doorloop";
+    if (actie === "Strafworp") return "strafworp";
+    return "vrije";
+  };
+
+  attackingEvents.forEach((e) => {
+    const candidates = state.fieldEvents.filter((fe) => {
+      if (fe.vak !== "aanvallend") return false;
+      if (e.attackId && fe.attackId !== e.attackId) return false;
+      if (e.actie && fe.actie && fe.actie !== actionToField(e.actie)) return false;
+      if (
+        e.resultaat &&
+        fe.resultaat &&
+        fe.resultaat !== e.resultaat.toLowerCase()
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    if (candidates.length === 0) return;
+
+    let best = candidates[0];
+    let bestDelta = Math.abs(best.tijdSeconden - e.tijdSeconden);
+
+    for (const candidate of candidates) {
+      const delta = Math.abs(candidate.tijdSeconden - e.tijdSeconden);
+      if (delta < bestDelta) {
+        best = candidate;
+        bestDelta = delta;
+      }
+    }
+
+    if (!fieldMarkerIds.has(best.id)) {
+      fieldMarkerIds.add(best.id);
+      playerFieldMarkers.push(best);
+    }
+  });
+
+  const markerFill = (ev: FieldEvent) => {
+    if (ev.actie === "schot") return "#2563eb";
+    if (ev.actie === "doorloop") return "#db2777";
+    if (ev.actie === "strafworp") return "#7c3aed";
+    if (ev.actie === "vrije") return "#92400e";
+    return "#6b7280";
+  };
+
+  const markerBorder = (ev: FieldEvent) => {
+    if (ev.resultaat === "raak") return "#16a34a";
+    if (ev.resultaat === "mis") return "#dc2626";
+    if (ev.resultaat === "korf") return "#f97316";
+    if (ev.resultaat === "verdedigd") return "#0f172a";
+    return "#111827";
+  };
+
+  // Compact teamoverzicht blijft beschikbaar onderaan.
   const getTeamForEvent = (e: LogEvent): AttackTeam | undefined => {
-    // 1) Als het event zelf een team heeft, gebruik die
     if (e.team === "thuis" || e.team === "uit") return e.team;
-
-    // 2) Als er een attackId is, haal het team van die aanval
     if (e.attackId) {
       const attack = state.attacks.find((a) => a.id === e.attackId);
       if (attack) return attack.team;
     }
-
-    // 3) Fallback: op basis van vak
     if (e.vak === "aanvallend") return "thuis";
     if (e.vak === "verdedigend") return "uit";
-
     return undefined;
   };
 
-  // -----------------------------------------
-  // 1) Schot vs Doorloop per team
-  // -----------------------------------------
-  let thuisSchot = 0;
-  let thuisDoorloop = 0;
-  let uitSchot = 0;
-  let uitDoorloop = 0;
-
-  state.log.forEach((e) => {
-    if (e.actie !== "Schot" && e.actie !== "Doorloop") return;
-
-    const teamFromAttack = getTeamForEvent(e);
-    const fallbackTeam: AttackTeam =
-      e.vak === "aanvallend"
-        ? "thuis"
-        : e.vak === "verdedigend"
-        ? "uit"
-        : "thuis";
-    const team = teamFromAttack ?? fallbackTeam;
-
-    if (team === "thuis") {
-      if (e.actie === "Schot") thuisSchot++;
-      if (e.actie === "Doorloop") thuisDoorloop++;
-    } else {
-      if (e.actie === "Schot") uitSchot++;
-      if (e.actie === "Doorloop") uitDoorloop++;
-    }
-  });
-
-  const thuisSlices: PieSlice[] = [];
-  if (thuisSchot > 0)
-    thuisSlices.push({
-      label: "Schot",
-      value: thuisSchot,
-      color: "#1d4ed8", // blauw
-    });
-  if (thuisDoorloop > 0)
-    thuisSlices.push({
-      label: "Doorloop",
-      value: thuisDoorloop,
-      color: "#ec4899", // roze
-    });
-
-  const uitSlices: PieSlice[] = [];
-  if (uitSchot > 0)
-    uitSlices.push({
-      label: "Schot",
-      value: uitSchot,
-      color: "#1d4ed8",
-    });
-  if (uitDoorloop > 0)
-    uitSlices.push({
-      label: "Doorloop",
-      value: uitDoorloop,
-      color: "#ec4899",
-    });
-
-  // -----------------------------------------
-  // 2) Doelpunten per speler (eigen ploeg)
-  // -----------------------------------------
-  const goalEvents = state.log.filter(
-    (e) =>
-      (e.reden === "Gescoord" ||
-        e.reden === "Doelpunt") &&
-      e.spelerId &&
-      e.spelerId !== TEGENSTANDER_ID
-  );
-
-  const goalsPerSpeler = new Map<string, number>();
-  goalEvents.forEach((e) => {
-    if (!e.spelerId) return;
-    goalsPerSpeler.set(
-      e.spelerId,
-      (goalsPerSpeler.get(e.spelerId) ?? 0) + 1
-    );
-  });
-
-  // -----------------------------------------
-  // 3) Tegendoelpunten per speler (Doorgelaten)
-  // -----------------------------------------
-  const tegenEvents = state.log.filter(
-    (e) =>
-      e.reden === "Doorgelaten" &&
-      e.spelerId &&
-      e.spelerId !== TEGENSTANDER_ID
-  );
-
-  const tegenPerSpeler = new Map<string, number>();
-  tegenEvents.forEach((e) => {
-    if (!e.spelerId) return;
-    tegenPerSpeler.set(
-      e.spelerId,
-      (tegenPerSpeler.get(e.spelerId) ?? 0) + 1
-    );
-  });
-
-  const colorPalette = [
-    "#1d4ed8", // blauw
-    "#ec4899", // roze
-    "#8b5cf6", // paars
-    "#f97316", // oranje
-    "#22c55e", // groen
-    "#06b6d4", // cyaan
-    "#facc15", // geel
-    "#ef4444", // rood
-  ];
-
-  const goalsSlices: PieSlice[] = Array.from(
-    goalsPerSpeler.entries()
-  ).map(([spelerId, count], idx) => ({
-    label: spelersMap.get(spelerId)?.naam ?? spelerId,
-    value: count,
-    color: colorPalette[idx % colorPalette.length],
-  }));
-
-  const tegenSlices: PieSlice[] = Array.from(
-    tegenPerSpeler.entries()
-  ).map(([spelerId, count], idx) => ({
-    label:
-      (spelersMap.get(spelerId)?.naam ?? spelerId) + " (tegen)",
-    value: count,
-    color: colorPalette[(idx + 3) % colorPalette.length],
-  }));
-
-  // -----------------------------------------
-  // 4) Overzicht acties per team (Schot / Doorloop / Vrijebal / Strafworp)
-  // -----------------------------------------
-  const ACTIONS: ("Schot" | "Doorloop" | "Vrijebal" | "Strafworp")[] = [
-    "Schot",
-    "Doorloop",
-    "Vrijebal",
-    "Strafworp",
-  ];
-
-  type ActionKind = (typeof ACTIONS)[number];
-
-  const actionCounts: Record<AttackTeam, Record<ActionKind, number>> = {
-    thuis: {
-      Schot: 0,
-      Doorloop: 0,
-      Vrijebal: 0,
-      Strafworp: 0,
-    },
-    uit: {
-      Schot: 0,
-      Doorloop: 0,
-      Vrijebal: 0,
-      Strafworp: 0,
-    },
-  };
-
-  state.log.forEach((e) => {
-    if (!e.actie) return;
-    if (!ACTIONS.includes(e.actie)) return;
-
-    const teamFromAttack = getTeamForEvent(e);
-    const fallbackTeam: AttackTeam =
-      e.vak === "aanvallend"
-        ? "thuis"
-        : e.vak === "verdedigend"
-        ? "uit"
-        : "thuis";
-    const team = teamFromAttack ?? fallbackTeam;
-
-    const action = e.actie as ActionKind;
-    actionCounts[team][action]++;
-  });
-
-  // -----------------------------------------
-  // 5) Pogingen & Raak per team
-  //    poging = elke actie (Schot/Doorloop/Vrijebal/Strafworp)
-  //    raak = doelpunt voor dat team
-  // -----------------------------------------
-  let attemptsThuis = 0;
-  let attemptsUit = 0;
-  let hitsThuis = 0;
-  let hitsUit = 0;
-
-  state.log.forEach((e) => {
-    if (!e.actie) return;
-    if (!ACTIONS.includes(e.actie)) return;
-
-    const teamFromAttack = getTeamForEvent(e);
-    const fallbackTeam: AttackTeam =
-      e.vak === "aanvallend"
-        ? "thuis"
-        : e.vak === "verdedigend"
-        ? "uit"
-        : "thuis";
-    const team = teamFromAttack ?? fallbackTeam;
-
-    // elke actie is een poging
-    if (team === "thuis") attemptsThuis++;
-    else attemptsUit++;
-
-    // bepalen of dit een "raak"-poging was
-    const isScoreForThuis =
-      team === "thuis" &&
-      (e.reden === "Gescoord" ||
-        e.reden === "Doelpunt");
-
-    const isScoreForUit =
-      team === "uit" &&
-      (e.reden === "Gescoord" ||
-        e.reden === "Doelpunt"||
-        e.reden === "Doorgelaten");
-
-    if (isScoreForThuis) hitsThuis++;
-    if (isScoreForUit) hitsUit++;
-  });
-
-  const pct = (hits: number, attempts: number) =>
-    attempts > 0 ? `${((hits / attempts) * 100).toFixed(1)} %` : "—";
-
-  // -----------------------------------------
-  // 6) Raak vs Mis per actie & per team
-  //    - Raak = e.resultaat === "Raak"
-  //    - Mis  = e.resultaat === "Mis" of "Korf"
-  // -----------------------------------------
   const hitMissCounts: Record<
     AttackTeam,
     Record<ActionKind, { raak: number; mis: number }>
@@ -3058,97 +3043,252 @@ function InsightsTab({
   };
 
   state.log.forEach((e) => {
-    if (!e.actie) return;
-    if (!ACTIONS.includes(e.actie)) return;
-    if (!e.resultaat) return;
-
-    const teamFromAttack = getTeamForEvent(e);
-    const fallbackTeam: AttackTeam =
-      e.vak === "aanvallend"
-        ? "thuis"
-        : e.vak === "verdedigend"
-        ? "uit"
-        : "thuis";
-
-    const team = teamFromAttack ?? fallbackTeam;
+    if (!e.actie || !ACTIONS.includes(e.actie as ActionKind) || !e.resultaat) return;
+    const team = getTeamForEvent(e);
+    if (!team) return;
     const action = e.actie as ActionKind;
 
-    const bucket = hitMissCounts[team][action];
-
     if (e.resultaat === "Raak") {
-      bucket.raak += 1;
-    } else if (e.resultaat === "Mis" || e.resultaat === "Korf") {
-      bucket.mis += 1;
+      hitMissCounts[team][action].raak += 1;
+    } else if (
+      e.resultaat === "Mis" ||
+      e.resultaat === "Korf" ||
+      e.resultaat === "Verdedigd"
+    ) {
+      hitMissCounts[team][action].mis += 1;
     }
   });
 
+  const goalsPerSpeler = new Map<string, number>();
+  state.log.forEach((e) => {
+    if (
+      e.vak === "aanvallend" &&
+      e.spelerId &&
+      e.spelerId !== TEGENSTANDER_ID &&
+      e.resultaat === "Raak"
+    ) {
+      goalsPerSpeler.set(
+        e.spelerId,
+        (goalsPerSpeler.get(e.spelerId) ?? 0) + 1
+      );
+    }
+  });
 
+  const goalsSlices: PieSlice[] = Array.from(goalsPerSpeler.entries()).map(
+    ([spelerId, value], index) => ({
+      label: spelersMap.get(spelerId)?.naam ?? spelerId,
+      value,
+      color: [
+        "#1d4ed8",
+        "#ec4899",
+        "#8b5cf6",
+        "#f97316",
+        "#22c55e",
+        "#06b6d4",
+        "#eab308",
+        "#ef4444",
+      ][index % 8],
+    })
+  );
 
-  // -----------------------------------------
-  // 7) UI
-  // -----------------------------------------
+  const tegenPerSpeler = new Map<string, number>();
+  state.log.forEach((e) => {
+    if (e.reden === "Doorgelaten" && e.spelerId && e.spelerId !== TEGENSTANDER_ID) {
+      tegenPerSpeler.set(
+        e.spelerId,
+        (tegenPerSpeler.get(e.spelerId) ?? 0) + 1
+      );
+    }
+  });
+
+  const tegenSlices: PieSlice[] = Array.from(tegenPerSpeler.entries()).map(
+    ([spelerId, value], index) => ({
+      label: spelersMap.get(spelerId)?.naam ?? spelerId,
+      value,
+      color: [
+        "#f97316",
+        "#ef4444",
+        "#8b5cf6",
+        "#ec4899",
+        "#06b6d4",
+        "#22c55e",
+        "#eab308",
+        "#1d4ed8",
+      ][index % 8],
+    })
+  );
+
+  if (state.spelers.length === 0) {
+    return (
+      <div className="border rounded-2xl p-6 bg-white">
+        <h2 className="text-xl font-bold mb-2">Insights per speler</h2>
+        <p className="text-sm text-gray-500">
+          Voeg eerst spelers toe om persoonlijke inzichten te kunnen tonen.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold">Insights wedstrijd</h2>
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Insights per speler</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Persoonlijke analyse op basis van de geregistreerde acties in deze wedstrijd.
+          </p>
+        </div>
 
-      {/* Rij 1: Schot vs Doorloop per team */}
-      <div className="grid gap-6 md:grid-cols-2">
-      <PieChart
-        title="Korbis: Schot vs Doorloop"
-        slices={thuisSlices}
-      />
-      <PieChart
-        title={`${opponentName || "Tegenstander"}: Schot vs Doorloop`}
-        slices={uitSlices}
-      />
+        <div className="flex flex-col sm:flex-row gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-gray-500">Speler</span>
+            <select
+              className="border rounded-xl px-3 py-2 bg-white min-w-52"
+              value={selectedPlayerId}
+              onChange={(e) => setSelectedPlayerId(e.target.value)}
+            >
+              {state.spelers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.naam}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-gray-500">Periode</span>
+            <select
+              className="border rounded-xl px-3 py-2 bg-gray-50 text-gray-700"
+              value="wedstrijd"
+              disabled
+            >
+              <option value="wedstrijd">Deze wedstrijd</option>
+            </select>
+          </label>
+        </div>
       </div>
 
-      {/* Rij 2: Doelpunten en tegendoelpunten per speler */}
-      <div className="grid gap-6 md:grid-cols-2">
-        <PieChart title="Doelpunten per speler" slices={goalsSlices} />
-        <PieChart
-          title="Tegendoelpunten per speler (Doorgelaten)"
-          slices={tegenSlices}
-        />
+      <div className="border rounded-2xl p-4 bg-gradient-to-br from-blue-50 to-white">
+        <div className="flex items-center gap-3">
+          <div className="w-14 h-14 rounded-full border bg-white overflow-hidden flex items-center justify-center">
+            {selectedPlayer?.foto ? (
+              <img
+                src={selectedPlayer.foto}
+                alt={selectedPlayer.naam}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <span className="text-xl font-bold text-gray-400">
+                {selectedPlayer?.naam?.slice(0, 1).toUpperCase() || "?"}
+              </span>
+            )}
+          </div>
+          <div>
+            <div className="text-xl font-bold">{selectedPlayer?.naam ?? "Speler"}</div>
+            <div className="text-sm text-gray-500">
+              {selectedPlayer?.geslacht} · {attempts} aanvallende acties geregistreerd
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Raak vs Mis per actie per team */}
-      <div className="mt-4 grid gap-6 md:grid-cols-2">
-        <HitMissBarChart
-          title="Korbis – Raak vs Mis per actie"
-          counts={hitMissCounts.thuis}
-        />
-        <HitMissBarChart
-          title={`${opponentName || "Tegenstander"} – Raak vs Mis per actie`}
-          counts={hitMissCounts.uit}
-        />
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        {[
+          { label: "Acties", value: attempts.toString(), sub: "aanvallend" },
+          { label: "Doelpunten", value: goals.toString(), sub: `${scorePct.toFixed(0)}% raak` },
+          { label: "Schotkwaliteit", value: `${qualityPct.toFixed(0)}%`, sub: "raak + korf" },
+          { label: "Rebounds", value: reboundEvents.length.toString(), sub: allReboundMoments.length > 0 ? `${reboundSharePct.toFixed(0)}% aandeel` : "nog geen rebounddata" },
+          { label: "Verdedigend", value: (defensiveStops + steals).toString(), sub: `${defensiveStops} verdedigd · ${steals} steals` },
+        ].map((card) => (
+          <div key={card.label} className="border rounded-2xl p-4 bg-white shadow-sm">
+            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              {card.label}
+            </div>
+            <div className="text-3xl font-extrabold mt-1">{card.value}</div>
+            <div className="text-xs text-gray-500 mt-1">{card.sub}</div>
+          </div>
+        ))}
       </div>
 
-  
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="border rounded-2xl p-4 bg-green-50/60 border-green-200">
+          <div className="text-lg font-bold text-green-900 mb-3">Sterke punten</div>
+          {strengths.length > 0 ? (
+            <div className="space-y-2">
+              {strengths.slice(0, 5).map((text, index) => (
+                <div
+                  key={`${text}-${index}`}
+                  className="flex gap-2 rounded-xl bg-white/80 border border-green-100 p-3 text-sm"
+                >
+                  <span aria-hidden="true">🟢</span>
+                  <span>{text}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-green-900/70 bg-white/70 rounded-xl p-3">
+              Nog te weinig data om een betrouwbaar sterk punt aan te wijzen. Na een paar acties worden hier automatisch patronen zichtbaar.
+            </div>
+          )}
+        </div>
 
-      {/* Overzicht acties per team */}
-      <div className="mt-4 border rounded-2xl p-3">
-        <div className="text-sm font-semibold mb-2">
-          Overzicht acties per team
+        <div className="border rounded-2xl p-4 bg-orange-50/60 border-orange-200">
+          <div className="text-lg font-bold text-orange-900 mb-3">Aandachtspunten</div>
+          {attentionPoints.length > 0 ? (
+            <div className="space-y-2">
+              {attentionPoints.slice(0, 5).map((text, index) => (
+                <div
+                  key={`${text}-${index}`}
+                  className="flex gap-2 rounded-xl bg-white/80 border border-orange-100 p-3 text-sm"
+                >
+                  <span aria-hidden="true">🟠</span>
+                  <span>{text}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-orange-900/70 bg-white/70 rounded-xl p-3">
+              Op basis van de huidige registratie is nog geen duidelijk aandachtspunt zichtbaar.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="border rounded-2xl overflow-hidden bg-white">
+        <div className="p-4 border-b">
+          <div className="text-lg font-bold">Aanvallend profiel</div>
+          <div className="text-sm text-gray-500">
+            Resultaat per type actie van {selectedPlayer?.naam ?? "de speler"}.
+          </div>
         </div>
         <div className="overflow-auto">
-          <table className="w-full text-xs">
+          <table className="w-full text-sm min-w-[720px]">
             <thead className="bg-gray-50">
               <tr>
-                <th className="text-left p-1">Actie</th>
-                <th className="text-right p-1">Korbis</th>
-                <th className="text-right p-1">{opponentName || "Tegenstander"}</th>
+                <th className="text-left p-3">Actie</th>
+                <th className="text-right p-3">Pogingen</th>
+                <th className="text-right p-3">Raak</th>
+                <th className="text-right p-3">Korf</th>
+                <th className="text-right p-3">Mis</th>
+                <th className="text-right p-3">Verdedigd</th>
+                <th className="text-right p-3">Score %</th>
+                <th className="text-right p-3">Kwaliteit %</th>
               </tr>
             </thead>
             <tbody>
-              {ACTIONS.map((a) => (
-                <tr key={a} className="border-t">
-                  <td className="p-1">{a}</td>
-                  <td className="p-1 text-right">
-                    {actionCounts.thuis[a]}
+              {actionStats.map((s) => (
+                <tr key={s.actie} className="border-t">
+                  <td className="p-3 font-semibold">{s.actie}</td>
+                  <td className="p-3 text-right">{s.totaal}</td>
+                  <td className="p-3 text-right">{s.raak}</td>
+                  <td className="p-3 text-right">{s.korf}</td>
+                  <td className="p-3 text-right">{s.mis}</td>
+                  <td className="p-3 text-right">{s.verdedigd}</td>
+                  <td className="p-3 text-right">
+                    {s.totaal > 0 ? `${s.scorePct.toFixed(0)}%` : "—"}
                   </td>
-                  <td className="p-1 text-right">
-                    {actionCounts.uit[a]}
+                  <td className="p-3 text-right">
+                    {s.totaal > 0 ? `${s.qualityPct.toFixed(0)}%` : "—"}
                   </td>
                 </tr>
               ))}
@@ -3157,118 +3297,179 @@ function InsightsTab({
         </div>
       </div>
 
-      {/* Pogingen & Raak per team */}
-      <div className="mt-4 border rounded-2xl p-3">
-        <div className="text-sm font-semibold mb-2">
-          Pogingen &amp; raak per team
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="border rounded-2xl p-4 bg-white">
+          <div className="text-lg font-bold mb-1">Reboundanalyse</div>
+          <div className="text-sm text-gray-500 mb-4">
+            Rebounds uit de aanvallende rebound-popup.
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl bg-gray-50 border p-3">
+              <div className="text-xs text-gray-500">Rebounds speler</div>
+              <div className="text-3xl font-extrabold">{reboundEvents.length}</div>
+            </div>
+            <div className="rounded-xl bg-gray-50 border p-3">
+              <div className="text-xs text-gray-500">Aandeel momenten</div>
+              <div className="text-3xl font-extrabold">
+                {allReboundMoments.length > 0 ? `${reboundSharePct.toFixed(0)}%` : "—"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 text-sm text-gray-600">
+            Er zijn in totaal <strong>{allReboundMoments.length}</strong> reboundmomenten geregistreerd, waarvan <strong>{state.log.filter((e) => e.soort === "Rebound" && e.reden === "Geen Rebound").length}</strong> zonder gewonnen rebound.
+          </div>
         </div>
-        <div className="overflow-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="text-left p-1">Team</th>
-                <th className="text-right p-1">Pogingen</th>
-                <th className="text-right p-1">Raak</th>
-                <th className="text-right p-1">% Raak</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="border-t">
-                <td className="p-1">Korbis</td>
-                <td className="p-1 text-right">{attemptsThuis}</td>
-                <td className="p-1 text-right">{hitsThuis}</td>
-                <td className="p-1 text-right">
-                  {pct(hitsThuis, attemptsThuis)}
-                </td>
-              </tr>
-              <tr className="border-t">
-                <td className="p-1">{opponentName || "Tegenstander"}</td>
-                <td className="p-1 text-right">{attemptsUit}</td>
-                <td className="p-1 text-right">{hitsUit}</td>
-                <td className="p-1 text-right">
-                  {pct(hitsUit, attemptsUit)}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+
+        <div className="border rounded-2xl p-4 bg-white">
+          <div className="text-lg font-bold mb-1">Verdedigend profiel</div>
+          <div className="text-sm text-gray-500 mb-4">
+            Alleen situaties waarin een speler expliciet is geselecteerd worden meegeteld.
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl bg-green-50 border border-green-100 p-3 text-center">
+              <div className="text-2xl font-extrabold">{defensiveStops}</div>
+              <div className="text-xs text-gray-600">Verdedigd</div>
+            </div>
+            <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-center">
+              <div className="text-2xl font-extrabold">{steals}</div>
+              <div className="text-xs text-gray-600">Steals</div>
+            </div>
+            <div className="rounded-xl bg-red-50 border border-red-100 p-3 text-center">
+              <div className="text-2xl font-extrabold">{againstGoals}</div>
+              <div className="text-xs text-gray-600">Doorgelaten</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Overzicht aanvallen (oude tabel, nu op Insights-tab) */}
-      <div className="mt-4 border rounded-2xl p-3">
-        <div className="text-sm font-semibold mb-2">
-          Overzicht aanvallen
+      <div className="border rounded-2xl p-4 bg-white">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+          <div>
+            <div className="text-lg font-bold">Persoonlijke actiekaart</div>
+            <div className="text-sm text-gray-500">
+              Alleen acties die aan een geregistreerde veldpositie konden worden gekoppeld.
+            </div>
+          </div>
+          <div className="text-xs text-gray-500">
+            {playerFieldMarkers.length} locaties gekoppeld
+          </div>
         </div>
-        <div className="mt-2 max-h-64 overflow-auto border rounded-xl">
-          <table className="w-full text-[10px]">
-            <thead className="bg-gray-50 sticky top-0">
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px] items-start">
+          <div className="relative overflow-hidden rounded-2xl border bg-gray-50">
+            <img
+              src="/VeldLinks.jpg"
+              alt="Persoonlijke actiekaart"
+              className="w-full h-auto block"
+              draggable={false}
+            />
+            {playerFieldMarkers.map((m) => (
+              <div
+                key={m.id}
+                title={`${m.actie ?? "actie"} · ${m.resultaat ?? ""}`}
+                style={{
+                  position: "absolute",
+                  width: "18px",
+                  height: "18px",
+                  left: `${m.x}%`,
+                  top: `${m.y}%`,
+                  transform: "translate(-50%, -50%)",
+                  backgroundColor: markerFill(m),
+                  border: `3px solid ${markerBorder(m)}`,
+                  borderRadius: "50%",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
+                }}
+              />
+            ))}
+          </div>
+
+          <div className="space-y-4 text-sm">
+            <div>
+              <div className="font-semibold mb-2">Actie</div>
+              <div className="space-y-1 text-gray-600">
+                <div><span className="inline-block w-3 h-3 rounded-full bg-blue-600 mr-2" />Schot</div>
+                <div><span className="inline-block w-3 h-3 rounded-full bg-pink-600 mr-2" />Doorloop</div>
+                <div><span className="inline-block w-3 h-3 rounded-full bg-purple-700 mr-2" />Strafworp</div>
+                <div><span className="inline-block w-3 h-3 rounded-full bg-amber-800 mr-2" />Vrijebal</div>
+              </div>
+            </div>
+            <div>
+              <div className="font-semibold mb-2">Rand = uitkomst</div>
+              <div className="space-y-1 text-gray-600">
+                <div>🟢 Raak</div>
+                <div>🟠 Korf</div>
+                <div>🔴 Mis</div>
+                <div>⚫ Verdedigd</div>
+              </div>
+            </div>
+            {playerFieldMarkers.length === 0 && (
+              <div className="rounded-xl bg-gray-50 border p-3 text-xs text-gray-500">
+                Voor deze speler zijn nog geen acties aan een veldpositie gekoppeld.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="border rounded-2xl bg-white overflow-hidden">
+        <div className="p-4 border-b">
+          <div className="text-lg font-bold">Teamvergelijking</div>
+          <div className="text-sm text-gray-500">
+            Compact overzicht om de persoonlijke cijfers in context te plaatsen.
+          </div>
+        </div>
+
+        <div className="overflow-auto">
+          <table className="w-full text-sm min-w-[640px]">
+            <thead className="bg-gray-50">
               <tr>
-                <th className="text-left p-1">Aanval</th>
-                <th className="text-left p-1">Team</th>
-                <th className="text-left p-1">Vak</th>
-                <th className="text-left p-1">Start</th>
-                <th className="text-left p-1">Einde</th>
-                <th className="text-left p-1">Duur</th>
-                <th className="text-left p-1">Schoten</th>
-                <th className="text-left p-1">Doorloop</th>
-                <th className="text-left p-1">Vrije ballen</th>
-                <th className="text-left p-1">Strafworpen</th>
+                <th className="text-left p-3">Speler</th>
+                <th className="text-right p-3">Acties</th>
+                <th className="text-right p-3">Goals</th>
+                <th className="text-right p-3">Score %</th>
+                <th className="text-right p-3">Rebounds</th>
+                <th className="text-right p-3">Steals</th>
+                <th className="text-right p-3">Doorgelaten</th>
               </tr>
             </thead>
             <tbody>
-              {state.attacks.map((a) => {
-                const duurSeconden =
-                  a.endSeconden != null
-                    ? a.endSeconden - a.startSeconden
-                    : undefined;
-
-                const eventsInAttack = state.log.filter(
-                  (e) => e.attackId === a.id
+              {state.spelers.map((p) => {
+                const pe = state.log.filter((e) => e.spelerId === p.id);
+                const pa = pe.filter(
+                  (e) =>
+                    e.vak === "aanvallend" &&
+                    !!e.actie &&
+                    ACTIONS.includes(e.actie as ActionKind) &&
+                    !!e.resultaat
                 );
-
-                const schoten = eventsInAttack.filter(
-                  (e) => e.actie === "Schot"
+                const pg = pa.filter((e) => e.resultaat === "Raak").length;
+                const pr = pe.filter((e) => e.soort === "Rebound" && e.reden === "Rebound").length;
+                const ps = pe.filter(
+                  (e) =>
+                    e.vak === "verdedigend" &&
+                    (e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept")
                 ).length;
-                const doorloop = eventsInAttack.filter(
-                  (e) => e.actie === "Doorloop"
-                ).length;
-                const vrijeBallen = eventsInAttack.filter(
-                  (e) => e.actie === "Vrijebal"
-                ).length;
-                const strafworpen = eventsInAttack.filter(
-                  (e) => e.actie === "Strafworp"
+                const pd = pe.filter(
+                  (e) => e.vak === "verdedigend" && e.reden === "Doorgelaten"
                 ).length;
 
                 return (
-                  <tr key={a.id} className="border-t">
-                    <td className="p-1">{a.index}</td>
-                    <td className="p-1">
-                      {a.team === "thuis"
-                        ? "Korbis"
-                        : opponentName || "Tegenstander"}
+                  <tr
+                    key={p.id}
+                    className={`border-t ${p.id === selectedPlayerId ? "bg-blue-50" : ""}`}
+                  >
+                    <td className="p-3 font-semibold">{p.naam}</td>
+                    <td className="p-3 text-right">{pa.length}</td>
+                    <td className="p-3 text-right">{pg}</td>
+                    <td className="p-3 text-right">
+                      {pa.length > 0 ? `${((pg / pa.length) * 100).toFixed(0)}%` : "—"}
                     </td>
-                    <td className="p-1">
-                      {a.vak === "aanvallend"
-                        ? "Aanvallend"
-                        : "Verdedigend"}
-                    </td>
-                    <td className="p-1">
-                      {formatTime(a.startSeconden)}
-                    </td>
-                    <td className="p-1">
-                      {a.endSeconden != null
-                        ? formatTime(a.endSeconden)
-                        : "—"}
-                    </td>
-                    <td className="p-1">
-                      {duurSeconden != null
-                        ? formatTime(duurSeconden)
-                        : "—"}
-                    </td>
-                    <td className="p-1">{schoten}</td>
-                    <td className="p-1">{doorloop}</td>
-                    <td className="p-1">{vrijeBallen}</td>
-                    <td className="p-1">{strafworpen}</td>
+                    <td className="p-3 text-right">{pr}</td>
+                    <td className="p-3 text-right">{ps}</td>
+                    <td className="p-3 text-right">{pd}</td>
                   </tr>
                 );
               })}
@@ -3276,6 +3477,28 @@ function InsightsTab({
           </table>
         </div>
       </div>
+
+      <details className="border rounded-2xl bg-white">
+        <summary className="cursor-pointer p-4 font-semibold">
+          Extra wedstrijdanalyse tonen
+        </summary>
+        <div className="p-4 pt-0 space-y-6">
+          <div className="grid gap-6 md:grid-cols-2">
+            <PieChart title="Doelpunten per speler" slices={goalsSlices} />
+            <PieChart title="Tegendoelpunten per speler" slices={tegenSlices} />
+          </div>
+          <div className="grid gap-6 md:grid-cols-2">
+            <HitMissBarChart
+              title="Korbis – Raak vs niet raak per actie"
+              counts={hitMissCounts.thuis}
+            />
+            <HitMissBarChart
+              title={`${opponentName || "Tegenstander"} – Raak vs niet raak per actie`}
+              counts={hitMissCounts.uit}
+            />
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
