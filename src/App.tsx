@@ -1422,6 +1422,7 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
       </Button>
       <Button variant="secondary" onClick={exportToExcel}>
         Export naar Excel
+      
       </Button>
       <Button
         variant="secondary"
