@@ -2283,23 +2283,6 @@ const attackUitPct =
       >
 
         {/* Pauze-symbool midden in de balk */}
-        {state.klokLoopt && !state.matchEnded && (
-          <div
-            className="
-              absolute
-              left-1/2 top-1/2
-              -translate-x-1/2 -translate-y-1/2
-              z-20
-              flex gap-2
-              pointer-events-none
-            "
-            aria-hidden="true"
-          >
-            <span className="block w-2 h-8 bg-gray-900 rounded-sm" />
-            <span className="block w-2 h-8 bg-gray-900 rounded-sm" />
-          </div>
-        )}
-
         <div className="flex flex-col gap-4">
 
           {/* Tijd + duur + start/pauze */}
@@ -2427,6 +2410,8 @@ const attackUitPct =
                   </div>
                   <div className="text-xs text-blue-900 mt-1">
                     Balbezit: {totalPoss > 0 ? possThuisPct.toFixed(1) : "0.0"}%
+                    {" · "}
+                    {formatTime(state.possessionThuisSeconden)}
                   </div>
                   <div className="text-xs text-blue-900">
                     Aanvalstijd t.o.v. tegenstander:{" "}
@@ -2470,6 +2455,8 @@ const attackUitPct =
                   </div>
                   <div className="text-xs text-amber-900 mt-1">
                     Balbezit: {totalPoss > 0 ? possUitPct.toFixed(1) : "0.0"}%
+                    {" · "}
+                    {formatTime(state.possessionUitSeconden)}
                   </div>
                   <div className="text-xs text-amber-900">
                     Aanvalstijd t.o.v. Korbis:{" "}
