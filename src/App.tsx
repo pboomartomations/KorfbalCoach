@@ -2147,7 +2147,6 @@ function WedstrijdTab({
       
           if (!shouldCount) continue;
       
-          
           const end = a.endSeconden != null ? a.endSeconden : nowTime;
           if (end > a.startSeconden) total += end - a.startSeconden;
         }
