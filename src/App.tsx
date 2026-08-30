@@ -579,20 +579,6 @@ export default function App() {
     klokLoopt: aan,
   }));
 
-  const resetKlok = () =>
-  setState((s) => ({
-    ...s,
-    tijdSeconden: 0,
-    klokLoopt: false,
-    possessionOwner: null,
-    possessionThuisSeconden: 0,
-    possessionUitSeconden: 0,
-    currentHalf: 1,
-    aanvalLinks: DEFAULT_STATE.aanvalLinks,
-  }));
-
-
-
   // 🔹 LOSSE functie voor gewone Gemis/Kans/Wissel events
   const logEvent = (
     vak: VakSide,
@@ -1546,7 +1532,6 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
           bank={bank}
           setVakPos={setVakPos}
           toggleKlok={toggleKlok}
-          resetKlok={resetKlok}
           openVakActionModal={(vak) => setVakActionPopup({ vak })}
           openStealModal={() => setStealPopup({})}
           opponentName={state.opponentName}
@@ -2046,7 +2031,6 @@ function WedstrijdTab({
   bank,
   setVakPos,
   toggleKlok,
-  resetKlok,
   openVakActionModal,
   opponentName,
   onEndMatch,   
@@ -2063,7 +2047,6 @@ function WedstrijdTab({
     logWissel?: boolean
   ) => void;
   toggleKlok: (aan: boolean) => void;
-  resetKlok: () => void;
   openVakActionModal: (vak: VakSide) => void;
   openStealModal: () => void;
   opponentName: string;
@@ -2308,11 +2291,6 @@ const attackUitPct =
                   Pauze
                 </Button>
               )}
-
-              {/* Reset klok (alleen timer) */}
-              <Button variant="secondary" onClick={resetKlok}>
-                Reset
-              </Button>
 
               <Button
                 size="md"
