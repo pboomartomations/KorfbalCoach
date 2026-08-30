@@ -1234,15 +1234,15 @@ const exportToExcel = () => {
   });
 
   // ---------- 4) MATCH SUMMARY SHEET ----------
+  const nowTime = state.tijdSeconden;
   const totalPoss =
-    state.possessionThuisSeconden + state.possessionUitSeconden;
+  state.possessionThuisSeconden + state.possessionUitSeconden;
+
   const possThuisPct =
     totalPoss > 0 ? (state.possessionThuisSeconden / totalPoss) * 100 : 0;
+
   const possUitPct =
     totalPoss > 0 ? (state.possessionUitSeconden / totalPoss) * 100 : 0;
-
-  const nowTime = state.tijdSeconden;
-
   const computeAttackSecondsPerTeam = () => {
     let thuis = 0;
     let uit = 0;
@@ -2137,16 +2137,6 @@ function WedstrijdTab({
   );
   const resterend = Math.max(halfTotal - halfElapsed, 0);
 
-  const totalPoss = state.possessionThuisSeconden + state.possessionUitSeconden;
-  const possThuisPct =
-    totalPoss > 0
-      ? (state.possessionThuisSeconden / totalPoss) * 100
-      : 0;
-  const possUitPct =
-    totalPoss > 0
-      ? (state.possessionUitSeconden / totalPoss) * 100
-      : 0;
-
       const computeAttackSeconds = (team: AttackTeam) => {
         let total = 0;
         for (const a of state.attacks) {
@@ -2408,14 +2398,11 @@ const attackUitPct =
                       +
                     </Button>
                   </div>
-                  <div className="text-xs text-blue-900 mt-1">
-                    Balbezit: {totalPoss > 0 ? possThuisPct.toFixed(1) : "0.0"}%
-                    {" · "}
-                    {formatTime(state.possessionThuisSeconden)}
-                  </div>
                   <div className="text-xs text-blue-900">
                     Aanvalstijd t.o.v. tegenstander:{" "}
                     {totalAttackSec > 0 ? attackThuisPct.toFixed(1) : "0.0"}%
+                    {" · "}
+                    {formatTime(attackThuisSec)}
                   </div>
                 </div>
               </div>
@@ -2453,14 +2440,11 @@ const attackUitPct =
                       +
                     </Button>
                   </div>
-                  <div className="text-xs text-amber-900 mt-1">
-                    Balbezit: {totalPoss > 0 ? possUitPct.toFixed(1) : "0.0"}%
-                    {" · "}
-                    {formatTime(state.possessionUitSeconden)}
-                  </div>
                   <div className="text-xs text-amber-900">
                     Aanvalstijd t.o.v. Korbis:{" "}
                     {totalAttackSec > 0 ? attackUitPct.toFixed(1) : "0.0"}%
+                    {" · "}
+                    {formatTime(attackUitSec)}
                   </div>
                 </div>
               </div>
