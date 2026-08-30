@@ -3325,19 +3325,14 @@ function InsightsTab({
       (e) => e.reden === "Doorgelaten" && e.resultaat !== "Raak"
     ).length;
   const homeKorf = resultCount(homeActionEvents, "Korf");
-  const awayKorf = resultCount(awayActionEvents, "Korf");
-  const homeDefended = resultCount(homeActionEvents, "Verdedigd");
   const awayDefended = resultCount(awayActionEvents, "Verdedigd");
 
   const homeScorePct = homeAttempts > 0 ? (homeGoals / homeAttempts) * 100 : 0;
   const awayScorePct = awayAttempts > 0 ? (awayGoals / awayAttempts) * 100 : 0;
   const homeQualityPct =
     homeAttempts > 0 ? ((homeGoals + homeKorf) / homeAttempts) * 100 : 0;
-  const awayQualityPct =
-    awayAttempts > 0 ? ((awayGoals + awayKorf) / awayAttempts) * 100 : 0;
 
   const homeAttacks = state.attacks.filter((a) => a.team === "thuis");
-  const awayAttacks = state.attacks.filter((a) => a.team === "uit");
 
   const goalsPerAttack =
     homeAttacks.length > 0 ? homeGoals / homeAttacks.length : 0;
