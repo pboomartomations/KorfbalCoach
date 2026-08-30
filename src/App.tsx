@@ -1348,14 +1348,26 @@ const resetAlles = () => {
 };
 
 const eindeWedstrijd = () => {
+  const ok = confirm(
+    "Weet je zeker dat je de wedstrijd wilt beëindigen? Hierna kunnen geen nieuwe acties meer worden geregistreerd."
+  );
+
+  if (!ok) return;
+
   setState((prev) => {
     const now = prev.tijdSeconden;
-    let attacks = [...prev.attacks];
+    const attacks = [...prev.attacks];
 
     if (prev.currentAttackId) {
-      const idx = attacks.findIndex((a) => a.id === prev.currentAttackId);
+      const idx = attacks.findIndex(
+        (a) => a.id === prev.currentAttackId
+      );
+
       if (idx >= 0 && attacks[idx].endSeconden == null) {
-        attacks[idx] = { ...attacks[idx], endSeconden: now };
+        attacks[idx] = {
+          ...attacks[idx],
+          endSeconden: now,
+        };
       }
     }
 
@@ -2181,17 +2193,38 @@ const attackUitPct =
     state.log.length > 0 ||
     state.attacks.length > 0;
 
-    const wedstrijdNietGestart = !wedstrijdGestart;
-    const wedstrijdOpPauze = wedstrijdGestart && !state.klokLoopt;
-
-    const showOverlay = wedstrijdNietGestart || wedstrijdOpPauze;
-
-    const overlayTitle = wedstrijdNietGestart
-      ? "Wedstrijd is nog niet gestart"
-      : "Wedstrijd staat op pauze";
-
-    const overlayButtonLabel = wedstrijdNietGestart ? "Start wedstrijd" : "Hervat wedstrijd";
-    
+    const wedstrijdNietGestart =
+    !wedstrijdGestart && !state.matchEnded;
+  
+  const wedstrijdAfgelopen = state.matchEnded;
+  
+  const wedstrijdOpPauze =
+    wedstrijdGestart &&
+    !state.klokLoopt &&
+    !wedstrijdAfgelopen;
+  
+  const showOverlay =
+    wedstrijdNietGestart ||
+    wedstrijdOpPauze ||
+    wedstrijdAfgelopen;
+  
+  const overlayTitle = wedstrijdAfgelopen
+    ? "Wedstrijd afgelopen"
+    : wedstrijdNietGestart
+    ? "Wedstrijd is nog niet gestart"
+    : "Wedstrijd staat op pauze";
+  
+  const overlayText = wedstrijdAfgelopen
+    ? `Eindstand: Korbis ${state.scoreThuis} - ${state.scoreUit} ${
+        opponentName || "Tegenstander"
+      }`
+    : wedstrijdNietGestart
+    ? "Druk op start om de timer te laten lopen en events te registreren."
+    : "Druk op hervatten om verder te gaan met de wedstrijd.";
+  
+  const overlayButtonLabel = wedstrijdNietGestart
+    ? "Start wedstrijd"
+    : "Hervat wedstrijd";    
     return (
       <div className="relative space-y-4">
     
@@ -2209,18 +2242,31 @@ const attackUitPct =
               </div>
     
               <div className="text-sm text-gray-600 mb-6">
-                {wedstrijdNietGestart
-                  ? "Druk op start om de timer te laten lopen en events te registreren."
-                  : "Druk op hervatten om verder te gaan met de wedstrijd."}
+                {overlayText}
               </div>
-    
-              <Button
-                variant="primary"
-                className="w-full text-xl py-4"
-                onClick={() => toggleKlok(true)}
-              >
-                {overlayButtonLabel}
-              </Button>
+
+              {!wedstrijdAfgelopen && (
+                <Button
+                  variant="primary"
+                  className="w-full text-xl py-4"
+                  onClick={() => toggleKlok(true)}
+                >
+                  {overlayButtonLabel}
+                </Button>
+              )}
+
+              {wedstrijdAfgelopen && (
+                <div className="space-y-3">
+                  <div className="text-lg font-semibold text-green-700">
+                    Wedstrijd is definitief afgesloten
+                  </div>
+
+                  <div className="text-sm text-gray-500">
+                    Je kunt nu de wedstrijdgegevens bekijken in Insights
+                    of exporteren naar Excel.
+                  </div>
+                </div>
+              )}
     
             </div>
           </div>
@@ -2245,7 +2291,11 @@ const attackUitPct =
             <div className="flex gap-2 items-center flex-wrap">
               {/* Start / Pauze */}
               {!state.klokLoopt ? (
-                <Button variant="primary" onClick={() => toggleKlok(true)}>
+                <Button
+                  variant="primary"
+                  disabled={state.matchEnded}
+                  onClick={() => toggleKlok(true)}
+                >
                   Start
                 </Button>
               ) : (
