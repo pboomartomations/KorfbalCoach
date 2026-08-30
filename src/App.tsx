@@ -383,11 +383,6 @@ export default function App() {
   const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
   const [vakActionPopup, setVakActionPopup] =
   useState<null | { vak: VakSide }>(null);
-  const [pendingFieldClick, setPendingFieldClick] = useState<null | {
-    vak: VakSide;
-    x: number;
-    y: number;
-  }>(null);
   const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const teamFileInputRef = useRef<HTMLInputElement | null>(null);
   type DatabaseSheets = {
@@ -2157,37 +2152,39 @@ const attackUitPct =
 
     const overlayButtonLabel = wedstrijdNietGestart ? "Start wedstrijd" : "Hervat wedstrijd";
     
-  return (
-    <div className="space-y-4">
-      {showOverlay && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* dim layer */}
-          <div className="absolute inset-0 bg-black/60" />
-
-          {/* card */}
-          <div className="relative z-10 w-full max-w-xl mx-4 rounded-2xl bg-white p-6 shadow-2xl text-center">
-            <div className="text-3xl font-extrabold mb-2">{overlayTitle}</div>
-            <div className="text-sm text-gray-600 mb-6">
-              {wedstrijdNietGestart
-                ? "Druk op start om de timer te laten lopen en events te registreren."
-                : "Druk op hervatten om verder te gaan met de wedstrijd."}
+    return (
+      <div className="relative space-y-4">
+    
+        {showOverlay && (
+          <div className="absolute inset-0 z-40 flex items-start justify-center pt-20 rounded-2xl overflow-hidden">
+    
+            {/* dim layer */}
+            <div className="absolute inset-0 bg-black/60" />
+    
+            {/* card */}
+            <div className="relative z-10 w-full max-w-xl mx-4 rounded-2xl bg-white p-6 shadow-2xl text-center">
+    
+              <div className="text-3xl font-extrabold mb-2">
+                {overlayTitle}
+              </div>
+    
+              <div className="text-sm text-gray-600 mb-6">
+                {wedstrijdNietGestart
+                  ? "Druk op start om de timer te laten lopen en events te registreren."
+                  : "Druk op hervatten om verder te gaan met de wedstrijd."}
+              </div>
+    
+              <Button
+                variant="primary"
+                className="w-full text-xl py-4"
+                onClick={() => toggleKlok(true)}
+              >
+                {overlayButtonLabel}
+              </Button>
+    
             </div>
-
-            <Button
-              variant="primary"
-              className="w-full text-xl py-4"
-              onClick={() => toggleKlok(true)}
-            >
-              {overlayButtonLabel}
-            </Button>
-
-            {/* optioneel: kleine knop om overlay weg te klikken zonder starten */}
-            <button className="mt-4 text-sm text-gray-500 underline" onClick={() => {}}>
-              Sluiten
-            </button> 
           </div>
-        </div>
-      )}
+        )}
       {/* Score + tijd + controls */}
       <div className="border rounded-2xl p-4">
         <div className="flex flex-col gap-4">
