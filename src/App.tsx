@@ -2236,7 +2236,7 @@ const attackUitPct =
               {!wedstrijdAfgelopen && (
                 <Button
                   variant="primary"
-                  className="w-full text-xl py-4"
+                  className="w-full text-3xl font-extrabold py-7 min-h-[88px] rounded-2xl"
                   onClick={() => toggleKlok(true)}
                 >
                   {overlayButtonLabel}
@@ -2260,8 +2260,18 @@ const attackUitPct =
           </div>
         )}
       {/* Score + tijd + controls */}
-      <div className="border rounded-2xl p-4">
+      <div
+        className={`border rounded-2xl p-4 ${
+          state.klokLoopt ? "cursor-pointer" : ""
+        }`}
+        onClick={() => {
+          if (state.klokLoopt && !state.matchEnded) {
+            toggleKlok(false);
+          }
+        }}
+      >
         <div className="flex flex-col gap-4">
+
           {/* Tijd + duur + start/pauze */}
           <div className="flex flex-wrap items-start gap-3 justify-between">
             {/* Tijd */}
@@ -2278,18 +2288,31 @@ const attackUitPct =
             {/* Knoppen + duur */}
             <div className="flex gap-2 items-center flex-wrap">
               {/* Start / Pauze */}
-              {!state.klokLoopt ? (
-                <Button
-                  variant="primary"
-                  disabled={state.matchEnded}
-                  onClick={() => toggleKlok(true)}
+              {state.klokLoopt && !state.matchEnded && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleKlok(false);
+                  }}
+                  aria-label="Pauze"
+                  title="Pauze"
+                  className="
+                    w-12 h-12
+                    rounded-xl
+                    bg-blue-600
+                    text-white
+                    flex items-center justify-center
+                    hover:bg-blue-700
+                    transition
+                    shadow-sm
+                  "
                 >
-                  Start
-                </Button>
-              ) : (
-                <Button variant="primary" onClick={() => toggleKlok(false)}>
-                  Pauze
-                </Button>
+                  <span className="flex gap-1">
+                    <span className="block w-1.5 h-5 bg-white rounded-sm" />
+                    <span className="block w-1.5 h-5 bg-white rounded-sm" />
+                  </span>
+                </button>
               )}
 
               <Button
