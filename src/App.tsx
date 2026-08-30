@@ -392,7 +392,11 @@ export default function App() {
   const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
   const [vakActionPopup, setVakActionPopup] =
   useState<null | { vak: VakSide }>(null);
-  const [stealPopup, setStealPopup] = useState<null | {}>(null);
+
+  const [reboundPopup, setReboundPopup] =
+    useState<null | {}>(null);
+
+const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const teamFileInputRef = useRef<HTMLInputElement | null>(null);
   type DatabaseSheets = {
     events: any[];
@@ -804,6 +808,39 @@ export default function App() {
     console.log("Actie:", actie);
   };
   
+  const logRebound = (spelerId?: string) => {
+    setState((s) => {
+      const halfMinuten = Number.isFinite(s.halfMinuten)
+        ? s.halfMinuten
+        : DEFAULT_STATE.halfMinuten;
+  
+      const totalSeconds = halfMinuten * 60;
+      const resterend = Math.max(totalSeconds - s.tijdSeconden, 0);
+      const minuut = Math.max(1, Math.ceil(s.tijdSeconden / 60));
+  
+      const { attackId, attackIndex } = getCurrentAttackInfo(s);
+  
+      const e: LogEvent = {
+        id: uid("ev"),
+        tijdSeconden: s.tijdSeconden,
+        vak: "aanvallend",
+        soort: "Rebound",
+        reden: spelerId ? "Rebound" : "Geen Rebound",
+        spelerId,
+        team: "thuis",
+        resterendSeconden: resterend,
+        wedstrijdMinuut: minuut,
+        type: "Rebound",
+        attackId,
+        attackIndex,
+      };
+  
+      return {
+        ...s,
+        log: [e, ...s.log],
+      };
+    });
+  };
 
   const logSchotOfRebound = (
     type: "Schot" | "Rebound",
@@ -1591,8 +1628,18 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
           }
           onClose={() => setVakActionPopup(null)}
           onComplete={(actie, uitkomst, spelerId) => {
-            handleVakActieLog(vakActionPopup.vak, actie, uitkomst, spelerId);
+            const vak = vakActionPopup.vak;
+
+            handleVakActieLog(vak, actie, uitkomst, spelerId);
             setVakActionPopup(null);
+
+            // Alleen na Mis of Korf in het aanvallende vak
+            if (
+              vak === "aanvallend" &&
+              (uitkomst === "Mis" || uitkomst === "Korf")
+            ) {
+              setReboundPopup({});
+            }
           }}
           onSteal={(spelerId) => {
             if (vakActionPopup.vak === "verdedigend") {
@@ -1606,7 +1653,16 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
           }}
         />
       )}
-
+      {reboundPopup && (
+        <ReboundModal
+          spelers={spelersAanval}
+          onClose={() => setReboundPopup(null)}
+          onSave={(spelerId) => {
+            logRebound(spelerId);
+            setReboundPopup(null);
+          }}
+        />
+      )}
       {stealPopup && (
         <StealModal
           spelers={spelersVerdediging}
@@ -3342,14 +3398,17 @@ function VakActionModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-        <div className="bg-white w-full max-w-3xl md:rounded-2xl md:m-6 p-4 md:p-6 space-y-6 max-h-[90vh] overflow-auto">
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="bg-white w-full max-w-3xl md:rounded-2xl md:m-6 p-4 md:p-6 space-y-6 max-h-[90vh] overflow-auto">
         {/* Titel + stappenindicator */}
         <div className="flex items-start justify-between gap-2">
           <div>
-            <div className="text-2xl font-bold">
-              Actie in {titelVak}
-            </div>
+            <div className="text-2xl font-bold">Actie in {titelVak}</div>
             <div className="text-sm text-gray-500 mt-1">
               Stap {step} van 3 –{" "}
               {step === 1
@@ -3373,39 +3432,39 @@ function VakActionModal({
             <div className="text-2xl font-bold text-center">Kies een actie</div>
 
             <div className="flex flex-col gap-4 w-full h-[70vh]">
-              {/* Vier basis-acties in 2x2 grid */}
               <div className="grid grid-cols-2 grid-rows-2 gap-4 flex-1">
-                {["Schot", "Doorloop", "Vrijebal", "Strafworp"].map((a) => {
-                  const selected = actie === a;
-                  const base =
-                    "w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 active:scale-95 transition";
+                {(["Schot", "Doorloop", "Vrijebal", "Strafworp"] as const).map(
+                  (a) => {
+                    const selected = actie === a;
+                    const base =
+                      "w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 active:scale-95 transition";
 
-                  const colorClasses =
-                    vak === "aanvallend"
-                      ? selected
-                        ? "bg-green-600 text-white border-green-700"
-                        : "bg-gray-100 hover:bg-gray-200 border-green-500"
-                      : selected
-                      ? "bg-red-600 text-white border-red-700"
-                      : "bg-gray-100 hover:bg-gray-200 border-red-500";
+                    const colorClasses =
+                      vak === "aanvallend"
+                        ? selected
+                          ? "bg-green-600 text-white border-green-700"
+                          : "bg-gray-100 hover:bg-gray-200 border-green-500"
+                        : selected
+                        ? "bg-red-600 text-white border-red-700"
+                        : "bg-gray-100 hover:bg-gray-200 border-red-500";
 
-                  return (
-                    <button
-                      key={a}
-                      className={`${base} ${colorClasses}`}
-                      onClick={() => {
-                        setStealFlow(false);
-                        setActie(a as any);
-                        setStep(2);
-                      }}
-                    >
-                      {a}
-                    </button>
-                  );
-                })}
+                    return (
+                      <button
+                        key={a}
+                        className={`${base} ${colorClasses}`}
+                        onClick={() => {
+                          setStealFlow(false);
+                          setActie(a);
+                          setStep(2);
+                        }}
+                      >
+                        {a}
+                      </button>
+                    );
+                  }
+                )}
               </div>
 
-              {/* Steal-knop onder de andere knoppen, over de volle breedte */}
               <button
                 className={`
                   w-full h-24
@@ -3435,17 +3494,47 @@ function VakActionModal({
 
         {/* Stap 2: Speler */}
         {step === 2 && (
-          <div className="w-full flex flex-col gap-6">
+          <div className="w-full flex flex-col gap-4 h-[70vh]">
             <div className="text-2xl font-bold text-center">Kies speler</div>
 
-            <div className="grid grid-cols-2 grid-rows-3 gap-4 w-full">
-              {/* Bovenste rij: 'Geen keuze' over volledige breedte */}
+            <div className="flex flex-col gap-4 flex-1 min-h-0">
+              <div className="grid grid-cols-2 grid-rows-2 gap-4 flex-1 min-h-0">
+                {spelers.slice(0, 4).map((p) => (
+                  <button
+                    key={p.id}
+                    className="
+                      w-full h-full
+                      text-3xl md:text-5xl
+                      font-extrabold
+                      rounded-2xl
+                      border-4
+                      bg-blue-50 border-blue-300
+                      hover:bg-blue-100
+                      active:scale-95
+                      transition
+                      flex items-center justify-center text-center px-2
+                    "
+                    onClick={() => {
+                      setSpeler(p.id);
+
+                      if (stealFlow) {
+                        onSteal(p.id);
+                        onClose();
+                      } else {
+                        setStep(3);
+                      }
+                    }}
+                  >
+                    {p.naam}
+                  </button>
+                ))}
+              </div>
+
               <button
                 className="
-                  col-span-2
-                  w-full h-full
-                  text-3xl md:text-4xl
-                  font-extrabold
+                  w-full h-20 shrink-0
+                  text-2xl
+                  font-bold
                   rounded-2xl
                   border-2
                   bg-gray-800 text-white border-gray-900
@@ -3453,117 +3542,50 @@ function VakActionModal({
                 "
                 onClick={() => {
                   setSpeler(undefined);
+
                   if (stealFlow) {
-                    // Steal zonder specifieke speler
                     onSteal(undefined);
                     onClose();
                   } else {
-                    setStep(3); // normaal: door naar uitkomst
+                    setStep(3);
                   }
                 }}
               >
                 Geen keuze
               </button>
-
-              {/* Daaronder max. 4 spelers (2 breed, 2 hoog) */}
-              {spelers.map((p) => (
-                <button
-                  key={p.id}
-                  className="
-                    w-full h-full
-                    text-2xl md:text-3xl
-                    font-bold
-                    rounded-2xl
-                    border-2
-                    bg-blue-50 border-blue-300
-                    hover:bg-blue-100
-                    active:scale-95
-                    transition
-                    flex items-center justify-center text-center px-2
-                  "
-                  onClick={() => {
-                    setSpeler(p.id);
-                    if (stealFlow) {
-                      // Steal mét speler → direct afhandelen
-                      onSteal(p.id);
-                      onClose();
-                    } else {
-                      setStep(3);
-                    }
-                  }}
-                >
-                  {p.naam}
-                </button>
-              ))}
             </div>
           </div>
         )}
-        
+
         {/* Stap 3: Uitkomst */}
         {step === 3 && (
           <div className="space-y-6 w-full">
             <div className="text-2xl font-bold text-center">Uitkomst</div>
 
-            <div className="grid grid-cols-2 grid-rows-2 gap-4 w-full">
-              {/* RAAK (groen) */}
+            <div className="grid grid-cols-2 grid-rows-2 gap-4 w-full h-[70vh]">
               <button
-                className="
-                  w-full h-full
-                  text-3xl md:text-5xl
-                  font-extrabold
-                  rounded-2xl
-                  border-2
-                  bg-green-500 text-white border-green-600
-                  active:scale-95 transition
-                "
+                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-green-500 text-white border-green-600 active:scale-95 transition"
                 onClick={() => handleFinish("Raak")}
               >
                 Raak
               </button>
 
-              {/* MIS (rood) */}
               <button
-                className="
-                  w-full h-full
-                  text-3xl md:text-5xl
-                  font-extrabold
-                  rounded-2xl
-                  border-2
-                  bg-red-500 text-white border-red-600
-                  active:scale-95 transition
-                "
+                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-red-500 text-white border-red-600 active:scale-95 transition"
                 onClick={() => handleFinish("Mis")}
               >
                 Mis
               </button>
 
-              {/* KORF (oranje) */}
               <button
-                className="
-                  w-full h-full
-                  text-3xl md:text-5xl
-                  font-extrabold
-                  rounded-2xl
-                  border-2
-                  bg-orange-400 text-white border-orange-500
-                  active:scale-95 transition
-                "
+                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-orange-400 text-white border-orange-500 active:scale-95 transition"
                 onClick={() => handleFinish("Korf")}
               >
                 Korf
               </button>
 
-              {/* VERDEDIGD (blauw/grijs) */}
               <button
-                className="
-                  w-full h-full
-                  text-3xl md:text-5xl
-                  font-extrabold
-                  rounded-2xl
-                  border-2
-                  bg-slate-500 text-white border-slate-600
-                  active:scale-95 transition
-                "
+                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-slate-500 text-white border-slate-600 active:scale-95 transition"
                 onClick={() => handleFinish("Verdedigd")}
               >
                 Verdedigd
@@ -3578,8 +3600,7 @@ function VakActionModal({
             {actie && <div>Actie: {actie}</div>}
             {speler && (
               <div>
-                Speler:{" "}
-                {spelers.find((p) => p.id === speler)?.naam || "?"}
+                Speler: {spelers.find((p) => p.id === speler)?.naam || "?"}
               </div>
             )}
             {uitkomst && <div>Uitkomst: {uitkomst}</div>}
@@ -3771,7 +3792,83 @@ function StealModal({
     </div>
   );
 }
+function ReboundModal({
+  spelers,
+  onClose,
+  onSave,
+}: {
+  spelers: Player[];
+  onClose: () => void;
+  onSave: (spelerId?: string) => void;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-3xl shadow-xl space-y-6">
 
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="text-2xl font-bold">
+              Rebound
+            </div>
+            <div className="text-sm text-gray-500 mt-1">
+              Wie pakte de rebound?
+            </div>
+          </div>
+
+          <button
+            className="text-sm text-gray-500 hover:text-gray-800"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-4 h-[70vh]">
+
+          {/* Vier spelers */}
+          <div className="grid grid-cols-2 grid-rows-2 gap-4 flex-1">
+            {spelers.map((p) => (
+              <button
+                key={p.id}
+                className="
+                  w-full h-full
+                  text-3xl md:text-5xl
+                  font-extrabold
+                  rounded-2xl
+                  border-4
+                  bg-green-50 border-green-500
+                  hover:bg-green-100
+                  active:scale-95
+                  transition
+                "
+                onClick={() => onSave(p.id)}
+              >
+                {p.naam}
+              </button>
+            ))}
+          </div>
+
+          {/* Geen rebound */}
+          <button
+            className="
+              w-full h-24
+              text-3xl md:text-4xl
+              font-extrabold
+              rounded-2xl
+              border-4
+              bg-red-500 text-white border-red-600
+              active:scale-95 transition
+            "
+            onClick={() => onSave(undefined)}
+          >
+            Geen rebound
+          </button>
+
+        </div>
+      </div>
+    </div>
+  );
+}
 function ShotReboundModal({
   type,
   spelers,
