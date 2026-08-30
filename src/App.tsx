@@ -1381,7 +1381,7 @@ const eindeWedstrijd = () => {
   });
 };
 
-const clearWedstrijd = () => {}
+const clearWedstrijd = () => {
   if (
     !confirm(
       "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren."
@@ -1389,6 +1389,7 @@ const clearWedstrijd = () => {}
   ) {
     return;
   }
+
   setState((s) => ({
     ...s,
 
@@ -1414,9 +1415,9 @@ const clearWedstrijd = () => {}
     aanvalLinks: DEFAULT_STATE.aanvalLinks,
     activeVak: "aanvallend",
 
-    // wedstrijd weer vrijgeven
     matchEnded: false,
   }));
+};
 
 // Afgeleide arrays voor modal
 const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
