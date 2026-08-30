@@ -3012,6 +3012,148 @@ function InsightsTab({
     return "#111827";
   };
 
+  type ShotZone = "Korte kans" | "Afstandsschot" | "Ver afstandsschot";
+
+  // De oranje zone in VeldLinks.jpg bestaat uit twee overlappende lobben.
+  // We rekenen met percentages, zodat de indeling onafhankelijk is van de
+  // schermgrootte waarop het veld wordt getoond.
+  //
+  // zoneDistance <= 1.0  -> binnen het oranje vlak
+  // zoneDistance <= 2.0  -> normale afstand
+  // zoneDistance > 2.0   -> verre afstand
+  const getShotZone = (ev: FieldEvent): ShotZone => {
+    const leftEllipse =
+      Math.pow((ev.x - 30.2) / 12.5, 2) +
+      Math.pow((ev.y - 50.0) / 13.0, 2);
+
+    const rightEllipse =
+      Math.pow((ev.x - 46.1) / 13.9, 2) +
+      Math.pow((ev.y - 50.0) / 13.0, 2);
+
+    const zoneDistance = Math.sqrt(Math.min(leftEllipse, rightEllipse));
+
+    if (zoneDistance <= 1) return "Korte kans";
+    if (zoneDistance <= 2) return "Afstandsschot";
+    return "Ver afstandsschot";
+  };
+
+  const SHOT_ZONES: ShotZone[] = [
+    "Korte kans",
+    "Afstandsschot",
+    "Ver afstandsschot",
+  ];
+
+  const shotZoneStats = SHOT_ZONES.map((zone) => {
+    const events = playerFieldMarkers.filter(
+      (ev) => ev.actie === "schot" && getShotZone(ev) === zone
+    );
+
+    const raak = events.filter((ev) => ev.resultaat === "raak").length;
+    const korfCount = events.filter((ev) => ev.resultaat === "korf").length;
+    const mis = events.filter((ev) => ev.resultaat === "mis").length;
+    const verdedigd = events.filter((ev) => ev.resultaat === "verdedigd").length;
+    const totaal = events.length;
+
+    return {
+      zone,
+      totaal,
+      raak,
+      korf: korfCount,
+      mis,
+      verdedigd,
+      scorePct: totaal > 0 ? (raak / totaal) * 100 : 0,
+      qualityPct: totaal > 0 ? ((raak + korfCount) / totaal) * 100 : 0,
+      defendedPct: totaal > 0 ? (verdedigd / totaal) * 100 : 0,
+    };
+  });
+
+  const positionedShotCount = shotZoneStats.reduce(
+    (sum, zone) => sum + zone.totaal,
+    0
+  );
+
+  const zoneStrengths: string[] = [];
+  const zoneAttentionPoints: string[] = [];
+
+  shotZoneStats.forEach((zone) => {
+    // Vanaf vier geregistreerde schoten in een zone doen we een uitspraak.
+    if (zone.totaal < 4) return;
+
+    const strongThreshold =
+      zone.zone === "Korte kans"
+        ? 50
+        : zone.zone === "Afstandsschot"
+        ? 35
+        : 25;
+
+    const weakThreshold =
+      zone.zone === "Korte kans"
+        ? 30
+        : zone.zone === "Afstandsschot"
+        ? 20
+        : 15;
+
+    if (zone.scorePct >= strongThreshold) {
+      zoneStrengths.push(
+        `Sterk in ${zone.zone.toLowerCase()}: ${zone.raak} uit ${zone.totaal} raak (${zone.scorePct.toFixed(0)}%).`
+      );
+    }
+
+    if (zone.scorePct < weakThreshold) {
+      if (zone.qualityPct >= 65) {
+        zoneAttentionPoints.push(
+          `${zone.zone}: ${zone.raak} uit ${zone.totaal} raak, maar ${zone.raak + zone.korf} van de ${zone.totaal} waren raak of korf (${zone.qualityPct.toFixed(0)}%). De richting is behoorlijk; de afwerking kan scherper.`
+        );
+      } else if (zone.defendedPct >= 30) {
+        zoneAttentionPoints.push(
+          `${zone.zone}: ${zone.verdedigd} van de ${zone.totaal} schoten werden verdedigd. Kijk naar kansselectie en het moment van schieten.`
+        );
+      } else {
+        zoneAttentionPoints.push(
+          `Aandachtspunt ${zone.zone.toLowerCase()}: ${zone.raak} uit ${zone.totaal} raak (${zone.scorePct.toFixed(0)}%) en ${zone.qualityPct.toFixed(0)}% raak of korf.`
+        );
+      }
+    } else if (zone.defendedPct >= 35) {
+      zoneAttentionPoints.push(
+        `${zone.zone}: ${zone.verdedigd} van de ${zone.totaal} pogingen werden verdedigd. Mogelijk worden deze kansen te vroeg of onder te veel druk genomen.`
+      );
+    }
+  });
+
+  if (positionedShotCount >= 6) {
+    const farZone = shotZoneStats.find(
+      (zone) => zone.zone === "Ver afstandsschot"
+    );
+    const farShare = farZone
+      ? (farZone.totaal / positionedShotCount) * 100
+      : 0;
+
+    if (
+      farZone &&
+      farZone.totaal >= 3 &&
+      farShare >= 40 &&
+      farZone.qualityPct < 50
+    ) {
+      zoneAttentionPoints.push(
+        `Kansselectie: ${farShare.toFixed(0)}% van de schoten met locatie kwam uit de verre zone, terwijl daar ${farZone.qualityPct.toFixed(0)}% raak of korf was. Overweeg vaker door te spelen naar een betere schotpositie.`
+      );
+    }
+
+    if (farShare <= 20 && scorePct >= 30) {
+      zoneStrengths.push(
+        `Gedoseerde kansselectie: slechts ${farShare.toFixed(0)}% van de schoten met locatie kwam uit de verre zone.`
+      );
+    }
+  }
+
+  // Zone-inzichten krijgen voorrang op de algemenere conclusies.
+  if (zoneStrengths.length > 0) {
+    strengths.unshift(...zoneStrengths);
+  }
+  if (zoneAttentionPoints.length > 0) {
+    attentionPoints.unshift(...zoneAttentionPoints);
+  }
+
   // Compact teamoverzicht blijft beschikbaar onderaan.
   const getTeamForEvent = (e: LogEvent): AttackTeam | undefined => {
     if (e.team === "thuis" || e.team === "uit") return e.team;
@@ -3297,6 +3439,58 @@ function InsightsTab({
         </div>
       </div>
 
+
+      <div className="border rounded-2xl overflow-hidden bg-white">
+        <div className="p-4 border-b">
+          <div className="text-lg font-bold">Schotzones</div>
+          <div className="text-sm text-gray-500">
+            Alleen gewone schoten met een gekoppelde veldpositie tellen mee.
+            Binnen het oranje vlak = korte kans, daarbuiten = afstandsschot,
+            en duidelijk verder weg = ver afstandsschot.
+          </div>
+        </div>
+
+        <div className="overflow-auto">
+          <table className="w-full text-sm min-w-[720px]">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-3">Zone</th>
+                <th className="text-right p-3">Pogingen</th>
+                <th className="text-right p-3">Raak</th>
+                <th className="text-right p-3">Korf</th>
+                <th className="text-right p-3">Mis</th>
+                <th className="text-right p-3">Verdedigd</th>
+                <th className="text-right p-3">Score %</th>
+                <th className="text-right p-3">Kwaliteit %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shotZoneStats.map((zone) => (
+                <tr key={zone.zone} className="border-t">
+                  <td className="p-3 font-semibold">{zone.zone}</td>
+                  <td className="p-3 text-right">{zone.totaal}</td>
+                  <td className="p-3 text-right">{zone.raak}</td>
+                  <td className="p-3 text-right">{zone.korf}</td>
+                  <td className="p-3 text-right">{zone.mis}</td>
+                  <td className="p-3 text-right">{zone.verdedigd}</td>
+                  <td className="p-3 text-right">
+                    {zone.totaal > 0 ? `${zone.scorePct.toFixed(0)}%` : "—"}
+                  </td>
+                  <td className="p-3 text-right">
+                    {zone.totaal > 0 ? `${zone.qualityPct.toFixed(0)}%` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="px-4 py-3 border-t bg-gray-50 text-xs text-gray-500">
+          {positionedShotCount} schotlocaties gekoppeld. Vanaf 4 pogingen in een zone
+          kan die zone automatisch als sterk punt of aandachtspunt worden benoemd.
+        </div>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="border rounded-2xl p-4 bg-white">
           <div className="text-lg font-bold mb-1">Reboundanalyse</div>
@@ -3394,6 +3588,14 @@ function InsightsTab({
                 <div><span className="inline-block w-3 h-3 rounded-full bg-pink-600 mr-2" />Doorloop</div>
                 <div><span className="inline-block w-3 h-3 rounded-full bg-purple-700 mr-2" />Strafworp</div>
                 <div><span className="inline-block w-3 h-3 rounded-full bg-amber-800 mr-2" />Vrijebal</div>
+              </div>
+            </div>
+            <div>
+              <div className="font-semibold mb-2">Schotafstand</div>
+              <div className="space-y-1 text-gray-600 text-xs">
+                <div><strong>Korte kans:</strong> binnen het oranje vlak</div>
+                <div><strong>Afstand:</strong> buiten het oranje vlak</div>
+                <div><strong>Ver:</strong> duidelijk buiten de normale schotzone</div>
               </div>
             </div>
             <div>
