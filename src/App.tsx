@@ -1314,7 +1314,7 @@ const exportToExcel = () => {
       wedstrijd_id: wedstrijdId,
       wedstrijd_naam: wedstrijdNaam,        // 👈 nieuw
       locatie: locatieLabel,
-      datum: new Date().toISOString(),
+      datum: new Date().toLocaleDateString("sv-SE"),
       tegenstander: uitTeamNaam,
       half_duur_minuten: Number.isFinite(state.halfMinuten)
         ? state.halfMinuten
@@ -1339,7 +1339,17 @@ const exportToExcel = () => {
   const allEvents = [...(dbSheets?.events ?? []), ...eventRows];
   const allAttacks = [...(dbSheets?.attacks ?? []), ...attackRows];
   const allWissels = [...(dbSheets?.wissels ?? []), ...wisselRows];
-  const allMatches = [...(dbSheets?.matches ?? []), ...matchSummaryRows];
+  const normalizeMatchRow = (m: any) => ({
+    wedstrijd_id: m.wedstrijd_id ?? "", wedstrijd_naam: m.wedstrijd_naam ?? "", locatie: m.locatie ?? "",
+    datum: m.datum ?? "", tegenstander: m.tegenstander ?? "", half_duur_minuten: m.half_duur_minuten ?? "",
+    score_korbis: m.score_korbis ?? "", score_tegenstander: m.score_tegenstander ?? "",
+    bezit_thuis_seconden: m.bezit_thuis_seconden ?? "", bezit_uit_seconden: m.bezit_uit_seconden ?? "",
+    bezit_thuis_pct: m.bezit_thuis_pct ?? "", bezit_uit_pct: m.bezit_uit_pct ?? "",
+    aanval_thuis_seconden: m.aanval_thuis_seconden ?? "", aanval_uit_seconden: m.aanval_uit_seconden ?? "",
+    aanval_thuis_pct: m.aanval_thuis_pct ?? "", aanval_uit_pct: m.aanval_uit_pct ?? "",
+    wedstrijd_afgesloten: m.wedstrijd_afgesloten ?? "",
+  });
+  const allMatches = [...(dbSheets?.matches ?? []).map(normalizeMatchRow), ...matchSummaryRows.map(normalizeMatchRow)];
 
   const eventsSheet = XLSX.utils.json_to_sheet(allEvents);
   const attacksSheet = XLSX.utils.json_to_sheet(allAttacks);
@@ -1581,6 +1591,7 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
           state={state}
           spelersMap={spelersMap}
           opponentName={state.opponentName}
+          dbSheets={dbSheets}
         />
       )}
 
@@ -2833,15 +2844,18 @@ function InsightsTab({
   state,
   spelersMap,
   opponentName,
+  dbSheets,
 }: {
   state: AppState;
   spelersMap: Map<string, Player>;
   opponentName: string;
+  dbSheets: { events: any[]; attacks: any[]; wissels: any[]; matches: any[] } | null;
 }) {
   const ACTIONS = ["Schot", "Doorloop", "Vrijebal", "Strafworp"] as const;
   type ActionKind = (typeof ACTIONS)[number];
 
   const [analysisMode, setAnalysisMode] = useState<"speler" | "team">("speler");
+  const [insightMatchId, setInsightMatchId] = useState<string>("__live__");
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>(
     () => state.spelers[0]?.id ?? ""
@@ -2857,6 +2871,49 @@ function InsightsTab({
       setSelectedPlayerId(state.spelers[0].id);
     }
   }, [state.spelers, selectedPlayerId]);
+
+  const databaseMatches = dbSheets?.matches ?? [];
+  const matchSelector = (
+    <label className="flex flex-col gap-1 min-w-[260px]">
+      <span className="text-xs font-semibold text-gray-500">Wedstrijd</span>
+      <select value={insightMatchId} onChange={(e) => setInsightMatchId(e.target.value)} className="border rounded-xl px-3 py-2 bg-white text-sm">
+        <option value="__live__">Huidige / live wedstrijd</option>
+        {databaseMatches.length > 0 && <option value="__all__">Alle geïmporteerde wedstrijden</option>}
+        {databaseMatches.map((m: any, i: number) => <option key={String(m.wedstrijd_id ?? i)} value={String(m.wedstrijd_id ?? i)}>{String(m.datum ?? "").slice(0,10)} · {m.wedstrijd_naam || m.tegenstander || `Wedstrijd ${i+1}`} · {m.score_korbis ?? "?"}-{m.score_tegenstander ?? "?"}</option>)}
+      </select>
+    </label>
+  );
+
+  if (insightMatchId !== "__live__") {
+    const selectedMatches = insightMatchId === "__all__" ? databaseMatches : databaseMatches.filter((m:any) => String(m.wedstrijd_id) === insightMatchId);
+    const ids = new Set(selectedMatches.map((m:any) => String(m.wedstrijd_id)));
+    const events = (dbSheets?.events ?? []).filter((e:any) => ids.has(String(e.wedstrijd_id)));
+    const num = (v:any) => Number.isFinite(Number(v)) ? Number(v) : 0;
+    const isKorbis = (e:any) => String(e.team ?? "").trim().toLowerCase() === "korbis";
+    const isAttempt = (e:any) => ["Schot","Doorloop","Vrijebal","Strafworp"].includes(String(e.actie ?? "")) && ["Raak","Mis","Korf","Verdedigd"].includes(String(e.uitkomst ?? ""));
+    const own = events.filter((e:any) => isKorbis(e) && isAttempt(e));
+    const opp = events.filter((e:any) => !isKorbis(e) && isAttempt(e));
+    const goals = own.filter((e:any) => e.uitkomst === "Raak").length;
+    const korf = own.filter((e:any) => e.uitkomst === "Korf").length;
+    const oppGoals = opp.filter((e:any) => e.uitkomst === "Raak").length;
+    const rebounds = events.filter((e:any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Rebound").length;
+    const noRebounds = events.filter((e:any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Geen Rebound").length;
+    const scorePct = own.length ? goals / own.length * 100 : 0;
+    const qualityPct = own.length ? (goals + korf) / own.length * 100 : 0;
+    const reboundPct = rebounds + noRebounds ? rebounds / (rebounds + noRebounds) * 100 : 0;
+    const oppPct = opp.length ? oppGoals / opp.length * 100 : 0;
+    const names = Array.from(new Set(events.filter((e:any) => isKorbis(e) && e.spelerNaam).map((e:any) => String(e.spelerNaam)))).sort((a,b)=>a.localeCompare(b));
+    const players = names.map(name => { const pe=events.filter((e:any)=>isKorbis(e)&&String(e.spelerNaam)===name); const pa=pe.filter(isAttempt); const pg=pa.filter((e:any)=>e.uitkomst==="Raak").length; const pk=pa.filter((e:any)=>e.uitkomst==="Korf").length; return {name, attempts:pa.length, goals:pg, score:pa.length?pg/pa.length*100:0, quality:pa.length?(pg+pk)/pa.length*100:0, rebounds:pe.filter((e:any)=>e.actie==="Rebound"&&e.reden==="Rebound").length}; });
+    const trend = databaseMatches.map((m:any) => { const me=(dbSheets?.events??[]).filter((e:any)=>String(e.wedstrijd_id)===String(m.wedstrijd_id)); const ma=me.filter((e:any)=>isKorbis(e)&&isAttempt(e)); const mg=ma.filter((e:any)=>e.uitkomst==="Raak").length; const mr=me.filter((e:any)=>isKorbis(e)&&e.actie==="Rebound"&&e.reden==="Rebound").length; const mn=me.filter((e:any)=>isKorbis(e)&&e.actie==="Rebound"&&e.reden==="Geen Rebound").length; return {id:String(m.wedstrijd_id), label:String(m.datum??"").slice(0,10)||String(m.wedstrijd_naam??""), score:ma.length?mg/ma.length*100:0, rebounds:mr, reboundPct:mr+mn?mr/(mr+mn)*100:0, attack:num(m.aanval_thuis_pct), possession:num(m.bezit_thuis_pct), goals:num(m.score_korbis), against:num(m.score_tegenstander)}; });
+    const Trend = ({title, values, suffix=""}:{title:string;values:number[];suffix?:string}) => { const w=500,h=130,p=15,max=Math.max(...values,1),min=Math.min(...values,0),span=Math.max(max-min,1); const pts=values.map((v,i)=>`${values.length===1?w/2:p+i/(values.length-1)*(w-2*p)},${h-p-(v-min)/span*(h-2*p)}`).join(" "); return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{values.length?`Laatste: ${values[values.length-1].toFixed(1)}${suffix}`:"Geen data"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[130px]"><line x1={p} y1={h-p} x2={w-p} y2={h-p} stroke="#e5e7eb"/><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="3" strokeLinejoin="round"/></svg></div> };
+    const all = insightMatchId === "__all__";
+    return <div className="space-y-6">
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4"><div><h2 className="text-2xl font-bold">{all?"Insights over alle wedstrijden":"Wedstrijd Insights"}</h2><p className="text-sm text-gray-500">Data uit de geladen Excel-database.</p></div>{matchSelector}</div>
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">{[["Wedstrijden",selectedMatches.length],["Schot %",own.length?`${scorePct.toFixed(1)}%`:"—"],["Schotkwaliteit",own.length?`${qualityPct.toFixed(1)}%`:"—"],["Rebound %",rebounds+noRebounds?`${reboundPct.toFixed(0)}%`:"—"],["Tegenstander schot %",opp.length?`${oppPct.toFixed(1)}%`:"—"]].map(([l,v])=><div key={String(l)} className="border rounded-2xl p-4 bg-white"><div className="text-xs font-semibold text-gray-500">{l}</div><div className="text-3xl font-extrabold mt-1">{v}</div></div>)}</div>
+      {all && <><div><h3 className="text-xl font-bold">Ontwikkeling team</h3><p className="text-sm text-gray-500">Volg groei of terugval van wedstrijd tot wedstrijd.</p></div><div className="grid gap-4 lg:grid-cols-2"><Trend title="Schotpercentage" values={trend.map(m=>m.score)} suffix="%"/><Trend title="Gewonnen rebounds" values={trend.map(m=>m.rebounds)}/><Trend title="Reboundpercentage" values={trend.map(m=>m.reboundPct)} suffix="%"/><Trend title="Aanvalstijd Korbis" values={trend.map(m=>m.attack)} suffix="%"/><Trend title="Balbezit Korbis" values={trend.map(m=>m.possession)} suffix="%"/><Trend title="Doelpunten" values={trend.map(m=>m.goals)}/></div><div className="border rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b font-bold">Wedstrijdontwikkeling</div><div className="overflow-auto"><table className="w-full text-sm min-w-[800px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Wedstrijd</th><th className="text-right p-3">Uitslag</th><th className="text-right p-3">Schot %</th><th className="text-right p-3">Rebounds</th><th className="text-right p-3">Rebound %</th><th className="text-right p-3">Aanvalstijd %</th><th className="text-right p-3">Balbezit %</th></tr></thead><tbody>{trend.map(m=><tr key={m.id} className="border-t"><td className="p-3">{m.label}</td><td className="p-3 text-right">{m.goals}-{m.against}</td><td className="p-3 text-right">{m.score.toFixed(1)}%</td><td className="p-3 text-right">{m.rebounds}</td><td className="p-3 text-right">{m.reboundPct.toFixed(0)}%</td><td className="p-3 text-right">{m.attack.toFixed(1)}%</td><td className="p-3 text-right">{m.possession.toFixed(1)}%</td></tr>)}</tbody></table></div></div></>}
+      <div className="border rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b"><div className="text-lg font-bold">Spelers</div><div className="text-sm text-gray-500">{all?"Totaal over alle gekozen wedstrijden.":"Prestatie in deze wedstrijd."}</div></div><div className="overflow-auto"><table className="w-full text-sm min-w-[700px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Speler</th><th className="text-right p-3">Pogingen</th><th className="text-right p-3">Goals</th><th className="text-right p-3">Schot %</th><th className="text-right p-3">Kwaliteit %</th><th className="text-right p-3">Rebounds</th></tr></thead><tbody>{players.map(p=><tr key={p.name} className="border-t"><td className="p-3 font-semibold">{p.name}</td><td className="p-3 text-right">{p.attempts}</td><td className="p-3 text-right">{p.goals}</td><td className="p-3 text-right">{p.attempts?`${p.score.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{p.attempts?`${p.quality.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{p.rebounds}</td></tr>)}</tbody></table></div></div>
+    </div>;
+  }
 
   const selectedPlayer = selectedPlayerId
     ? spelersMap.get(selectedPlayerId)
@@ -3605,7 +3662,7 @@ function InsightsTab({
               Coachingsgerichte analyse van Korbis tegen {opponentName || "de tegenstander"}.
             </p>
           </div>
-          {modeButtons}
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-end">{matchSelector}{modeButtons}</div>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -3962,6 +4019,7 @@ function InsightsTab({
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+          {matchSelector}
           {modeButtons}
           <label className="flex flex-col gap-1">
             <span className="text-xs font-semibold text-gray-500">Speler</span>
@@ -5268,7 +5326,6 @@ function HitMissBarChart({
           const raakHeight = raak > 0 ? Math.max(15, raakPerc) : 0;
           const misHeight = mis > 0 ? Math.max(15, misPerc) : 0;
 
-          
           return (
             <div key={a}>
               <div className="text-xs mb-1 font-medium">{a}</div>
@@ -5285,6 +5342,7 @@ function HitMissBarChart({
                     Raak<br />({raak})
                   </div>
                 </div>
+
                 {/* Mis (incl. korf) */}
                 <div className="flex-1 flex flex-col items-center justify-end h-full">
                   <div
@@ -5314,4 +5372,3 @@ function Avatar({ url, naam }: { url?: string; naam: string }) {
     <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-sm font-semibold">{init}</div>
   );
 }
-
