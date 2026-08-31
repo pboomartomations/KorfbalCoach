@@ -165,6 +165,76 @@ type TeamFileV1 = {
   spelers: Player[];
 };
 
+type DatabaseSheetsData = {
+  events: any[];
+  attacks: any[];
+  wissels: any[];
+  matches: any[];
+  spelers?: any[];
+  team?: any[];
+  vakindeling?: any[];
+  instellingen?: any[];
+  databaseInfo?: any[];
+};
+
+type DatabaseSheets = DatabaseSheetsData | null;
+
+const DATABASE_VERSION = 2;
+const APP_DATABASE_LABEL = "fase-6";
+const IDB_NAME = "korfbal-coach-db";
+const IDB_STORE = "appdata";
+const IDB_KEY = "season-database";
+
+function openCoachDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(IDB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveDatabaseToBrowser(data: DatabaseSheetsData | null) {
+  if (!data || typeof indexedDB === "undefined") return;
+  const db = await openCoachDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(data, IDB_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+async function loadDatabaseFromBrowser(): Promise<DatabaseSheetsData | null> {
+  if (typeof indexedDB === "undefined") return null;
+  const db = await openCoachDb();
+  const value = await new Promise<DatabaseSheetsData | null>((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const request = tx.objectStore(IDB_STORE).get(IDB_KEY);
+    request.onsuccess = () => resolve((request.result as DatabaseSheetsData | undefined) ?? null);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return value;
+}
+
+async function clearDatabaseFromBrowser() {
+  if (typeof indexedDB === "undefined") return;
+  const db = await openCoachDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(IDB_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
 
 type MatchType = "Competitie" | "Oefenwedstrijd" | "Toernooi";
 
@@ -483,16 +553,29 @@ export default function App() {
 
 const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const teamFileInputRef = useRef<HTMLInputElement | null>(null);
-  type DatabaseSheets = {
-    events: any[];
-    attacks: any[];
-    wissels: any[];
-    matches: any[];
-  } | null;
-  
   const [dbSheets, setDbSheets] = useState<DatabaseSheets>(null);
+  const [databaseReady, setDatabaseReady] = useState(false);
   
   const dbFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Seizoensdatabase uit IndexedDB herstellen en daarna automatisch blijven opslaan.
+  useEffect(() => {
+    let mounted = true;
+    loadDatabaseFromBrowser()
+      .then((saved) => {
+        if (mounted && saved) setDbSheets(saved);
+      })
+      .catch((err) => console.warn("Kon browserdatabase niet laden", err))
+      .finally(() => { if (mounted) setDatabaseReady(true); });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!databaseReady || !dbSheets) return;
+    saveDatabaseToBrowser(dbSheets).catch((err) =>
+      console.warn("Kon browserdatabase niet opslaan", err)
+    );
+  }, [dbSheets, databaseReady]);
 
   // Persist
   // Timer (intern: op-tellen; UI toont resterend) + balbezit
@@ -1154,33 +1237,110 @@ const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     try {
       const data = new Uint8Array(event.target?.result as ArrayBuffer);
       const wb = XLSX.read(data, { type: "array" });
+      const rows = (name: string) =>
+        wb.Sheets[name] ? (XLSX.utils.sheet_to_json(wb.Sheets[name]) as any[]) : [];
 
-      const eventsSheet = wb.Sheets["Events"];
-      const attacksSheet = wb.Sheets["Attacks"];
-      const wisselSheet = wb.Sheets["Wissels"];
-      const matchSheet = wb.Sheets["Wedstrijden"];
+      const imported: DatabaseSheetsData = {
+        events: rows("Events"),
+        attacks: rows("Attacks"),
+        wissels: rows("Wissels"),
+        matches: rows("Wedstrijden"),
+        spelers: rows("Spelers"),
+        team: rows("Team"),
+        vakindeling: rows("Vakindeling"),
+        instellingen: rows("Instellingen"),
+        databaseInfo: rows("DatabaseInfo"),
+      };
 
-      const events = eventsSheet
-        ? XLSX.utils.sheet_to_json(eventsSheet)
-        : [];
-      const attacks = attacksSheet
-        ? XLSX.utils.sheet_to_json(attacksSheet)
-        : [];
-      const wissels = wisselSheet
-        ? XLSX.utils.sheet_to_json(wisselSheet)
-        : [];
-      const matches = matchSheet
-        ? XLSX.utils.sheet_to_json(matchSheet)
+      const info = imported.databaseInfo?.[0] ?? {};
+      const settings = imported.instellingen?.[0] ?? {};
+      const hasFullBackup = (imported.spelers?.length ?? 0) > 0;
+      const importedPlayers: Player[] = hasFullBackup
+        ? (imported.spelers ?? []).map<Player>((p: any) => ({
+            id: String(p.speler_id ?? p.id ?? ""),
+            naam: String(p.naam ?? p.spelerNaam ?? ""),
+            geslacht: p.geslacht === "Heer" ? "Heer" : "Dame",
+            status: p.status === "Gast" ? "Gast" : "Basisspeler",
+            foto: typeof p.foto === "string" && p.foto ? p.foto : undefined,
+          })).filter((p) => Boolean(p.id && p.naam))
         : [];
 
-      setDbSheets({
-        events,
-        attacks,
-        wissels,
-        matches,
+      const vak1Rows = (imported.vakindeling ?? [])
+        .filter((r: any) => Number(r.vak_id) === 1)
+        .sort((a: any, b: any) => Number(a.positie ?? 0) - Number(b.positie ?? 0));
+      const vak2Rows = (imported.vakindeling ?? [])
+        .filter((r: any) => Number(r.vak_id) === 2)
+        .sort((a: any, b: any) => Number(a.positie ?? 0) - Number(b.positie ?? 0));
+      const toVak = (vakRows: any[]) => Array.from({ length: 4 }, (_, i) => {
+        const row = vakRows.find((r: any) => Number(r.positie) === i + 1) ?? vakRows[i];
+        const id = row?.speler_id ?? row?.spelerId ?? "";
+        return id ? String(id) : null;
       });
 
-      alert("Excel database geladen ✅");
+      const restoredVak1 = toVak(vak1Rows);
+      const restoredVak2 = toVak(vak2Rows);
+      const restoredVak1Aanvallend =
+        settings.vak1_aanvallend === false || String(settings.vak1_aanvallend).toLowerCase() === "nee"
+          ? false
+          : true;
+      const seasonOptionsFromFile = (() => {
+        try {
+          const parsed = JSON.parse(String(settings.seizoen_opties_json ?? "[]"));
+          return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string" && x.trim()) : [];
+        } catch { return []; }
+      })();
+
+      setDbSheets(imported);
+
+      if (hasFullBackup) {
+        setState((prev) => ({
+          ...prev,
+          spelers: importedPlayers,
+          aanval: restoredVak1Aanvallend ? restoredVak1 : restoredVak2,
+          verdediging: restoredVak1Aanvallend ? restoredVak2 : restoredVak1,
+          vak1Aanvallend: restoredVak1Aanvallend,
+          halfMinuten: Number(settings.half_duur_minuten) || prev.halfMinuten,
+          autoVakWisselNa2:
+            settings.auto_vakwissel_na_2 === true || String(settings.auto_vakwissel_na_2).toLowerCase() === "ja",
+          aanvalLinks:
+            settings.aanval_links === false || String(settings.aanval_links).toLowerCase() === "nee" ? false : true,
+          season: String(settings.actief_seizoen ?? info.actief_seizoen ?? prev.season),
+          seasonOptions: Array.from(new Set([
+            ...prev.seasonOptions,
+            ...seasonOptionsFromFile,
+            String(settings.actief_seizoen ?? info.actief_seizoen ?? prev.season),
+          ].filter(Boolean))),
+          matchType: (["Competitie", "Oefenwedstrijd", "Toernooi"].includes(String(settings.standaard_wedstrijdtype))
+            ? String(settings.standaard_wedstrijdtype)
+            : prev.matchType) as MatchType,
+          // Een import herstelt de database/configuratie, niet een half gespeelde wedstrijd.
+          scoreThuis: 0,
+          scoreUit: 0,
+          tijdSeconden: 0,
+          klokLoopt: false,
+          log: [],
+          possessionOwner: null,
+          possessionThuisSeconden: 0,
+          possessionUitSeconden: 0,
+          speelSeconden: {},
+          goalsSinceLastSwitch: 0,
+          currentHalf: 1,
+          activeVak: "aanvallend",
+          attacks: [],
+          currentAttackId: null,
+          fieldEvents: [],
+          markerGroup: 0,
+          opponentName: "",
+          matchEnded: false,
+        }));
+      }
+
+      const count = imported.matches.length;
+      alert(
+        hasFullBackup
+          ? `Volledige back-up hersteld ✅\n${count} wedstrijd${count === 1 ? "" : "en"}, spelers, vakindeling en instellingen zijn geladen.`
+          : `Excel database geladen ✅\n${count} wedstrijd${count === 1 ? "" : "en"}. Dit is een oudere database zonder teamconfiguratie.`
+      );
     } catch (err) {
       console.error(err);
       alert("Kon dit Excel-bestand niet inlezen 😅");
@@ -1198,11 +1358,22 @@ const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
 
 
 const exportToExcel = () => {
-  // Uniek ID voor deze export / wedstrijd
-  const wedstrijdId = `WED-${new Date()
-    .toISOString()
-    .replace(/[-:.TZ]/g, "")
-    .slice(0, 14)}`;
+  // Stabiel wedstrijd-ID: opnieuw exporteren vervangt dezelfde wedstrijd i.p.v. dupliceren.
+  const exportDate = new Date().toLocaleDateString("sv-SE");
+  const opponentSlug = (state.opponentName || "tegenstander")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "tegenstander";
+  const wedstrijdId = `WED-${exportDate}-${state.homeAway}-${opponentSlug}`;
+
+  const alreadyExists = (dbSheets?.matches ?? []).some(
+    (m: any) => String(m.wedstrijd_id ?? "") === wedstrijdId
+  );
+  if (alreadyExists && !confirm("Deze wedstrijd staat al in de database. Bestaande versie vervangen?")) {
+    return;
+  }
 
   // 🔹 Gemeenschappelijke velden voor naamgeving
   const thuisTeamNaam = "Korbis";
@@ -1469,7 +1640,7 @@ const exportToExcel = () => {
       locatie: locatieLabel,
       seizoen: state.season,
       wedstrijdtype: state.matchType,
-      datum: new Date().toLocaleDateString("sv-SE"),
+      datum: exportDate,
       tegenstander: uitTeamNaam,
       half_duur_minuten: Number.isFinite(state.halfMinuten)
         ? state.halfMinuten
@@ -1499,9 +1670,11 @@ const exportToExcel = () => {
   ];
 
   // ---------- 5) MERGE MET BESTAANDE DATABASE (dbSheets) ----------
-  const allEvents = [...(dbSheets?.events ?? []), ...eventRows];
-  const allAttacks = [...(dbSheets?.attacks ?? []), ...attackRows];
-  const allWissels = [...(dbSheets?.wissels ?? []), ...wisselRows];
+  // Zelfde wedstrijd-ID wordt eerst verwijderd; zo blijft iedere wedstrijd exact één keer bestaan.
+  const keepOtherMatch = (row: any) => String(row.wedstrijd_id ?? "") !== wedstrijdId;
+  const allEvents = [...(dbSheets?.events ?? []).filter(keepOtherMatch), ...eventRows];
+  const allAttacks = [...(dbSheets?.attacks ?? []).filter(keepOtherMatch), ...attackRows];
+  const allWissels = [...(dbSheets?.wissels ?? []).filter(keepOtherMatch), ...wisselRows];
   const normalizeMatchRow = (m: any) => ({
     wedstrijd_id: m.wedstrijd_id ?? "", wedstrijd_naam: m.wedstrijd_naam ?? "", locatie: m.locatie ?? "",
     seizoen: m.seizoen ?? "", wedstrijdtype: m.wedstrijdtype ?? "",
@@ -1514,22 +1687,94 @@ const exportToExcel = () => {
     speeltijd_spelers_json: m.speeltijd_spelers_json ?? "",
     wedstrijd_afgesloten: m.wedstrijd_afgesloten ?? "",
   });
-  const allMatches = [...(dbSheets?.matches ?? []).map(normalizeMatchRow), ...matchSummaryRows.map(normalizeMatchRow)];
+  const allMatches = [
+    ...(dbSheets?.matches ?? []).filter(keepOtherMatch).map(normalizeMatchRow),
+    ...matchSummaryRows.map(normalizeMatchRow),
+  ];
+
+  // ---------- 6) VOLLEDIGE APP-BACK-UP ----------
+  const spelerRows = state.spelers.map((p) => ({
+    speler_id: p.id,
+    naam: p.naam,
+    geslacht: p.geslacht,
+    status: p.status,
+    foto: p.foto ?? "",
+  }));
+
+  const vak1Ids = state.vak1Aanvallend ? state.aanval : state.verdediging;
+  const vak2Ids = state.vak1Aanvallend ? state.verdediging : state.aanval;
+  const vakRows = [
+    ...vak1Ids.map((id, index) => ({
+      vak_id: 1,
+      positie: index + 1,
+      speler_id: id ?? "",
+      speler_naam: id ? spelersMap.get(id)?.naam ?? "" : "",
+    })),
+    ...vak2Ids.map((id, index) => ({
+      vak_id: 2,
+      positie: index + 1,
+      speler_id: id ?? "",
+      speler_naam: id ? spelersMap.get(id)?.naam ?? "" : "",
+    })),
+  ];
+
+  const teamRows = [{
+    team_naam: "Korbis",
+    actief_seizoen: state.season,
+    aantal_spelers: state.spelers.length,
+  }];
+
+  const instellingenRows = [{
+    half_duur_minuten: state.halfMinuten,
+    auto_vakwissel_na_2: state.autoVakWisselNa2 ? "ja" : "nee",
+    aanval_links: state.aanvalLinks ? "ja" : "nee",
+    vak1_aanvallend: state.vak1Aanvallend ? "ja" : "nee",
+    actief_seizoen: state.season,
+    seizoen_opties_json: JSON.stringify(state.seasonOptions),
+    standaard_wedstrijdtype: state.matchType,
+  }];
+
+  const sortedMatchesForInfo = allMatches.slice().sort((a: any, b: any) =>
+    String(a.datum ?? "").localeCompare(String(b.datum ?? ""))
+  );
+  const databaseInfoRows = [{
+    database_versie: DATABASE_VERSION,
+    app_versie: APP_DATABASE_LABEL,
+    export_datum: new Date().toISOString(),
+    actief_seizoen: state.season,
+    aantal_wedstrijden: allMatches.length,
+    laatste_wedstrijd_datum: sortedMatchesForInfo.at(-1)?.datum ?? "",
+  }];
+
+  const nextDatabase: DatabaseSheetsData = {
+    events: allEvents, attacks: allAttacks, wissels: allWissels, matches: allMatches,
+    spelers: spelerRows, team: teamRows, vakindeling: vakRows,
+    instellingen: instellingenRows, databaseInfo: databaseInfoRows,
+  };
+  setDbSheets(nextDatabase);
 
   const eventsSheet = XLSX.utils.json_to_sheet(allEvents);
   const attacksSheet = XLSX.utils.json_to_sheet(allAttacks);
   const wisselSheet = XLSX.utils.json_to_sheet(allWissels);
   const matchSheet = XLSX.utils.json_to_sheet(allMatches);
+  const spelersSheet = XLSX.utils.json_to_sheet(spelerRows);
+  const teamSheet = XLSX.utils.json_to_sheet(teamRows);
+  const vakSheet = XLSX.utils.json_to_sheet(vakRows);
+  const instellingenSheet = XLSX.utils.json_to_sheet(instellingenRows);
+  const infoSheet = XLSX.utils.json_to_sheet(databaseInfoRows);
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, eventsSheet, "Events");
   XLSX.utils.book_append_sheet(wb, attacksSheet, "Attacks");
   XLSX.utils.book_append_sheet(wb, wisselSheet, "Wissels");
   XLSX.utils.book_append_sheet(wb, matchSheet, "Wedstrijden");
+  XLSX.utils.book_append_sheet(wb, spelersSheet, "Spelers");
+  XLSX.utils.book_append_sheet(wb, teamSheet, "Team");
+  XLSX.utils.book_append_sheet(wb, vakSheet, "Vakindeling");
+  XLSX.utils.book_append_sheet(wb, instellingenSheet, "Instellingen");
+  XLSX.utils.book_append_sheet(wb, infoSheet, "DatabaseInfo");
 
-  const filename = `korfbal-database-${new Date()
-    .toISOString()
-    .slice(0, 10)}.xlsx`;
+  const filename = `korfbal-database-${state.season.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${exportDate}.xlsx`;
 
   XLSX.writeFile(wb, filename);
 };
@@ -1538,6 +1783,8 @@ const exportToExcel = () => {
 const resetAlles = () => {
   if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  setDbSheets(null);
+  clearDatabaseFromBrowser().catch((err) => console.warn("Kon browserdatabase niet wissen", err));
   setState({ 
     ...DEFAULT_STATE,
     attacks: [],
@@ -1622,6 +1869,8 @@ const clearWedstrijd = () => {
 // Afgeleide arrays voor modal
 const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
 const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
+const databaseMatches = dbSheets?.matches ?? [];
+const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>String(a.datum??"").localeCompare(String(b.datum??""))).at(-1);
 
 
   //////////////////////////////////////////////////////////////////////////////
@@ -1682,6 +1931,12 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
               Reset alles
             </Button>
           </div>
+        </div>
+        <div className="mt-2 text-xs text-gray-500 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span className="font-semibold text-gray-700">Database: {state.season}</span>
+          <span>{databaseMatches.length} wedstrijd{databaseMatches.length === 1 ? "" : "en"} opgeslagen</span>
+          {latestDatabaseMatch && <span>Laatste: {String(latestDatabaseMatch.datum ?? "").slice(0,10)}{latestDatabaseMatch.tegenstander ? ` · ${latestDatabaseMatch.tegenstander}` : ""}</span>}
+          <span className="text-gray-400">{databaseReady ? "Browserdatabase actief" : "Browserdatabase laden…"}</span>
         </div>
       </header>
 
@@ -3800,6 +4055,8 @@ function InsightsTab({
       return {
         id: matchId,
         label: String(m.datum ?? "").slice(0, 10) || String(m.wedstrijd_naam ?? ""),
+        opponent: String(m.tegenstander ?? ""),
+        matchNumber: matchIndex + 1,
         axisLabel: formatAxisDate(m.datum, matchIndex),
         attempts: attempts.length,
         goals,
@@ -3927,7 +4184,7 @@ function InsightsTab({
 
           <div className="border rounded-2xl overflow-hidden bg-white">
             <div className="p-4 border-b"><div className="text-lg font-bold">Wedstrijdontwikkeling {selectedHistoryPlayer}</div><div className="text-sm text-gray-500">Percentages met weinig pogingen kunnen sterk schommelen; daarom tonen we het aantal pogingen er altijd naast.</div></div>
-            <div className="overflow-auto"><table className="w-full text-sm min-w-[820px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Wedstrijd</th><th className="text-right p-3">Kansen</th><th className="text-right p-3">Teamgem.</th><th className="text-right p-3">Goals</th><th className="text-right p-3">% raak</th><th className="text-right p-3">Team %</th><th className="text-right p-3">% raak of korf</th><th className="text-right p-3">Team %</th><th className="text-right p-3">Rebounds</th><th className="text-right p-3">Teamgem.</th><th className="text-right p-3">Verdedigd %</th><th className="text-right p-3">Team %</th><th className="text-right p-3">Minuten</th></tr></thead><tbody>{playerTrend.map((row) => <tr key={row.id} className="border-t"><td className="p-3">{row.label}</td><td className={`p-3 text-right ${metricTone(row.attempts,row.teamAttemptsAvg)}`}>{row.attempts}</td><td className="p-3 text-right text-gray-500">{row.teamAttemptsAvg.toFixed(1)}</td><td className="p-3 text-right">{row.goals}</td><td className={`p-3 text-right ${metricTone(row.scorePct,row.teamScorePct)}`}>{row.attempts ? `${row.scorePct.toFixed(1)}%` : "—"}</td><td className="p-3 text-right text-gray-500">{row.teamScorePct.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(row.qualityPct,row.teamQualityPct)}`}>{row.attempts ? `${row.qualityPct.toFixed(1)}%` : "—"}</td><td className="p-3 text-right text-gray-500">{row.teamQualityPct.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(row.rebounds,row.teamReboundsAvg)}`}>{row.rebounds}</td><td className="p-3 text-right text-gray-500">{row.teamReboundsAvg.toFixed(1)}</td><td className={`p-3 text-right ${metricTone(row.defendedPct,row.teamDefendedPct,true)}`}>{row.attempts ? `${row.defendedPct.toFixed(1)}%` : "—"}</td><td className="p-3 text-right text-gray-500">{row.teamDefendedPct.toFixed(1)}%</td><td className="p-3 text-right font-semibold">{Math.round(row.playedSeconds/60)}</td></tr>)}</tbody></table></div>
+            <div className="overflow-auto"><table className="w-full text-sm min-w-[820px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Datum · tegenstander</th><th className="text-right p-3">Kansen</th><th className="text-right p-3">Teamgem.</th><th className="text-right p-3">Goals</th><th className="text-right p-3">% raak</th><th className="text-right p-3">Team %</th><th className="text-right p-3">% raak of korf</th><th className="text-right p-3">Team %</th><th className="text-right p-3">Rebounds</th><th className="text-right p-3">Teamgem.</th><th className="text-right p-3">Verdedigd %</th><th className="text-right p-3">Team %</th><th className="text-right p-3">Minuten</th></tr></thead><tbody>{playerTrend.map((row) => <tr key={row.id} className="border-t"><td className="p-3"><div className="font-semibold">{row.label}{row.opponent ? ` · ${row.opponent}` : ""}</div><div className="text-xs text-gray-400">Wedstrijd {row.matchNumber}</div></td><td className={`p-3 text-right ${metricTone(row.attempts,row.teamAttemptsAvg)}`}>{row.attempts}</td><td className="p-3 text-right text-gray-500">{row.teamAttemptsAvg.toFixed(1)}</td><td className="p-3 text-right">{row.goals}</td><td className={`p-3 text-right ${metricTone(row.scorePct,row.teamScorePct)}`}>{row.attempts ? `${row.scorePct.toFixed(1)}%` : "—"}</td><td className="p-3 text-right text-gray-500">{row.teamScorePct.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(row.qualityPct,row.teamQualityPct)}`}>{row.attempts ? `${row.qualityPct.toFixed(1)}%` : "—"}</td><td className="p-3 text-right text-gray-500">{row.teamQualityPct.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(row.rebounds,row.teamReboundsAvg)}`}>{row.rebounds}</td><td className="p-3 text-right text-gray-500">{row.teamReboundsAvg.toFixed(1)}</td><td className={`p-3 text-right ${metricTone(row.defendedPct,row.teamDefendedPct,true)}`}>{row.attempts ? `${row.defendedPct.toFixed(1)}%` : "—"}</td><td className="p-3 text-right text-gray-500">{row.teamDefendedPct.toFixed(1)}%</td><td className="p-3 text-right font-semibold">{Math.round(row.playedSeconds/60)}</td></tr>)}</tbody></table></div>
           </div>
         </div>
       )}
