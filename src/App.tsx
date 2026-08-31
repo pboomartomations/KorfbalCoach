@@ -103,6 +103,12 @@ type Player = {
 
 type VakSide = "aanvallend" | "verdedigend";
 
+type PieSlice = {
+  label: string;
+  value: number;
+  color: string;
+};
+
 type LogReden =
   | "Bal onderschept"
   | "Bal uit"
@@ -3601,7 +3607,7 @@ const attackUitPct =
                     const playerName = e.spelerId ? spelersMap.get(e.spelerId)?.naam : undefined;
                     const isGoal = (e.soort === "Kans" && (e.reden === "Gescoord" || e.reden === "Doelpunt")) || (e.soort === "Gemis" && (e.reden === "Doorgelaten" || e.reden === "Doelpunt"));
                     const label = e.actie || e.soort || "Actie";
-                    const tone = isGoal ? "bg-green-50 text-green-700 border-green-200" : e.resultaat === "Verdedigd" || e.reden === "Steal" ? "bg-blue-50 text-blue-700 border-blue-200" : e.soort === "Rebound" ? "bg-orange-50 text-orange-700 border-orange-200" : "bg-slate-50 text-slate-700 border-slate-200";
+                    const tone = isGoal ? "bg-green-50 text-green-700 border-green-200" : e.resultaat === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept" || e.reden === "Bal onderschept" ? "bg-blue-50 text-blue-700 border-blue-200" : e.soort === "Rebound" ? "bg-orange-50 text-orange-700 border-orange-200" : "bg-slate-50 text-slate-700 border-slate-200";
                     return (
                       <div key={e.id} className="grid grid-cols-[58px_110px_1fr_auto] items-center gap-3 px-4 py-3 text-sm">
                         <div className="font-semibold tabular-nums text-slate-500">{formatTime(e.tijdSeconden)}</div>
