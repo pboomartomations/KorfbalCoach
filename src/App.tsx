@@ -2490,7 +2490,6 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           setMatchType={(value) =>
             setState((s) => ({ ...s, matchType: value }))
           }
-          dbSheets={dbSheets}
         />
       )}
 
@@ -2887,7 +2886,6 @@ function VakindelingTab({
   addSeason,
   matchType,
   setMatchType,
-  dbSheets,
 }: {
   spelers: Player[];
   toegewezen: Set<string>;
@@ -2917,7 +2915,6 @@ function VakindelingTab({
   addSeason: (value: string) => void;
   matchType: MatchType;
   setMatchType: (value: MatchType) => void;
-  dbSheets: DatabaseSheetsData | null;
 }) {
   const [newSeason, setNewSeason] = useState("");
   const beschikbare = spelers.filter((s) => s.actief && !toegewezen.has(s.id));
@@ -2926,150 +2923,6 @@ function VakindelingTab({
   const opstellingCompleet = [...aanval, ...verdediging].every(Boolean);
   const wedstrijdgegevensCompleet = Boolean(opponentName.trim()) && Boolean(homeAway);
 
-  const opponentHistory = useMemo(() => {
-    const clean = opponentName.trim().toLocaleLowerCase("nl-NL");
-    if (!clean || !dbSheets) return [];
-    return (dbSheets.matches ?? [])
-      .filter((m: any) => String(m.tegenstander ?? "").trim().toLocaleLowerCase("nl-NL") === clean)
-      .slice()
-      .sort((a: any, b: any) => {
-        const av = typeof a.datum === "number" ? a.datum : Date.parse(String(a.datum ?? ""));
-        const bv = typeof b.datum === "number" ? b.datum : Date.parse(String(b.datum ?? ""));
-        return (Number.isFinite(bv) ? bv : 0) - (Number.isFinite(av) ? av : 0);
-      });
-  }, [dbSheets, opponentName]);
-
-  const opponentPreview = useMemo(() => {
-    if (opponentHistory.length === 0 || !dbSheets) return null;
-    const ids = new Set(opponentHistory.map((m: any) => String(m.wedstrijd_id ?? "")));
-    const allEvents = dbSheets.events ?? [];
-    const allAttacks = dbSheets.attacks ?? [];
-    const relatedEvents = allEvents.filter((e: any) => ids.has(String(e.wedstrijd_id ?? "")));
-    const relatedAttacks = allAttacks.filter((a: any) => ids.has(String(a.wedstrijd_id ?? "")));
-    const isKorbis = (row: any) => {
-      const team = String(row.team ?? "").trim().toLocaleLowerCase("nl-NL");
-      return team === "korbis" || team === "thuis";
-    };
-    const isAttempt = (e: any) => ["Schot", "Doorloop", "Vrijebal", "Strafworp"].includes(String(e.actie ?? ""));
-    const isMade = (e: any) => String(e.uitkomst ?? e.resultaat ?? "").toLocaleLowerCase("nl-NL") === "raak";
-    const isKorf = (e: any) => String(e.uitkomst ?? e.resultaat ?? "").toLocaleLowerCase("nl-NL") === "korf";
-    const pct = (part: number, total: number) => total > 0 ? part / total * 100 : 0;
-    const avg = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
-
-    const wins = opponentHistory.filter((m: any) => Number(m.score_korbis) > Number(m.score_tegenstander)).length;
-    const draws = opponentHistory.filter((m: any) => Number(m.score_korbis) === Number(m.score_tegenstander)).length;
-    const losses = opponentHistory.length - wins - draws;
-    const avgFor = avg(opponentHistory.map((m: any) => Number(m.score_korbis || 0)));
-    const avgAgainst = avg(opponentHistory.map((m: any) => Number(m.score_tegenstander || 0)));
-
-    const ownAttempts = relatedEvents.filter((e: any) => isKorbis(e) && isAttempt(e));
-    const oppAttempts = relatedEvents.filter((e: any) => !isKorbis(e) && isAttempt(e));
-    const ownGoals = ownAttempts.filter(isMade).length;
-    const ownKorf = ownAttempts.filter(isKorf).length;
-    const oppGoals = oppAttempts.filter(isMade).length;
-    const reboundsWon = relatedEvents.filter((e: any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Rebound").length;
-    const reboundsLost = relatedEvents.filter((e: any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Geen Rebound").length;
-    const ownAttacks = relatedAttacks.filter((a: any) => isKorbis(a));
-    const shotPct = ownAttempts.length ? pct(ownGoals, ownAttempts.length) : null;
-    const qualityPct = ownAttempts.length ? pct(ownGoals + ownKorf, ownAttempts.length) : null;
-    const reboundPct = reboundsWon + reboundsLost ? pct(reboundsWon, reboundsWon + reboundsLost) : null;
-    const attemptsPerAttack = ownAttacks.length ? ownAttempts.length / ownAttacks.length : null;
-    const oppShotPct = oppAttempts.length ? pct(oppGoals, oppAttempts.length) : null;
-
-    // Vergelijk met Korbis' eigen seizoen, zodat een percentage context krijgt.
-    const seasonMatchIds = new Set((dbSheets.matches ?? [])
-      .filter((m: any) => (!season || String(m.seizoen ?? "") === season) && (!matchType || String(m.wedstrijdtype ?? "Competitie") === matchType))
-      .map((m: any) => String(m.wedstrijd_id ?? "")));
-    const seasonEvents = allEvents.filter((e: any) => seasonMatchIds.has(String(e.wedstrijd_id ?? "")));
-    const seasonAttacks = allAttacks.filter((a: any) => seasonMatchIds.has(String(a.wedstrijd_id ?? "")));
-    const seasonOwnAttempts = seasonEvents.filter((e: any) => isKorbis(e) && isAttempt(e));
-    const seasonOppAttempts = seasonEvents.filter((e: any) => !isKorbis(e) && isAttempt(e));
-    const seasonOwnGoals = seasonOwnAttempts.filter(isMade).length;
-    const seasonOwnKorf = seasonOwnAttempts.filter(isKorf).length;
-    const seasonOppGoals = seasonOppAttempts.filter(isMade).length;
-    const seasonWon = seasonEvents.filter((e: any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Rebound").length;
-    const seasonLost = seasonEvents.filter((e: any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Geen Rebound").length;
-    const seasonOwnAttacks = seasonAttacks.filter((a: any) => isKorbis(a));
-    const benchmark = {
-      shotPct: seasonOwnAttempts.length ? pct(seasonOwnGoals, seasonOwnAttempts.length) : null,
-      qualityPct: seasonOwnAttempts.length ? pct(seasonOwnGoals + seasonOwnKorf, seasonOwnAttempts.length) : null,
-      reboundPct: seasonWon + seasonLost ? pct(seasonWon, seasonWon + seasonLost) : null,
-      attemptsPerAttack: seasonOwnAttacks.length ? seasonOwnAttempts.length / seasonOwnAttacks.length : null,
-      oppShotPct: seasonOppAttempts.length ? pct(seasonOppGoals, seasonOppAttempts.length) : null,
-    };
-
-    const vakStats = ([1, 2] as const).map((vakId) => {
-      const ve = relatedEvents.filter((e: any) => Number(e.vak_id) === vakId);
-      const va = relatedAttacks.filter((a: any) => Number(a.vak_id) === vakId && isKorbis(a));
-      const oa = ve.filter((e: any) => isKorbis(e) && isAttempt(e));
-      const ta = ve.filter((e: any) => !isKorbis(e) && isAttempt(e));
-      const goals = oa.filter(isMade).length;
-      const korf = oa.filter(isKorf).length;
-      const againstGoals = ta.filter(isMade).length;
-      const won = ve.filter((e: any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Rebound").length;
-      const lost = ve.filter((e: any) => isKorbis(e) && e.actie === "Rebound" && e.reden === "Geen Rebound").length;
-      return {
-        vakId, attempts: oa.length, scorePct: pct(goals, oa.length), qualityPct: pct(goals + korf, oa.length),
-        reboundPct: won + lost ? pct(won, won + lost) : null,
-        attemptsPerAttack: va.length ? oa.length / va.length : null,
-        oppScorePct: pct(againstGoals, ta.length), oppAttempts: ta.length,
-      };
-    });
-
-    const playerMap = new Map<string, { name: string; goals: number; attempts: number; korf: number; rebounds: number }>();
-    relatedEvents.forEach((e: any) => {
-      if (!isKorbis(e)) return;
-      const name = String(e.spelerNaam ?? "").trim();
-      if (!name || name === "Tegenstander") return;
-      const row = playerMap.get(name) ?? { name, goals: 0, attempts: 0, korf: 0, rebounds: 0 };
-      if (isAttempt(e)) {
-        row.attempts += 1;
-        if (isMade(e)) row.goals += 1;
-        if (isKorf(e)) row.korf += 1;
-      }
-      if (e.actie === "Rebound" && e.reden === "Rebound") row.rebounds += 1;
-      playerMap.set(name, row);
-    });
-    const players = Array.from(playerMap.values())
-      .filter((p) => p.attempts >= 2 || p.goals >= 1 || p.rebounds >= 2)
-      .map((p) => ({ ...p, scorePct: pct(p.goals, p.attempts), qualityPct: pct(p.goals + p.korf, p.attempts) }))
-      .sort((a, b) => (b.goals * 4 + b.rebounds + b.qualityPct / 20) - (a.goals * 4 + a.rebounds + a.qualityPct / 20))
-      .slice(0, 3);
-
-    const signals: { tone: "green" | "orange" | "red"; text: string }[] = [];
-    if (shotPct !== null && benchmark.shotPct !== null && ownAttempts.length >= 8) {
-      const d = shotPct - benchmark.shotPct;
-      if (d >= 4) signals.push({ tone: "green", text: `Afronding tegen ${opponentName.trim()} ligt ${d.toFixed(1)} procentpunt boven het seizoensgemiddelde (${shotPct.toFixed(1)}% vs. ${benchmark.shotPct.toFixed(1)}%).` });
-      if (d <= -4) signals.push({ tone: d <= -8 ? "red" : "orange", text: `Afronding tegen ${opponentName.trim()} ligt ${Math.abs(d).toFixed(1)} procentpunt onder het seizoensgemiddelde (${shotPct.toFixed(1)}% vs. ${benchmark.shotPct.toFixed(1)}%).` });
-    }
-    if (qualityPct !== null && benchmark.qualityPct !== null && ownAttempts.length >= 8) {
-      const d = qualityPct - benchmark.qualityPct;
-      if (d >= 6) signals.push({ tone: "green", text: `Korfgerichtheid is tegen deze tegenstander bovengemiddeld: ${qualityPct.toFixed(1)}% tegenover ${benchmark.qualityPct.toFixed(1)}% in het seizoen.` });
-      if (d <= -6) signals.push({ tone: "orange", text: `Korfgerichtheid blijft tegen deze tegenstander achter: ${qualityPct.toFixed(1)}% tegenover ${benchmark.qualityPct.toFixed(1)}% normaal.` });
-    }
-    if (reboundPct !== null && benchmark.reboundPct !== null && reboundsWon + reboundsLost >= 5) {
-      const d = reboundPct - benchmark.reboundPct;
-      if (d >= 8) signals.push({ tone: "green", text: `Aanvallende rebound is hier een sterk punt: ${reboundPct.toFixed(0)}% gewonnen, ${d.toFixed(0)} procentpunt boven het seizoensniveau.` });
-      if (d <= -8) signals.push({ tone: "orange", text: `Aanvallende rebound vraagt aandacht: ${reboundPct.toFixed(0)}% gewonnen, ${Math.abs(d).toFixed(0)} procentpunt onder het seizoensniveau.` });
-    }
-    if (attemptsPerAttack !== null && benchmark.attemptsPerAttack !== null && ownAttacks.length >= 5) {
-      const d = attemptsPerAttack - benchmark.attemptsPerAttack;
-      if (d >= 0.20) signals.push({ tone: "green", text: `Korbis creëert tegen deze ploeg meer vervolgkansen: ${attemptsPerAttack.toFixed(2)} kansen per aanval versus ${benchmark.attemptsPerAttack.toFixed(2)} gemiddeld.` });
-      if (d <= -0.20) signals.push({ tone: "orange", text: `Kanscreatie per aanval ligt lager: ${attemptsPerAttack.toFixed(2)} versus ${benchmark.attemptsPerAttack.toFixed(2)} gemiddeld.` });
-    }
-    if (oppShotPct !== null && benchmark.oppShotPct !== null && oppAttempts.length >= 8) {
-      const d = oppShotPct - benchmark.oppShotPct;
-      if (d <= -5) signals.push({ tone: "green", text: `${opponentName.trim()} rondt tegen Korbis minder efficiënt af dan de gemiddelde tegenstander (${oppShotPct.toFixed(1)}% vs. ${benchmark.oppShotPct.toFixed(1)}%).` });
-      if (d >= 5) signals.push({ tone: d >= 10 ? "red" : "orange", text: `${opponentName.trim()} scoort historisch relatief efficiënt: ${oppShotPct.toFixed(1)}% van de kansen tegenover ${benchmark.oppShotPct.toFixed(1)}% voor tegenstanders gemiddeld.` });
-    }
-    const bestVak = [...vakStats].filter(v => v.attempts >= 4).sort((a,b) => b.scorePct - a.scorePct)[0];
-    const worstDefVak = [...vakStats].filter(v => v.oppAttempts >= 4).sort((a,b) => b.oppScorePct - a.oppScorePct)[0];
-    if (bestVak && bestVak.scorePct >= (shotPct ?? 0) + 5) signals.push({ tone: "green", text: `Vak ${bestVak.vakId} rondde in eerdere ontmoetingen het sterkst af: ${bestVak.scorePct.toFixed(1)}% raak.` });
-    if (worstDefVak && oppShotPct !== null && worstDefVak.oppScorePct >= oppShotPct + 6) signals.push({ tone: "orange", text: `Verdedigend viel Vak ${worstDefVak.vakId} op: de tegenstander scoorde daar ${worstDefVak.oppScorePct.toFixed(1)}% van de kansen.` });
-    if (signals.length === 0) signals.push({ tone: "orange", text: "Er is nog geen statistisch duidelijk patroon ten opzichte van het seizoensgemiddelde. Gebruik de historie vooral als context." });
-
-    return { wins, draws, losses, avgFor, avgAgainst, shotPct, qualityPct, reboundPct, attemptsPerAttack, oppShotPct, benchmark, vakStats, players, signals: signals.slice(0, 5) };
-  }, [dbSheets, opponentHistory, opponentName, season, matchType]);
 
   return (
     <div className="space-y-4">
@@ -3129,76 +2982,7 @@ function VakindelingTab({
         </div>
       </div>
 
-      {opponentName.trim() && (
-        <div className={`rounded-2xl border p-4 ${opponentHistory.length ? "border-blue-200 bg-gradient-to-r from-blue-50 via-white to-cyan-50" : "border-slate-200 bg-white"}`}>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Voorbeschouwing</div>
-              <h3 className="mt-1 text-lg font-bold">Historie tegen {opponentName.trim()}</h3>
-              <p className="text-sm text-slate-500">Automatisch opgebouwd uit eerdere wedstrijden in je database.</p>
-            </div>
-            <div className={`self-start rounded-full px-3 py-1 text-xs font-bold ${opponentHistory.length ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-600"}`}>
-              {opponentHistory.length ? `${opponentHistory.length} eerdere wedstrijd${opponentHistory.length === 1 ? "" : "en"}` : "Eerste ontmoeting in database"}
-            </div>
-          </div>
 
-          {opponentPreview ? (
-            <>
-              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-                <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><div className="text-xs font-semibold text-emerald-700">Resultaten</div><div className="mt-1 text-xl font-extrabold text-slate-900">{opponentPreview.wins}W · {opponentPreview.draws}G · {opponentPreview.losses}V</div></div>
-                <div className="rounded-xl border border-blue-100 bg-blue-50 p-3"><div className="text-xs font-semibold text-blue-700">Gem. score Korbis</div><div className="mt-1 text-xl font-extrabold">{opponentPreview.avgFor.toFixed(1)}</div></div>
-                <div className="rounded-xl border border-red-100 bg-red-50 p-3"><div className="text-xs font-semibold text-red-700">Gem. tegen</div><div className="mt-1 text-xl font-extrabold">{opponentPreview.avgAgainst.toFixed(1)}</div></div>
-                <div className="rounded-xl border border-violet-100 bg-violet-50 p-3"><div className="text-xs font-semibold text-violet-700">Laatste ontmoeting</div><div className="mt-1 text-xl font-extrabold">{opponentHistory[0].score_korbis ?? "?"}-{opponentHistory[0].score_tegenstander ?? "?"}</div><div className="text-[11px] text-slate-500">{formatImportedDate(opponentHistory[0].datum)}</div></div>
-              </div>
-
-              <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 bg-white/90 p-4">
-                  <div className="font-bold">Wat valt op tegen deze tegenstander?</div>
-                  <div className="mt-3 space-y-2">
-                    {opponentPreview.signals.map((signal, index) => {
-                      const cls = signal.tone === "green" ? "border-emerald-100 bg-emerald-50 text-emerald-950" : signal.tone === "red" ? "border-red-100 bg-red-50 text-red-950" : "border-orange-100 bg-orange-50 text-orange-950";
-                      return <div key={index} className={`flex gap-2 rounded-xl border px-3 py-2 text-sm ${cls}`}><SignalDot tone={signal.tone}/><span>{signal.text}</span></div>;
-                    })}
-                  </div>
-                  <div className="mt-3 text-[11px] text-slate-500">Vergelijking met Korbis' eigen {season || "huidige"} seizoen ({matchType}). Groen = bovengemiddeld, oranje = aandacht, rood = duidelijk ongunstig.</div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white/90 p-4">
-                  <div className="font-bold">Historische kerncijfers</div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    <div className="rounded-lg bg-blue-50 p-2"><div className="text-xs text-blue-700">Kansen raak</div><b>{opponentPreview.shotPct !== null ? `${opponentPreview.shotPct.toFixed(1)}%` : "-"}</b><div className="text-[10px] text-slate-500">Seizoen: {opponentPreview.benchmark.shotPct !== null ? `${opponentPreview.benchmark.shotPct.toFixed(1)}%` : "-"}</div></div>
-                    <div className="rounded-lg bg-violet-50 p-2"><div className="text-xs text-violet-700">Korfgerichtheid</div><b>{opponentPreview.qualityPct !== null ? `${opponentPreview.qualityPct.toFixed(1)}%` : "-"}</b><div className="text-[10px] text-slate-500">Seizoen: {opponentPreview.benchmark.qualityPct !== null ? `${opponentPreview.benchmark.qualityPct.toFixed(1)}%` : "-"}</div></div>
-                    <div className="rounded-lg bg-emerald-50 p-2"><div className="text-xs text-emerald-700">Aanvallende rebound</div><b>{opponentPreview.reboundPct !== null ? `${opponentPreview.reboundPct.toFixed(0)}%` : "-"}</b><div className="text-[10px] text-slate-500">Seizoen: {opponentPreview.benchmark.reboundPct !== null ? `${opponentPreview.benchmark.reboundPct.toFixed(0)}%` : "-"}</div></div>
-                    <div className="rounded-lg bg-orange-50 p-2"><div className="text-xs text-orange-700">Kansen per aanval</div><b>{opponentPreview.attemptsPerAttack !== null ? opponentPreview.attemptsPerAttack.toFixed(2) : "-"}</b><div className="text-[10px] text-slate-500">Seizoen: {opponentPreview.benchmark.attemptsPerAttack !== null ? opponentPreview.benchmark.attemptsPerAttack.toFixed(2) : "-"}</div></div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 bg-white/90 p-4">
-                  <div className="font-bold">Vak 1 versus Vak 2</div>
-                  <div className="mt-3 overflow-auto"><table className="w-full text-sm"><thead><tr className="text-slate-500"><th className="py-2 text-left">Kengetal</th><th className="text-right">Vak 1</th><th className="text-right">Vak 2</th></tr></thead><tbody>
-                    <tr className="border-t"><td className="py-2 font-semibold">Kansen raak</td>{opponentPreview.vakStats.map(v => <td key={v.vakId} className="text-right">{v.attempts ? `${v.scorePct.toFixed(1)}%` : "-"}</td>)}</tr>
-                    <tr className="border-t"><td className="py-2 font-semibold">Korfgerichtheid</td>{opponentPreview.vakStats.map(v => <td key={v.vakId} className="text-right">{v.attempts ? `${v.qualityPct.toFixed(1)}%` : "-"}</td>)}</tr>
-                    <tr className="border-t"><td className="py-2 font-semibold">Aanv. rebound</td>{opponentPreview.vakStats.map(v => <td key={v.vakId} className="text-right">{v.reboundPct !== null ? `${v.reboundPct.toFixed(0)}%` : "-"}</td>)}</tr>
-                    <tr className="border-t"><td className="py-2 font-semibold">Kansen / aanval</td>{opponentPreview.vakStats.map(v => <td key={v.vakId} className="text-right">{v.attemptsPerAttack !== null ? v.attemptsPerAttack.toFixed(2) : "-"}</td>)}</tr>
-                    <tr className="border-t"><td className="py-2 font-semibold">Tegenstander raak</td>{opponentPreview.vakStats.map(v => <td key={v.vakId} className="text-right">{v.oppAttempts ? `${v.oppScorePct.toFixed(1)}%` : "-"}</td>)}</tr>
-                  </tbody></table></div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white/90 p-4">
-                  <div className="font-bold">Spelers die eerder opvielen</div>
-                  <div className="mt-3 space-y-2">
-                    {opponentPreview.players.length ? opponentPreview.players.map((player) => <div key={player.name} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2"><div><div className="font-semibold">{player.name}</div><div className="text-xs text-slate-500">{player.goals} goals · {player.attempts} kansen · {player.rebounds} rebounds</div></div><div className="rounded-lg bg-white px-2 py-1 text-right"><div className="font-bold">{player.scorePct.toFixed(0)}%</div><div className="text-[10px] text-slate-500">raak</div></div></div>) : <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">Nog onvoldoende individuele eventdata voor een betrouwbare spelersindicatie.</div>}
-                  </div>
-                  <div className="mt-3 text-[11px] text-slate-500">Dit is een historische observatie, geen automatisch wissel- of opstellingsadvies.</div>
-                </div>
-              </div>
-            </>          ) : (
-            <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">Nog geen eerdere wedstrijd tegen deze tegenstander gevonden. Na deze wedstrijd kan KorbIQ hier automatisch historie en vergelijkingen tonen.</div>
-          )}
-        </div>
-      )}
 
       <div>
         <div className="flex items-center justify-between gap-3 mb-2">
@@ -3600,6 +3384,25 @@ function WedstrijdTab({
   const recentReboundPct = recentRebounds.length
     ? (recentWonRebounds / recentRebounds.length) * 100
     : null;
+
+  // Live momentum: een compacte indicatie van wie de laatste fase van de wedstrijd domineert.
+  // De score gebruikt recente goals, kansen, rebounds en balverlies en is bewust geen eindconclusie.
+  const recentHomeTurnovers = recentHomeEvents.filter((e) =>
+    ["Bal onderschept", "Pass Onderschept", "Bal uit"].includes(String(e.reden ?? ""))
+  ).length;
+  const momentumRaw =
+    recentHomeGoals * 3 +
+    recentHomeAttempts.length * 0.35 +
+    recentWonRebounds * 0.8 -
+    recentAwayGoals * 3 -
+    recentAwayAttempts.length * 0.2 -
+    recentHomeTurnovers * 1.2;
+  const momentumPct = Math.max(8, Math.min(92, 50 + momentumRaw * 6));
+  const momentumLabel =
+    momentumPct >= 66 ? "Korbis heeft momentum" :
+    momentumPct <= 34 ? `${opponentName || "Tegenstander"} heeft momentum` :
+    "Wedstrijd in balans";
+  const momentumTone = momentumPct >= 66 ? "green" : momentumPct <= 34 ? "red" : "blue";
 
   type LiveCoachSignal = { priority: 1 | 2 | 3; tone: "goed" | "letop" | "info"; text: string };
   const liveCoachSignals: LiveCoachSignal[] = [];
@@ -4048,6 +3851,33 @@ const attackUitPct =
           </div>
         </div>
       )}
+
+          {/* Fase 15: live momentum. Geeft de recente wedstrijdstroom visueel weer. */}
+          {wedstrijdGestart && !wedstrijdAfgelopen && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-no-pause>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="flex items-center gap-2"><SignalDot tone={momentumTone}/><div className="font-bold">Live momentum</div></div>
+                  <div className="mt-1 text-xs text-slate-500">Laatste fase op basis van goals, kansen, aanvallende rebounds en balverlies.</div>
+                </div>
+                <div className="text-left lg:text-right">
+                  <div className={`text-sm font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</div>
+                  <div className="text-xs text-slate-500">{recentHomeGoals}-{recentAwayGoals} goals · {recentHomeAttempts.length}-{recentAwayAttempts.length} kansen in recente aanvallen</div>
+                </div>
+              </div>
+              <div className="mt-4">
+                <div className="mb-1 flex justify-between text-[11px] font-bold text-slate-500"><span>{opponentName || "Tegenstander"}</span><span>Korbis</span></div>
+                <div className="relative h-3 overflow-hidden rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400">
+                  <div className="absolute top-1/2 h-5 w-1 -translate-y-1/2 rounded-full bg-slate-900 shadow" style={{ left: `calc(${momentumPct}% - 2px)` }} />
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="text-slate-500">Korfgericht</span><div className="font-bold">{recentHomeAttempts.length ? `${((recentHomeGoals + recentHomeAttempts.filter((e) => e.resultaat === "Korf").length) / recentHomeAttempts.length * 100).toFixed(0)}%` : "–"}</div></div>
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="text-slate-500">Rebound</span><div className="font-bold">{recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</div></div>
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="text-slate-500">Balverlies</span><div className="font-bold">{recentHomeTurnovers}</div></div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Fase 5: live coachsignalen, compact en altijd op dezelfde plek */}
           {wedstrijdGestart && !wedstrijdAfgelopen && (
@@ -4780,6 +4610,15 @@ function MatchPreparationDashboard({
   histAttacks.forEach((a:any)=>{const k=String(a.combinatie_key??a.combinatie_spelers??"");const x=comboMap.get(k);if(x)x.attacks++;});
   histEvents.filter((e:any)=>own(e)&&result(e)==="raak").forEach((e:any)=>{const k=String(e.combinatie_key??e.combinatie_spelers??"");const x=comboMap.get(k);if(x)x.goals++;});
   const combos=Array.from(comboMap.values()).sort((a,b)=>(b.attacks?b.goals/b.attacks:0)-(a.attacks?a.goals/a.attacks:0)).slice(0,4);
+  const seasonMatches = matches.filter((m:any) => String(m.seizoen ?? "") === state.season && String(m.wedstrijdtype ?? "Competitie") === state.matchType);
+  const recentSeasonMatches = seasonMatches.slice().sort((a:any,b:any)=>String(formatImportedDate(b.datum)).localeCompare(String(formatImportedDate(a.datum)))).slice(0,5);
+  const recentSeasonWins = recentSeasonMatches.filter((m:any)=>Number(m.score_korbis)>Number(m.score_tegenstander)).length;
+  const recentSeasonGoals = recentSeasonMatches.length ? recentSeasonMatches.reduce((sum:number,m:any)=>sum+Number(m.score_korbis||0),0)/recentSeasonMatches.length : null;
+  const seasonIds = new Set(seasonMatches.map((m:any)=>String(m.wedstrijd_id ?? "")));
+  const seasonPeriods = periods.filter((v:any)=>seasonIds.has(String(v.wedstrijd_id??"")));
+  const seasonComboMap = new Map<string,{names:string;minutes:number}>();
+  seasonPeriods.forEach((v:any)=>{const k=String(v.combinatie_key??v.combinatie_spelers??"");if(!k)return;const x=seasonComboMap.get(k)??{names:String(v.combinatie_spelers??k),minutes:0};x.minutes+=Number(v.duur_seconden??0)/60;seasonComboMap.set(k,x);});
+  const mostUsedSeasonCombo = Array.from(seasonComboMap.values()).sort((a,b)=>b.minutes-a.minutes)[0] ?? null;
   const signals:{tone:"green"|"orange"|"red"|"blue";text:string}[]=[];
   if(history.length){
     if(wins>losses) signals.push({tone:"green",text:`Positieve historie: ${wins} winst, ${draws} gelijk en ${losses} verlies.`});
@@ -4792,12 +4631,20 @@ function MatchPreparationDashboard({
     <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm">
       <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Preparation</div>
       <h2 className="mt-1 text-2xl font-bold">Wedstrijdvoorbereiding</h2>
-      <p className="mt-1 text-sm text-gray-500">Historie, patronen en bruikbare aandachtspunten voor de komende wedstrijd.</p>
+      <p className="mt-1 text-sm text-gray-500">Dé analyseplek vóór de wedstrijd: tegenstanderhistorie, patronen, vakcombinaties en coachaandachtspunten.</p>
     </div>
     <div className="rounded-2xl border bg-white p-5">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><div className="text-xs font-bold uppercase tracking-wide text-slate-500">Komende wedstrijd</div><div className="mt-1 text-2xl font-black">{opponent ? `${state.homeAway==="uit"?opponent:"Korbis"} – ${state.homeAway==="uit"?"Korbis":opponent}` : "Tegenstander nog niet gekozen"}</div><div className="mt-1 text-sm text-slate-500">{state.season} · {state.matchType} · {state.homeAway ? (state.homeAway==="thuis"?"Thuis":"Uit") : "Locatie nog kiezen"}</div></div><div className="flex gap-2"><button onClick={onOpenSettings} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold text-slate-700">Instellingen</button><button onClick={onOpenMatch} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Naar wedstrijd</button></div></div>
     </div>
-    {!opponent ? <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">Vul bij Wedstrijdinstellingen eerst een tegenstander in. Daarna bouwt KorbIQ deze voorbereiding automatisch op.</div> : !history.length ? <div className="rounded-2xl border bg-white p-6"><h3 className="text-lg font-bold">Eerste ontmoeting in de database</h3><p className="mt-1 text-sm text-slate-500">Er is nog geen historische vergelijking met {opponent}. De huidige vakindeling en wedstrijdregistratie vormen na afloop automatisch de basis voor een volgende voorbeschouwing.</p></div> : <>
+    <div className="rounded-2xl border bg-white p-5">
+      <div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-bold">Eigen vorm</h3><p className="text-sm text-slate-500">Actuele context uit {state.season}, ook wanneer KorbIQ de tegenstander nog niet kent.</p></div><div className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">Laatste {recentSeasonMatches.length || 0}</div></div>
+      {recentSeasonMatches.length ? <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl bg-emerald-50 p-3"><div className="text-xs font-semibold text-emerald-700">Recente resultaten</div><div className="mt-1 text-xl font-black">{recentSeasonWins}/{recentSeasonMatches.length} winst</div></div>
+        <div className="rounded-xl bg-blue-50 p-3"><div className="text-xs font-semibold text-blue-700">Gem. goals Korbis</div><div className="mt-1 text-xl font-black">{recentSeasonGoals?.toFixed(1) ?? "—"}</div></div>
+        <div className="rounded-xl bg-violet-50 p-3"><div className="text-xs font-semibold text-violet-700">Meest gebruikte combinatie</div><div className="mt-1 font-bold leading-snug">{mostUsedSeasonCombo?.names ?? "Nog geen combinatiedata"}</div>{mostUsedSeasonCombo && <div className="mt-1 text-xs text-slate-500">{Math.round(mostUsedSeasonCombo.minutes)} min dit seizoen</div>}</div>
+      </div> : <div className="mt-3 text-sm text-slate-500">Nog geen afgeronde wedstrijden in dit seizoen/type beschikbaar.</div>}
+    </div>
+    {!opponent ? <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">Vul bij Wedstrijdinstellingen eerst een tegenstander in. De eigen vorm hierboven blijft wel beschikbaar.</div> : !history.length ? <div className="rounded-2xl border bg-white p-6"><h3 className="text-lg font-bold">Eerste ontmoeting in de database</h3><p className="mt-1 text-sm text-slate-500">Er is nog geen historische vergelijking met {opponent}. De huidige vakindeling en wedstrijdregistratie vormen na afloop automatisch de basis voor een volgende voorbeschouwing.</p></div> : <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{[["Eerdere duels",history.length],["W / G / V",`${wins} / ${draws} / ${losses}`],["Gem. voor",avgFor.toFixed(1)],["Gem. tegen",avgAgainst.toFixed(1)],["Kansen / aanval",attemptsPerAttack!==null?attemptsPerAttack.toFixed(2):"—"]].map(([l,v])=><div key={String(l)} className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{l}</div><div className="mt-1 text-2xl font-black">{v}</div></div>)}</div>
       <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Coachsignalen</h3><p className="text-sm text-slate-500">Wat springt eruit uit eerdere ontmoetingen?</p><div className="mt-4 space-y-2">{signals.map((x,i)=><div key={i} className="flex gap-2 rounded-xl bg-slate-50 p-3 text-sm"><SignalDot tone={x.tone}/><span>{x.text}</span></div>)}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Kerncijfers</h3><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-blue-50 p-3"><div className="text-xs text-blue-700">Kansen raak</div><b className="text-xl">{ownAttempts.length?`${(ownGoals/ownAttempts.length*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-violet-50 p-3"><div className="text-xs text-violet-700">Korfgericht</div><b className="text-xl">{ownAttempts.length?`${((ownGoals+ownKorf)/ownAttempts.length*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-emerald-50 p-3"><div className="text-xs text-emerald-700">Aanv. rebound</div><b className="text-xl">{reboundPct!==null?`${reboundPct.toFixed(0)}%`:"—"}</b></div><div className="rounded-xl bg-red-50 p-3"><div className="text-xs text-red-700">Tegenstander raak</div><b className="text-xl">{oppAttempts.length?`${(oppGoals/oppAttempts.length*100).toFixed(1)}%`:"—"}</b></div></div></div></div>
       <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vakcombinaties tegen {opponent}</h3><p className="text-sm text-slate-500">Historisch aanvallend rendement van combinaties die tegen deze ploeg gespeeld hebben.</p><div className="mt-4 space-y-2">{combos.length?combos.map((c,i)=><div key={i} className="rounded-xl border bg-slate-50 p-3"><div className="font-bold">{c.names}</div><div className="mt-1 text-xs text-slate-500">{Math.round(c.minutes)} min · {c.attacks} aanvallen · {c.goals} goals · {c.attacks?(c.goals/c.attacks*10).toFixed(1):"—"} goals / 10 aanv.</div></div>):<div className="text-sm text-slate-500">Nog geen vakcombinatiedata uit deze ontmoetingen.</div>}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Spelers tegen {opponent}</h3><p className="text-sm text-slate-500">Spelers die in eerdere ontmoetingen het meest zichtbaar waren in de registratie.</p><div className="mt-4 space-y-2">{players.length?players.map(p=><div key={p.name} className="flex items-center justify-between rounded-xl bg-slate-50 p-3"><div><div className="font-bold">{p.name}</div><div className="text-xs text-slate-500">{p.goals} goals · {p.attempts} kansen · {p.rebounds} rebounds</div></div><div className="font-black">{p.attempts?`${(p.goals/p.attempts*100).toFixed(0)}%`:"—"}</div></div>):<div className="text-sm text-slate-500">Nog onvoldoende individuele eventdata.</div>}</div></div></div>
@@ -8200,6 +8047,7 @@ function HitMissBarChart({
     </div>
   );
 }
+
 //////////////////////////////////////////////////////////////////////////////
 // --- UI bits ---------------------------------------------------------------
 //////////////////////////////////////////////////////////////////////////////
