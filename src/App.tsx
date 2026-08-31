@@ -610,6 +610,7 @@ export default function App() {
   useState<"spelers" | "vakken" | "wedstrijd" | "insights" | "seizoen">("spelers");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    setMobileMenuOpen(false);
   }, [tab]);
   useEffect(() => {
     // De standaard Vite-CSS centreert #root soms verticaal bij korte tabs.
@@ -636,6 +637,7 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const [dbSheets, setDbSheets] = useState<DatabaseSheets>(null);
   const [databaseReady, setDatabaseReady] = useState(false);
   const [databaseSetupOpen, setDatabaseSetupOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const dbFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1900,6 +1902,62 @@ const exportToExcel = () => {
 };
 
 
+const wisSeizoensdatabase = () => {
+  const aantal = dbSheets?.matches?.length ?? 0;
+  const ok = confirm(
+    `Seizoensdatabase wissen?\n\nAlle ${aantal} opgeslagen wedstrijd${aantal === 1 ? "" : "en"} en bijbehorende historische gegevens worden definitief verwijderd. Je spelers, vakindeling en instellingen blijven behouden.\n\nDeze actie kan niet ongedaan worden gemaakt.`
+  );
+  if (!ok) return;
+
+  const vak1Ids = state.vak1Aanvallend ? state.aanval : state.verdediging;
+  const vak2Ids = state.vak1Aanvallend ? state.verdediging : state.aanval;
+  const spelerById = new Map(state.spelers.map((p) => [p.id, p]));
+  const emptyDatabase: DatabaseSheetsData = {
+    events: [],
+    attacks: [],
+    wissels: [],
+    matches: [],
+    spelers: state.spelers.map((p) => ({
+      speler_id: p.id, naam: p.naam, geslacht: p.geslacht, status: p.status,
+      actief: p.actief ? "ja" : "nee", foto: p.foto ?? "",
+    })),
+    team: [{ team_naam: "Korbis", actief_seizoen: state.season, aantal_spelers: state.spelers.length }],
+    vakindeling: [
+      ...vak1Ids.map((id, index) => ({
+        vak_id: 1, positie: index + 1, speler_id: id ?? "",
+        speler_naam: id ? spelerById.get(id)?.naam ?? "" : "",
+      })),
+      ...vak2Ids.map((id, index) => ({
+        vak_id: 2, positie: index + 1, speler_id: id ?? "",
+        speler_naam: id ? spelerById.get(id)?.naam ?? "" : "",
+      })),
+    ],
+    instellingen: [{
+      half_duur_minuten: state.halfMinuten,
+      auto_vakwissel_na_2: state.autoVakWisselNa2 ? "ja" : "nee",
+      aanval_links: state.aanvalLinks ? "ja" : "nee",
+      vak1_aanvallend: state.vak1Aanvallend ? "ja" : "nee",
+      actief_seizoen: state.season,
+      seizoen_opties_json: JSON.stringify(state.seasonOptions),
+      standaard_wedstrijdtype: state.matchType,
+    }],
+    databaseInfo: [{
+      database_versie: DATABASE_VERSION,
+      app_versie: APP_DATABASE_LABEL,
+      export_datum: new Date().toISOString(),
+      actief_seizoen: state.season,
+      aantal_wedstrijden: 0,
+      laatste_wedstrijd_datum: "",
+    }],
+  };
+
+  setDbSheets(emptyDatabase);
+  setDatabaseSetupOpen(false);
+  saveDatabaseToBrowser(emptyDatabase).catch((err) =>
+    console.warn("Kon lege browserdatabase niet opslaan", err)
+  );
+};
+
 const resetAlles = () => {
   if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch {}
@@ -2134,6 +2192,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                 <button onClick={exportToExcel} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="export"/><span>Exporteren</span></button>
                 <button onClick={() => dbFileInputRef.current?.click()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="backup"/><span>Backup laden</span></button>
                 <button onClick={shareMatch} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="share"/><span>Deel wedstrijd</span></button>
+                <button onClick={wisSeizoensdatabase} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-orange-700 transition hover:bg-orange-50"><NavGlyph type="reset"/><span>Database wissen</span></button>
                 <button onClick={resetAlles} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
               </div>
             </section>
@@ -2167,7 +2226,56 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                   {!databaseReady ? "● Database laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
                 </span>
               </div>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen((open) => !open)}
+                className="lg:hidden flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm"
+                aria-label={mobileMenuOpen ? "Menu sluiten" : "Menu openen"}
+                aria-expanded={mobileMenuOpen}
+              >
+                <span className="text-2xl leading-none">{mobileMenuOpen ? "×" : "☰"}</span>
+              </button>
             </div>
+
+            {mobileMenuOpen && (
+              <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
+                <div className="mx-auto max-w-xl space-y-4">
+                  <section>
+                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Wedstrijd</div>
+                    <div className="space-y-1">
+                      <button onClick={() => { setMobileMenuOpen(false); requestNieuweWedstrijd(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
+                      <SideNavButton id="wedstrijd" label="Huidige / live wedstrijd" icon="match" />
+                    </div>
+                  </section>
+                  <section className="border-t border-slate-200 pt-4">
+                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Team</div>
+                    <div className="space-y-1">
+                      <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
+                      <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
+                    </div>
+                  </section>
+                  <section className="border-t border-slate-200 pt-4">
+                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Beheer</div>
+                    <div className="space-y-1">
+                      <SideNavButton id="spelers" label="Spelers" icon="players" />
+                      <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
+                      <button onClick={() => { setMobileMenuOpen(false); exportToExcel(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="export"/><span>Exporteren</span></button>
+                      <button onClick={() => { setMobileMenuOpen(false); dbFileInputRef.current?.click(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="backup"/><span>Backup laden</span></button>
+                      <button onClick={() => { setMobileMenuOpen(false); shareMatch(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="share"/><span>Deel wedstrijd</span></button>
+                      <button onClick={() => { setMobileMenuOpen(false); wisSeizoensdatabase(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-orange-700 hover:bg-orange-50"><NavGlyph type="reset"/><span>Database wissen</span></button>
+                      <button onClick={() => { setMobileMenuOpen(false); resetAlles(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
+                    </div>
+                  </section>
+                  <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 ring-1 ring-slate-200">
+                    <div className="font-bold text-slate-700">{state.season}</div>
+                    <div className="mt-1">{databaseMatches.length} wedstrijd{databaseMatches.length === 1 ? "" : "en"} opgeslagen</div>
+                    <div className={`mt-2 font-semibold ${databaseReady && dbSheets ? "text-emerald-700" : "text-amber-700"}`}>
+                      {!databaseReady ? "● Database laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="overflow-x-auto border-t border-slate-100 lg:hidden">
               <div className="grid min-w-[650px] grid-cols-5 bg-white px-3">
@@ -3609,7 +3717,7 @@ const attackUitPct =
             <div className="relative mt-4" data-no-pause>
               <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,0.82fr)] mb-4 items-stretch">
                 {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
-                <div className="flex gap-4 min-w-0">
+                <div className="relative flex gap-4 min-w-0">
                 {state.aanvalLinks ? (
                   <>
                     {/* LINKS: Aanvallend veld */}
@@ -3677,6 +3785,16 @@ const attackUitPct =
                     />
                   </>
                 )}
+                  {/* Wissel aanval/verdediging: bewust tussen de twee veldafbeeldingen */}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); wisselVakken(); }}
+                    aria-label="Aanval en verdediging wisselen"
+                    title="Aanval en verdediging wisselen"
+                    className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 h-16 w-16 items-center justify-center rounded-full border-2 border-blue-200 bg-white text-3xl font-black text-blue-700 shadow-xl transition hover:bg-blue-50 active:scale-95"
+                  >
+                    ⇄
+                  </button>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm min-h-full" data-no-pause>
@@ -3903,28 +4021,6 @@ const attackUitPct =
                 )}
               </div>
 
-              {/* Wisselknop tussen de vakken (blijft) */}
-              <button
-                type="button"
-                onClick={wisselVakken}
-                aria-label="Vakken wisselen"
-                className="
-                  flex
-                  absolute bottom-[22%] left-1/2
-                  -translate-x-1/2 translate-y-1/2
-                  w-14 h-14
-                  rounded-full
-                  bg-white
-                  border border-gray-300
-                  shadow-lg
-                  items-center justify-center
-                  text-2xl font-bold text-blue-700
-                  hover:bg-blue-50
-                  active:scale-95
-                "
-              >
-                ⇄
-              </button>
             </div>
           </div>
 
