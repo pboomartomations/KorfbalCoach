@@ -2229,6 +2229,11 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
       {vakActionPopup && (
         <VakActionModal
           vak={vakActionPopup.vak}
+          vakLabel={
+            vakActionPopup.vak === "aanvallend"
+              ? (state.vak1Aanvallend ? "Vak 1" : "Vak 2")
+              : (state.vak1Aanvallend ? "Vak 2" : "Vak 1")
+          }
           spelers={
             vakActionPopup.vak === "aanvallend" ? spelersAanval : spelersVerdediging
           }
@@ -6468,12 +6473,14 @@ function SpelerCircleRow({
 //////////////////////////////////////////////////////////////////////////////
 function VakActionModal({
   vak,
+  vakLabel,
   spelers,
   onClose,
   onComplete,
   onSteal,
 }: {
   vak: VakSide;
+  vakLabel: string;
   spelers: Player[];
   onClose: () => void;
   onComplete: (
@@ -6510,25 +6517,31 @@ function VakActionModal({
       onClick={(e) => e.stopPropagation()}
     >
       <div className="bg-white w-full max-w-3xl md:rounded-2xl md:m-6 p-4 md:p-6 space-y-6 max-h-[90vh] overflow-auto">
-        {/* Titel + stappenindicator */}
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className="text-2xl font-bold">Actie in {titelVak}</div>
-            <div className="text-sm text-gray-500 mt-1">
-              Stap {step} van 3 –{" "}
-              {step === 1
-                ? "Kies een actie"
-                : step === 2
-                ? "Kies speler (optioneel)"
-                : "Kies een uitkomst"}
+        {/* Duidelijke vakstatus + stappenindicator */}
+        <div className={`rounded-xl border-2 p-4 ${vak === "aanvallend" ? "border-green-500 bg-green-50" : "border-red-500 bg-red-50"}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className={`text-sm font-extrabold uppercase tracking-[0.18em] ${vak === "aanvallend" ? "text-green-700" : "text-red-700"}`}>
+                {vak === "aanvallend" ? "Aanval" : "Verdediging"}
+              </div>
+              <div className="text-3xl font-extrabold text-gray-900 mt-1">{vakLabel}</div>
+              <div className="text-sm font-semibold text-gray-600 mt-1">Actie registreren in het {titelVak.toLowerCase()}</div>
             </div>
+            <button
+              className="text-sm text-gray-500 hover:text-gray-800"
+              onClick={onClose}
+            >
+              ✕
+            </button>
           </div>
-          <button
-            className="text-sm text-gray-500 hover:text-gray-800"
-            onClick={onClose}
-          >
-            ✕
-          </button>
+          <div className="text-sm text-gray-600 mt-3">
+            Stap {step} van 3 –{" "}
+            {step === 1
+              ? "Kies een actie"
+              : step === 2
+              ? "Kies speler (optioneel)"
+              : "Kies een uitkomst"}
+          </div>
         </div>
 
         {/* Stap 1: Actie */}
@@ -7111,6 +7124,21 @@ function FieldImageCard({
       onClick={handleClick}
       style={{ background: "transparent" }}
     >
+      {/* Altijd zichtbare aanduiding van functie en vast vak */}
+      <div className="absolute top-2 left-2 right-2 z-20 flex items-center justify-between gap-2 pointer-events-none">
+        <div className={`rounded-lg px-3 py-2 shadow-sm border-2 ${title.toLowerCase().includes("aanvallend") ? "bg-green-50/95 border-green-500 text-green-800" : "bg-red-50/95 border-red-500 text-red-800"}`}>
+          <div className="text-xs md:text-sm font-extrabold uppercase tracking-[0.14em]">
+            {title.toLowerCase().includes("aanvallend") ? "Aanval" : "Verdediging"}
+          </div>
+          <div className="text-sm md:text-lg font-extrabold leading-tight text-gray-900">
+            {title.split(" (")[0]}
+          </div>
+        </div>
+        <div className={`rounded-full px-3 py-1 text-xs md:text-sm font-bold shadow-sm ${active ? "bg-white text-gray-900" : "bg-white/80 text-gray-500"}`}>
+          {active ? "Actief" : "Niet actief"}
+        </div>
+      </div>
+
       {/* veldafbeelding */}
       <img
         src={imgSrc}
