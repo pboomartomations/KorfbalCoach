@@ -898,10 +898,14 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
   }));
 
   const toggleKlok = (aan: boolean) =>
-  setState((s) => ({
-    ...s,
-    klokLoopt: aan,
-  }));
+  setState((s) => {
+    // Bij de allereerste start hoort de bal direct bij het actieve vak.
+    // Zo lopen balbezit en aanvalstijd vanaf seconde 1 mee, ook vóór de eerste geregistreerde actie.
+    if (aan && !s.klokLoopt && !s.currentAttackId && s.attacks.length === 0 && s.tijdSeconden === 0) {
+      return { ...startAttackForVak(s, s.activeVak), klokLoopt: true };
+    }
+    return { ...s, klokLoopt: aan };
+  });
 
   // 🔹 LOSSE functie voor gewone Gemis/Kans/Wissel events
   const logEvent = (
@@ -3690,7 +3694,15 @@ const attackUitPct =
                         const playerName = e.spelerId ? spelersMap.get(e.spelerId)?.naam : undefined;
                         const isGoal = (e.soort === "Kans" && (e.reden === "Gescoord" || e.reden === "Doelpunt")) || (e.soort === "Gemis" && (e.reden === "Doorgelaten" || e.reden === "Doelpunt"));
                         const label = e.actie || e.soort || "Actie";
-                        const tone = isGoal ? "bg-green-50 text-green-700 border-green-200" : e.resultaat === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept" || e.reden === "Bal onderschept" ? "bg-blue-50 text-blue-700 border-blue-200" : e.soort === "Rebound" ? "bg-orange-50 text-orange-700 border-orange-200" : "bg-slate-50 text-slate-700 border-slate-200";
+                        const tone = isGoal
+                          ? e.team === "uit"
+                            ? "bg-red-50 text-red-700 border-red-200"
+                            : "bg-green-50 text-green-700 border-green-200"
+                          : e.resultaat === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept" || e.reden === "Bal onderschept"
+                          ? "bg-blue-50 text-blue-700 border-blue-200"
+                          : e.soort === "Rebound"
+                          ? "bg-orange-50 text-orange-700 border-orange-200"
+                          : "bg-slate-50 text-slate-700 border-slate-200";
                         return (
                           <div key={e.id} className="px-4 py-3 text-sm">
                             <div className="flex items-center justify-between gap-3">
@@ -3898,16 +3910,16 @@ const attackUitPct =
                 aria-label="Vakken wisselen"
                 className="
                   flex
-                  absolute top-1/2 left-1/2
-                  -translate-x-1/2 -translate-y-1/2
-                  w-10 h-10
+                  absolute bottom-[22%] left-1/2
+                  -translate-x-1/2 translate-y-1/2
+                  w-14 h-14
                   rounded-full
                   bg-white
                   border border-gray-300
                   shadow-lg
                   items-center justify-center
-                  text-lg
-                  hover:bg-gray-50
+                  text-2xl font-bold text-blue-700
+                  hover:bg-blue-50
                   active:scale-95
                 "
               >
@@ -4525,8 +4537,9 @@ function InsightsTab({
     );
     const historyInsightsHeader = (
       <div className="space-y-4">
-        <div className="border-b pb-3">
-          <h2 className="text-2xl font-bold">{analysisMode === "speler" ? "Insights per speler" : "Team Insights"}</h2>
+        <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm">
+          <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Insights</div>
+          <h2 className="mt-1 text-2xl font-bold">{analysisMode === "speler" ? "Insights per speler" : "Team Insights"}</h2>
           <p className="text-sm text-gray-500 mt-1">
             {all
               ? "Analyse op basis van de geselecteerde wedstrijden uit de geladen database."
@@ -5573,8 +5586,9 @@ function InsightsTab({
 
   const liveInsightsHeader = (
     <div className="space-y-4">
-      <div className="border-b pb-3">
-        <h2 className="text-2xl font-bold">
+      <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm">
+        <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Insights</div>
+        <h2 className="mt-1 text-2xl font-bold">
           {analysisMode === "speler" ? "Insights per speler" : "Team Insights"}
         </h2>
         <p className="text-sm text-gray-500 mt-1">
