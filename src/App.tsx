@@ -551,14 +551,9 @@ const formatImportedDate = (value: any) => {
 
 function KorbIQLogo({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="flex items-center gap-3 select-none">
-      <div className={`${compact ? "h-9 w-9" : "h-11 w-11"} relative shrink-0`} aria-hidden="true">
-        <div className="absolute inset-[2px] rounded-full border-[7px] border-blue-600" />
-        <div className="absolute left-1/2 bottom-0 h-[45%] w-[8px] -translate-x-1/2 rounded-sm bg-blue-700" />
-        <div className="absolute left-1/2 top-1/2 h-[42%] w-[42%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" />
-      </div>
+    <div className="flex items-center select-none">
       <div className="leading-none">
-        <div className={`${compact ? "text-xl" : "text-2xl"} font-extrabold tracking-tight text-[#124a98]`}>
+        <div className={`${compact ? "text-xl" : "text-3xl"} font-extrabold tracking-tight text-[#124a98]`}>
           Korb<span className="text-blue-600">IQ</span>
         </div>
         {!compact && <div className="mt-1 text-[10px] font-medium tracking-wide text-slate-500">Inzicht in elke actie</div>}
@@ -567,13 +562,19 @@ function KorbIQLogo({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function NavGlyph({ type }: { type: "match" | "insights" | "season" | "players" | "settings" | "export" | "share" | "reset" }) {
+function SignalDot({ tone }: { tone: "green" | "orange" | "red" | "blue" }) {
+  const cls = tone === "green" ? "bg-emerald-500" : tone === "orange" ? "bg-orange-500" : tone === "red" ? "bg-red-500" : "bg-blue-500";
+  return <span className={`mt-[0.42rem] h-2.5 w-2.5 shrink-0 rounded-full ${cls} shadow-[0_0_0_3px_rgba(255,255,255,.75)]`} aria-hidden="true" />;
+}
+
+function NavGlyph({ type }: { type: "match" | "insights" | "season" | "players" | "settings" | "export" | "backup" | "share" | "reset" }) {
   const common = "h-5 w-5 shrink-0";
   if (type === "players") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="8" r="3"/><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"/></svg>;
   if (type === "settings") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>;
   if (type === "insights") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg>;
   if (type === "season") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></svg>;
   if (type === "export") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>;
+  if (type === "backup") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21V9m0 0 4 4m-4-4-4 4M5 5h14"/></svg>;
   if (type === "share") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.3 10.8 7.4-4.3M8.3 13.2l7.4 4.3"/></svg>;
   if (type === "reset") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14"/></svg>;
   return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>;
@@ -2127,7 +2128,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                 <SideNavButton id="spelers" label="Spelers" icon="players" />
                 <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
                 <button onClick={exportToExcel} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="export"/><span>Exporteren</span></button>
-                <button onClick={() => dbFileInputRef.current?.click()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="export"/><span>Backup laden</span></button>
+                <button onClick={() => dbFileInputRef.current?.click()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="backup"/><span>Backup laden</span></button>
                 <button onClick={shareMatch} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="share"/><span>Deel wedstrijd</span></button>
                 <button onClick={resetAlles} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
               </div>
@@ -3574,15 +3575,18 @@ const attackUitPct =
                 {visibleLiveCoachSignals.map((signal, i) => (
                   <div
                     key={`${signal.text}-${i}`}
-                    className={`rounded-xl border px-3 py-2 text-sm font-medium ${
+                    className={`flex gap-2 rounded-xl border px-3 py-2 text-sm font-medium ${
                       signal.tone === "goed"
                         ? "bg-green-50 border-green-200 text-green-800"
+                        : signal.tone === "letop" && signal.priority === 1
+                        ? "bg-red-50 border-red-200 text-red-900"
                         : signal.tone === "letop"
-                        ? "bg-amber-50 border-amber-200 text-amber-900"
+                        ? "bg-orange-50 border-orange-200 text-orange-900"
                         : "bg-blue-50 border-blue-200 text-blue-800"
                     }`}
                   >
-                    {signal.text}
+                    <SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"} />
+                    <span>{signal.text}</span>
                   </div>
                 ))}
               </div>
@@ -3597,34 +3601,11 @@ const attackUitPct =
                 : "transition"
             }
           >
-            {/* Laatste acties: snelle visuele wedstrijdcontext */}
-            {latestActions.length > 0 && (
-              <div className="mt-2 rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm" data-no-pause>
-                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3"><div><div className="font-extrabold">Laatste acties</div><div className="text-xs text-slate-500">Meest recente registraties met de stand na die actie</div></div><div className="text-xs font-semibold text-slate-400">{latestActions.length} getoond</div></div>
-                <div className="divide-y divide-slate-100">
-                  {latestActions.map((e) => {
-                    const score = scoreAtEvent.get(e.id);
-                    const playerName = e.spelerId ? spelersMap.get(e.spelerId)?.naam : undefined;
-                    const isGoal = (e.soort === "Kans" && (e.reden === "Gescoord" || e.reden === "Doelpunt")) || (e.soort === "Gemis" && (e.reden === "Doorgelaten" || e.reden === "Doelpunt"));
-                    const label = e.actie || e.soort || "Actie";
-                    const tone = isGoal ? "bg-green-50 text-green-700 border-green-200" : e.resultaat === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept" || e.reden === "Bal onderschept" ? "bg-blue-50 text-blue-700 border-blue-200" : e.soort === "Rebound" ? "bg-orange-50 text-orange-700 border-orange-200" : "bg-slate-50 text-slate-700 border-slate-200";
-                    return (
-                      <div key={e.id} className="grid grid-cols-[58px_110px_1fr_auto] items-center gap-3 px-4 py-3 text-sm">
-                        <div className="font-semibold tabular-nums text-slate-500">{formatTime(e.tijdSeconden)}</div>
-                        <div><span className={`inline-flex rounded-lg border px-2 py-1 text-xs font-extrabold uppercase ${tone}`}>{label}</span></div>
-                        <div className="min-w-0"><div className="font-semibold truncate">{playerName || (e.team === "uit" ? opponentName || "Tegenstander" : "Teamactie")}</div><div className="text-xs text-slate-500 truncate">{e.vakId ? `Vak ${e.vakId}` : ""}{e.vak ? ` · ${e.vak === "aanvallend" ? "Aanval" : "Verdediging"}` : ""}{e.reden ? ` · ${e.reden}` : ""}</div></div>
-                        <div className="rounded-lg bg-slate-900 px-3 py-1.5 font-extrabold text-white tabular-nums">{score ? `${score.thuis} - ${score.uit}` : `${state.scoreThuis} - ${state.scoreUit}`}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Vakken: boven afbeeldingen (heatmap), onder spelers+wissels */}
+            {/* Vakken met daarnaast maximaal vijf laatste acties */}
             <div className="relative mt-4" data-no-pause>
-              {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
-              <div className="flex gap-4 mb-4">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,0.82fr)] mb-4 items-stretch">
+                {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
+                <div className="flex gap-4 min-w-0">
                 {state.aanvalLinks ? (
                   <>
                     {/* LINKS: Aanvallend veld */}
@@ -3692,6 +3673,45 @@ const attackUitPct =
                     />
                   </>
                 )}
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm min-h-full" data-no-pause>
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                    <div>
+                      <div className="font-extrabold">Laatste acties</div>
+                      <div className="text-xs text-slate-500">Maximaal 5 · inclusief stand</div>
+                    </div>
+                    <div className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500">{latestActions.length}/5</div>
+                  </div>
+                  {latestActions.length > 0 ? (
+                    <div className="divide-y divide-slate-100">
+                      {latestActions.map((e) => {
+                        const score = scoreAtEvent.get(e.id);
+                        const playerName = e.spelerId ? spelersMap.get(e.spelerId)?.naam : undefined;
+                        const isGoal = (e.soort === "Kans" && (e.reden === "Gescoord" || e.reden === "Doelpunt")) || (e.soort === "Gemis" && (e.reden === "Doorgelaten" || e.reden === "Doelpunt"));
+                        const label = e.actie || e.soort || "Actie";
+                        const tone = isGoal ? "bg-green-50 text-green-700 border-green-200" : e.resultaat === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept" || e.reden === "Bal onderschept" ? "bg-blue-50 text-blue-700 border-blue-200" : e.soort === "Rebound" ? "bg-orange-50 text-orange-700 border-orange-200" : "bg-slate-50 text-slate-700 border-slate-200";
+                        return (
+                          <div key={e.id} className="px-4 py-3 text-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="w-[44px] shrink-0 text-xs font-semibold tabular-nums text-slate-400">{formatTime(e.tijdSeconden)}</span>
+                                <span className={`inline-flex max-w-[150px] truncate rounded-lg border px-2 py-1 text-[10px] font-extrabold uppercase ${tone}`}>{label}</span>
+                              </div>
+                              <div className="rounded-lg bg-slate-900 px-2.5 py-1 font-extrabold text-white tabular-nums whitespace-nowrap">{score ? `${score.thuis} - ${score.uit}` : `${state.scoreThuis} - ${state.scoreUit}`}</div>
+                            </div>
+                            <div className="mt-2 min-w-0 pl-[52px]">
+                              <div className="font-semibold truncate">{playerName || (e.team === "uit" ? opponentName || "Tegenstander" : "Teamactie")}</div>
+                              <div className="text-xs text-slate-500 truncate">{e.vakId ? `Vak ${e.vakId}` : ""}{e.vak ? ` · ${e.vak === "aanvallend" ? "Aanval" : "Verdediging"}` : ""}{e.reden ? ` · ${e.reden}` : ""}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex min-h-[180px] items-center justify-center p-6 text-center text-sm text-slate-400">De laatste acties verschijnen hier zodra je begint met registreren.</div>
+                  )}
+                </div>
               </div>
 
               {/* ONDER: vakken met spelers en wisselknoppen */}
@@ -4003,10 +4023,10 @@ function SeasonDashboard({
   };
 
   return <div className="space-y-5">
-    <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4"><div><h2 className="text-2xl font-bold">Seizoensdashboard</h2><p className="text-sm text-gray-500">Compact coach-overzicht van resultaten, ontwikkeling, vakken en spelers.</p></div><div className="flex flex-wrap gap-3 items-end"><label className="flex flex-col gap-1"><span className="text-xs font-semibold text-gray-500">Seizoen</span><select value={season} onChange={e=>setSeason(e.target.value)} className="border rounded-xl px-3 py-2 bg-white min-w-[210px]">{seasons.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="flex items-center gap-2 border rounded-xl px-3 py-2 bg-white text-sm"><input type="checkbox" checked={includeNonCompetition} onChange={e=>setIncludeNonCompetition(e.target.checked)}/> Oefen/toernooi meenemen</label></div></div>
+    <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4"><div><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Season</div><h2 className="mt-1 text-2xl font-bold">Seizoensdashboard</h2><p className="text-sm text-gray-500">Compact coach-overzicht van resultaten, ontwikkeling, vakken en spelers.</p></div><div className="flex flex-wrap gap-3 items-end"><label className="flex flex-col gap-1"><span className="text-xs font-semibold text-gray-500">Seizoen</span><select value={season} onChange={e=>setSeason(e.target.value)} className="border rounded-xl px-3 py-2 bg-white min-w-[210px]">{seasons.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="flex items-center gap-2 border border-blue-100 rounded-xl px-3 py-2 bg-white/90 text-sm"><input type="checkbox" checked={includeNonCompetition} onChange={e=>setIncludeNonCompetition(e.target.checked)}/> Oefen/toernooi meenemen</label></div></div></div>
     {!dbSheets ? <div className="border rounded-2xl p-6 bg-white text-sm text-gray-600">Laad eerst de Excel-database. Het seizoensdashboard gebruikt de opgeslagen wedstrijden uit die database.</div> : seasonMatches.length===0 ? <div className="border rounded-2xl p-6 bg-white text-sm text-gray-600">Voor <b>{season||"dit seizoen"}</b> zijn binnen dit filter nog geen wedstrijden gevonden.</div> : <>
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">{[["Wedstrijden",seasonMatches.length],["Winst / gelijk / verlies",`${wins} / ${draws} / ${losses}`],["Doelpunten",`${goalsFor} - ${goalsAgainst}`],["Kansen raak",`${pct(goals,own.length).toFixed(1)}%`],["Aanv. rebound gewonnen",`${pct(wonRebounds,wonRebounds+lostRebounds).toFixed(1)}%`]].map(([l,v])=><div key={String(l)} className="border rounded-2xl p-4 bg-white"><div className="text-xs font-semibold text-gray-500">{l}</div><div className="text-2xl font-bold mt-1">{v}</div></div>)}</div>
-      <div className="grid gap-4 lg:grid-cols-2"><div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Coachsignalen</div><div className="space-y-2">{insights.map((x,i)=><div key={i} className="rounded-xl bg-gray-50 border px-3 py-2 text-sm">{x}</div>)}</div></div><div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Seizoensprofiel</div><div className="space-y-2 text-sm"><div className="flex justify-between"><span>Korfgerichtheid</span><b>{pct(goals+korf,own.length).toFixed(1)}%</b></div><div className="flex justify-between"><span>Kansen per aanval</span><b>{ownAttacks.length?(own.length/ownAttacks.length).toFixed(2):"0.00"}</b></div><div className="flex justify-between"><span>Kansen tegenstander raak</span><b>{pct(oppGoals,opp.length).toFixed(1)}%</b></div><div className="flex justify-between"><span>Pogingen tegenstander verdedigd</span><b>{pct(defended,opp.length).toFixed(1)}%</b></div></div></div></div>
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">{[["Wedstrijden",seasonMatches.length,"blue"],["Winst / gelijk / verlies",`${wins} / ${draws} / ${losses}`,wins>=losses?"green":"orange"],["Doelpunten",`${goalsFor} - ${goalsAgainst}`,goalsFor>=goalsAgainst?"green":"red"],["Kansen raak",`${pct(goals,own.length).toFixed(1)}%`,"blue"],["Aanv. rebound gewonnen",`${pct(wonRebounds,wonRebounds+lostRebounds).toFixed(1)}%`,"orange"]].map(([l,v,tone])=>{const cls=tone==="green"?"border-emerald-200 bg-emerald-50/70 text-emerald-900":tone==="red"?"border-red-200 bg-red-50/70 text-red-900":tone==="orange"?"border-orange-200 bg-orange-50/70 text-orange-900":"border-blue-200 bg-blue-50/70 text-blue-900";return <div key={String(l)} className={`border rounded-2xl p-4 ${cls}`}><div className="text-xs font-semibold opacity-70">{l}</div><div className="text-2xl font-bold mt-1">{v}</div></div>})}</div>
+      <div className="grid gap-4 lg:grid-cols-2"><div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Coachsignalen</div><div className="space-y-2">{insights.map((x,i)=>{const lower=x.toLowerCase();const negative=lower.includes("aandacht")||lower.includes("loopt terug")||lower.includes("lager")||lower.includes("meer van hun kansen");const positive=lower.includes("verbetert")||lower.includes("positief")||lower.includes("minder van hun kansen");const tone=negative?"orange":positive?"green":"blue";const cls=tone==="green"?"bg-emerald-50 border-emerald-100 text-emerald-900":tone==="orange"?"bg-orange-50 border-orange-100 text-orange-900":"bg-blue-50 border-blue-100 text-blue-900";return <div key={i} className={`flex gap-2 rounded-xl border px-3 py-2 text-sm ${cls}`}><SignalDot tone={tone}/><span>{x}</span></div>})}</div></div><div className="border rounded-2xl p-5 bg-gradient-to-br from-white to-blue-50/60"><div className="text-lg font-bold mb-3">Seizoensprofiel</div><div className="grid grid-cols-2 gap-2 text-sm"><div className="rounded-xl bg-blue-50 border border-blue-100 p-3"><span className="block text-xs text-blue-700">Korfgerichtheid</span><b className="text-lg text-blue-950">{pct(goals+korf,own.length).toFixed(1)}%</b></div><div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3"><span className="block text-xs text-emerald-700">Kansen per aanval</span><b className="text-lg text-emerald-950">{ownAttacks.length?(own.length/ownAttacks.length).toFixed(2):"0.00"}</b></div><div className="rounded-xl bg-red-50 border border-red-100 p-3"><span className="block text-xs text-red-700">Tegenstander raak</span><b className="text-lg text-red-950">{pct(oppGoals,opp.length).toFixed(1)}%</b></div><div className="rounded-xl bg-orange-50 border border-orange-100 p-3"><span className="block text-xs text-orange-700">Pogingen verdedigd</span><b className="text-lg text-orange-950">{pct(defended,opp.length).toFixed(1)}%</b></div></div></div></div>
       <div><h3 className="text-xl font-bold">Ontwikkeling door het seizoen</h3><p className="text-sm text-gray-500">Per wedstrijd; gebruik Insights voor de uitgebreidere 3-tegen-3 analyse.</p></div><div className="grid gap-4 lg:grid-cols-2"><MiniTrend title="Kansen raak" keyName="score"/><MiniTrend title="Korfgerichtheid" keyName="quality"/><MiniTrend title="Aanvallende rebounds gewonnen" keyName="rebound"/><MiniTrend title="Kansen tegenstander raak" keyName="oppScore"/></div>
       <div className="grid gap-4 lg:grid-cols-2"><div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Vak 1 vs Vak 2 – seizoen</div><div className="overflow-auto"><table className="w-full text-sm"><thead><tr className="text-gray-500"><th className="text-left py-2">Kengetal</th><th className="text-right">Vak 1</th><th className="text-right">Vak 2</th></tr></thead><tbody>{[["Kansen",v1.attempts,v2.attempts],["Goals",v1.goals,v2.goals],["Kansen raak",`${v1.score.toFixed(1)}%`,`${v2.score.toFixed(1)}%`],["Tegenstander kansen raak",`${v1.oppScore.toFixed(1)}%`,`${v2.oppScore.toFixed(1)}%`]].map(([l,a,b])=><tr key={String(l)} className="border-t"><td className="py-2 font-semibold">{l}</td><td className="text-right">{a}</td><td className="text-right">{b}</td></tr>)}</tbody></table></div></div><div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Spelers – seizoen</div><div className="overflow-auto max-h-[260px]"><table className="w-full text-sm"><thead className="sticky top-0 bg-white"><tr className="text-gray-500"><th className="text-left py-2">Speler</th><th className="text-right">Goals</th><th className="text-right">Kansen</th><th className="text-right">% raak</th><th className="text-right">Reb.</th></tr></thead><tbody>{playerRows.map(p=><tr key={p.name} className="border-t"><td className="py-2 font-semibold">{p.name}</td><td className="text-right">{p.goals}</td><td className="text-right">{p.attempts}</td><td className="text-right">{p.score.toFixed(1)}%</td><td className="text-right">{p.rebounds}</td></tr>)}</tbody></table></div></div></div>
       <div className="border rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b font-bold">Wedstrijden – {season}</div><div className="overflow-auto"><table className="w-full text-sm min-w-[720px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Datum</th><th className="text-left p-3">Tegenstander</th><th className="text-left p-3">Type</th><th className="text-right p-3">Uitslag</th><th className="text-right p-3">Kansen raak</th></tr></thead><tbody>{seasonMatches.map((m:any)=>{const pm=perMatch.find(x=>x.id===String(m.wedstrijd_id));return <tr key={String(m.wedstrijd_id)} className="border-t"><td className="p-3">{String(m.datum??"").slice(0,10)}</td><td className="p-3 font-semibold">{m.tegenstander||m.wedstrijd_naam||"-"}</td><td className="p-3">{m.wedstrijdtype||"Competitie"}</td><td className="p-3 text-right font-bold">{m.score_korbis}-{m.score_tegenstander}</td><td className="p-3 text-right">{pm?`${pm.score.toFixed(1)}%`:"-"}</td></tr>})}</tbody></table></div></div>
@@ -4571,8 +4591,8 @@ function InsightsTab({
         ].map(([label,previous,recent,suffix])=>{const p=Number(previous),r=Number(recent),d=r-p;const inverse=String(label)==="Kansen tegenstander raak";const better=inverse?d<0:d>0;const tone=Math.abs(d)<0.05?"bg-gray-50 text-gray-700":better?"bg-emerald-50 text-emerald-800":"bg-red-50 text-red-800";return <tr key={String(label)} className="border-t"><td className="p-3 font-semibold">{label}</td><td className="p-3 text-right">{p.toFixed(suffix?1:2)}{suffix}</td><td className={`p-3 text-right ${tone}`}>{r.toFixed(suffix?1:2)}{suffix}</td><td className={`p-3 text-right font-bold ${tone}`}>{d>0?"+":""}{d.toFixed(suffix?1:2)}{suffix}</td></tr>})}</tbody></table></div> : <div className="text-sm text-gray-500">Voor deze vergelijking zijn zes wedstrijden binnen hetzelfde filter nodig.</div>}
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-          <div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Sterke punten in de ontwikkeling</div><div className="space-y-2">{developmentStrengths.slice(0,5).map((item,i)=><div key={i} className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2 text-sm">{item}</div>)}</div></div>
-          <div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Aandachtspunten in de ontwikkeling</div><div className="space-y-2">{developmentAttention.slice(0,5).map((item,i)=><div key={i} className="rounded-xl bg-amber-50 border border-amber-100 px-3 py-2 text-sm">{item}</div>)}</div></div>
+          <div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Sterke punten in de ontwikkeling</div><div className="space-y-2">{developmentStrengths.slice(0,5).map((item,i)=><div key={i} className="flex gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2 text-sm"><SignalDot tone="green"/><span>{item}</span></div>)}</div></div>
+          <div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Aandachtspunten in de ontwikkeling</div><div className="space-y-2">{developmentAttention.slice(0,5).map((item,i)=><div key={i} className="flex gap-2 rounded-xl bg-orange-50 border border-orange-100 px-3 py-2 text-sm"><SignalDot tone="orange"/><span>{item}</span></div>)}</div></div>
         </div>
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Aanvalsprofiel</div><div className="space-y-2 text-sm"><div className="flex justify-between"><span>Pogingen per aanval</span><b>{aggregateAttemptsPerAttack.toFixed(2)}</b></div><div className="flex justify-between"><span>Gem. aanvalsduur</span><b>{formatTime(Math.round(aggregateAttackDuration))}</b></div><div className="flex justify-between"><span>Kansen raak</span><b>{scorePct.toFixed(1)}%</b></div><div className="flex justify-between"><span>Korfgerichtheid</span><b>{qualityPct.toFixed(1)}%</b></div><div className="flex justify-between"><span>Gem. aanvalstijd</span><b>{averageAttackShare.toFixed(1)}%</b></div></div></div>
@@ -5622,7 +5642,7 @@ function InsightsTab({
               <ul className="space-y-2 text-sm">
                 {teamStrengths.slice(0, 6).map((item, index) => (
                   <li key={index} className="flex gap-2">
-                    <span className="font-bold text-green-700">+</span>
+                    <SignalDot tone="green" />
                     <span>{item}</span>
                   </li>
                 ))}
@@ -5640,7 +5660,7 @@ function InsightsTab({
               <ul className="space-y-2 text-sm">
                 {teamAttention.slice(0, 6).map((item, index) => (
                   <li key={index} className="flex gap-2">
-                    <span className="font-bold text-amber-700">!</span>
+                    <SignalDot tone="orange" />
                     <span>{item}</span>
                   </li>
                 ))}
@@ -6056,7 +6076,7 @@ function InsightsTab({
                   key={`${text}-${index}`}
                   className="flex gap-2 rounded-xl bg-white/80 border border-green-100 p-3 text-sm"
                 >
-                  <span aria-hidden="true">🟢</span>
+                  <SignalDot tone="green" />
                   <span>{text}</span>
                 </div>
               ))}
@@ -6077,7 +6097,7 @@ function InsightsTab({
                   key={`${text}-${index}`}
                   className="flex gap-2 rounded-xl bg-white/80 border border-orange-100 p-3 text-sm"
                 >
-                  <span aria-hidden="true">🟠</span>
+                  <SignalDot tone="orange" />
                   <span>{text}</span>
                 </div>
               ))}
