@@ -135,6 +135,15 @@ type AttackTeam = "thuis" | "uit";
 
 type VakId = 1 | 2;
 
+type VakPeriod = {
+  id: string;
+  vakId: VakId;
+  startSeconden: number;
+  endSeconden?: number;
+  spelerIds: string[];
+  combinatieKey: string;
+};
+
 type AttackMeta = {
   id: string;              // interne id
   index: number;           // 1,2,3,... (aanvalnummer)
@@ -143,6 +152,8 @@ type AttackMeta = {
   vakId?: VakId;           // vast teamvak: Vak 1 of Vak 2
   startSeconden: number;   // starttijd vd aanval (wedstrijdseconden)
   endSeconden?: number;    // optional: eindtijd
+  spelerIds?: string[];    // Korbis-spelers die op dit moment samen in dit vaste vak staan
+  combinatieKey?: string;  // volgorde-onafhankelijke identiteit van het viertal
 };
 
 type LogEvent = {
@@ -164,6 +175,8 @@ type LogEvent = {
   attackId?: string;
   attackIndex?: number;
   vakId?: VakId;
+  spelerIds?: string[];
+  combinatieKey?: string;
 };
 
 type TeamFileV1 = {
@@ -182,6 +195,7 @@ type DatabaseSheetsData = {
   vakindeling?: any[];
   instellingen?: any[];
   databaseInfo?: any[];
+  vakperiodes?: any[];
 };
 
 type DatabaseSheets = DatabaseSheetsData | null;
@@ -267,6 +281,7 @@ type AppState = {
   vak1Aanvallend: boolean;            // identiteit van de vakken blijft behouden bij vakwissels
   attacks: AttackMeta[];
   currentAttackId: string | null;
+  vakPeriods: VakPeriod[];
   fieldEvents: FieldEvent[];  
   markerGroup: number;
   opponentName: string;
@@ -299,6 +314,7 @@ const DEFAULT_STATE: AppState = {
   vak1Aanvallend: true,
   attacks: [],
   currentAttackId: null,
+  vakPeriods: [],
   fieldEvents: [], 
   markerGroup: 0,
   opponentName: "",   
@@ -310,6 +326,26 @@ const DEFAULT_STATE: AppState = {
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
+
+function combinationKey(ids: (string | null | undefined)[]) {
+  return ids.filter((id): id is string => Boolean(id)).slice().sort().join("|");
+}
+
+function playerIdsForVak(state: AppState, vakId: VakId): string[] {
+  const arr = vakId === 1
+    ? (state.vak1Aanvallend ? state.aanval : state.verdediging)
+    : (state.vak1Aanvallend ? state.verdediging : state.aanval);
+  return arr.filter((id): id is string => Boolean(id));
+}
+
+function ensureInitialVakPeriods(state: AppState): AppState {
+  if (state.vakPeriods.length > 0) return state;
+  const periods: VakPeriod[] = ([1, 2] as VakId[]).map((vakId) => {
+    const spelerIds = playerIdsForVak(state, vakId);
+    return { id: uid("vp"), vakId, startSeconden: state.tijdSeconden, spelerIds, combinatieKey: combinationKey(spelerIds) };
+  });
+  return { ...state, vakPeriods: periods };
+}
 
 function startAttackForVak(prev: AppState, vak: VakSide): AppState {
   const now = prev.tijdSeconden;
@@ -324,6 +360,7 @@ function startAttackForVak(prev: AppState, vak: VakSide): AppState {
       ? 2
       : 1;
 
+  const spelerIds = playerIdsForVak(prev, vakId);
   const attacks = [...prev.attacks];
 
   // oude aanval afsluiten (als er één loopt)
@@ -343,6 +380,8 @@ function startAttackForVak(prev: AppState, vak: VakSide): AppState {
     vak,
     vakId,
     startSeconden: now,
+    spelerIds,
+    combinatieKey: combinationKey(spelerIds),
   };
   attacks.push(newAttack);
 
@@ -501,6 +540,7 @@ function sanitizeState(raw: any): AppState {
       typeof s.currentAttackId === "string"
         ? s.currentAttackId
         : DEFAULT_STATE.currentAttackId,
+      vakPeriods: Array.isArray(s.vakPeriods) ? s.vakPeriods : [],
 
         opponentName:
         typeof s.opponentName === "string" ? s.opponentName : "",
@@ -607,7 +647,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "seizoen">("spelers");
+  useState<"spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "seizoen">("spelers");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -818,6 +858,9 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
       const arr = vak === "aanvallend" ? [...s.aanval] : [...s.verdediging];
       const prevId = arr[pos] || null;
       arr[pos] = spelerId;
+      const affectedVakId: VakId = vak === "aanvallend"
+        ? (s.vak1Aanvallend ? 1 : 2)
+        : (s.vak1Aanvallend ? 2 : 1);
   
       const logs: LogEvent[] = [];
   
@@ -878,10 +921,29 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
         }
       }
   
-      const next =
+      let next: AppState =
         vak === "aanvallend"
           ? { ...s, aanval: arr }
           : { ...s, verdediging: arr };
+
+      // Tijdens een lopende/gestarte wedstrijd markeert iedere echte wissel een nieuwe
+      // vakperiode. Vak 1/2 blijft de veldidentiteit; combinatieKey identificeert het viertal.
+      if (logWissel && prevId !== spelerId && (s.tijdSeconden > 0 || s.attacks.length > 0 || s.klokLoopt)) {
+        const periods = next.vakPeriods.map((period) =>
+          period.vakId === affectedVakId && period.endSeconden == null
+            ? { ...period, endSeconden: s.tijdSeconden }
+            : period
+        );
+        const ids = playerIdsForVak(next, affectedVakId);
+        periods.push({
+          id: uid("vp"),
+          vakId: affectedVakId,
+          startSeconden: s.tijdSeconden,
+          spelerIds: ids,
+          combinatieKey: combinationKey(ids),
+        });
+        next = { ...next, vakPeriods: periods };
+      }
   
       return logs.length ? { ...next, log: [...logs, ...s.log] } : next;
     });
@@ -904,7 +966,8 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
     // Bij de allereerste start hoort de bal direct bij het actieve vak.
     // Zo lopen balbezit en aanvalstijd vanaf seconde 1 mee, ook vóór de eerste geregistreerde actie.
     if (aan && !s.klokLoopt && !s.currentAttackId && s.attacks.length === 0 && s.tijdSeconden === 0) {
-      return { ...startAttackForVak(s, s.activeVak), klokLoopt: true };
+      const initialized = ensureInitialVakPeriods(s);
+      return { ...startAttackForVak(initialized, initialized.activeVak), klokLoopt: true };
     }
     return { ...s, klokLoopt: aan };
   });
@@ -925,6 +988,10 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
     const minuut = Math.max(1, Math.ceil(state.tijdSeconden / 60));
 
     const { attackId, attackIndex } = getCurrentAttackInfo(state);
+    const eventVakId: VakId = vak === "aanvallend"
+      ? (state.vak1Aanvallend ? 1 : 2)
+      : (state.vak1Aanvallend ? 2 : 1);
+    const eventSpelerIds = playerIdsForVak(state, eventVakId);
 
     const e: LogEvent = {
       id: uid("ev"),
@@ -940,14 +1007,9 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
       wedstrijdMinuut: minuut,
       attackId,
       attackIndex,
-      vakId:
-        vak === "aanvallend"
-          ? state.vak1Aanvallend
-            ? 1
-            : 2
-          : state.vak1Aanvallend
-          ? 2
-          : 1,
+      vakId: eventVakId,
+      spelerIds: eventSpelerIds,
+      combinatieKey: combinationKey(eventSpelerIds),
     };
 
     setState((s) => {
@@ -1364,6 +1426,7 @@ const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
         vakindeling: rows("Vakindeling"),
         instellingen: rows("Instellingen"),
         databaseInfo: rows("DatabaseInfo"),
+        vakperiodes: rows("Vakperiodes"),
       };
 
       const info = imported.databaseInfo?.[0] ?? {};
@@ -1611,6 +1674,9 @@ const exportToExcel = () => {
         e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
       vak: e.vak ?? "",
       vak_id: e.vakId ?? attackMeta?.vakId ?? "",
+      combinatie_key: e.combinatieKey ?? attackMeta?.combinatieKey ?? "",
+      combinatie_speler_ids: JSON.stringify(e.spelerIds ?? attackMeta?.spelerIds ?? []),
+      combinatie_spelers: (e.spelerIds ?? attackMeta?.spelerIds ?? []).map((id) => spelersMap.get(id)?.naam ?? id).join(" · "),
       team: teamLabel,
       actie: actieLabel,
       uitkomst: uitkomstLabel,
@@ -1660,6 +1726,9 @@ const exportToExcel = () => {
       team: teamLabel,
       vak: a.vak === "aanvallend" ? "Aanvallend" : "Verdedigend",
       vak_id: a.vakId ?? "",
+      combinatie_key: a.combinatieKey ?? "",
+      combinatie_speler_ids: JSON.stringify(a.spelerIds ?? []),
+      combinatie_spelers: (a.spelerIds ?? []).map((id) => spelersMap.get(id)?.naam ?? id).join(" · "),
       start: formatTime(a.startSeconden),
       einde: a.endSeconden != null ? formatTime(a.endSeconden) : "",
       duur: duurSeconden != null ? formatTime(duurSeconden) : "",
@@ -1715,7 +1784,27 @@ const exportToExcel = () => {
     };
   });
 
-  // ---------- 4) MATCH SUMMARY SHEET ----------
+  // ---------- 4) VAKPERIODES / COMBINATIES ----------
+  const vakPeriodeRows = state.vakPeriods.map((period) => {
+    const end = period.endSeconden ?? state.tijdSeconden;
+    return {
+      wedstrijd_id: wedstrijdId,
+      wedstrijd_naam: wedstrijdNaam,
+      locatie: locatieLabel,
+      seizoen: state.season,
+      wedstrijdtype: state.matchType,
+      periode_id: period.id,
+      vak_id: period.vakId,
+      start: formatTime(period.startSeconden),
+      einde: formatTime(end),
+      duur_seconden: Math.max(0, end - period.startSeconden),
+      combinatie_key: period.combinatieKey,
+      combinatie_speler_ids: JSON.stringify(period.spelerIds),
+      combinatie_spelers: period.spelerIds.map((id) => spelersMap.get(id)?.naam ?? id).join(" · "),
+    };
+  });
+
+  // ---------- 5) MATCH SUMMARY SHEET ----------
   const nowTime = state.tijdSeconden;
   const totalPoss =
   state.possessionThuisSeconden + state.possessionUitSeconden;
@@ -1796,6 +1885,7 @@ const exportToExcel = () => {
   const allEvents = [...(dbSheets?.events ?? []).filter(keepOtherMatch), ...eventRows];
   const allAttacks = [...(dbSheets?.attacks ?? []).filter(keepOtherMatch), ...attackRows];
   const allWissels = [...(dbSheets?.wissels ?? []).filter(keepOtherMatch), ...wisselRows];
+  const allVakPeriodes = [...(dbSheets?.vakperiodes ?? []).filter(keepOtherMatch), ...vakPeriodeRows];
   const normalizeMatchRow = (m: any) => ({
     wedstrijd_id: m.wedstrijd_id ?? "", wedstrijd_naam: m.wedstrijd_naam ?? "", locatie: m.locatie ?? "",
     seizoen: m.seizoen ?? "", wedstrijdtype: m.wedstrijdtype ?? "",
@@ -1869,7 +1959,7 @@ const exportToExcel = () => {
   }];
 
   const nextDatabase: DatabaseSheetsData = {
-    events: allEvents, attacks: allAttacks, wissels: allWissels, matches: allMatches,
+    events: allEvents, attacks: allAttacks, wissels: allWissels, matches: allMatches, vakperiodes: allVakPeriodes,
     spelers: spelerRows, team: teamRows, vakindeling: vakRows,
     instellingen: instellingenRows, databaseInfo: databaseInfoRows,
   };
@@ -1878,6 +1968,7 @@ const exportToExcel = () => {
   const eventsSheet = XLSX.utils.json_to_sheet(allEvents);
   const attacksSheet = XLSX.utils.json_to_sheet(allAttacks);
   const wisselSheet = XLSX.utils.json_to_sheet(allWissels);
+  const vakPeriodeSheet = XLSX.utils.json_to_sheet(allVakPeriodes);
   const matchSheet = XLSX.utils.json_to_sheet(allMatches);
   const spelersSheet = XLSX.utils.json_to_sheet(spelerRows);
   const teamSheet = XLSX.utils.json_to_sheet(teamRows);
@@ -1889,6 +1980,7 @@ const exportToExcel = () => {
   XLSX.utils.book_append_sheet(wb, eventsSheet, "Events");
   XLSX.utils.book_append_sheet(wb, attacksSheet, "Attacks");
   XLSX.utils.book_append_sheet(wb, wisselSheet, "Wissels");
+  XLSX.utils.book_append_sheet(wb, vakPeriodeSheet, "Vakperiodes");
   XLSX.utils.book_append_sheet(wb, matchSheet, "Wedstrijden");
   XLSX.utils.book_append_sheet(wb, spelersSheet, "Spelers");
   XLSX.utils.book_append_sheet(wb, teamSheet, "Team");
@@ -1916,6 +2008,7 @@ const wisSeizoensdatabase = () => {
     events: [],
     attacks: [],
     wissels: [],
+    vakperiodes: [],
     matches: [],
     spelers: state.spelers.map((p) => ({
       speler_id: p.id, naam: p.naam, geslacht: p.geslacht, status: p.status,
@@ -1968,6 +2061,7 @@ const resetAlles = () => {
     ...DEFAULT_STATE,
     attacks: [],
     currentAttackId: null,
+    vakPeriods: [],
   });
 };
 
@@ -2018,6 +2112,7 @@ const startNieuweDatabase = () => {
     events: [],
     attacks: [],
     wissels: [],
+    vakperiodes: [],
     matches: [],
     spelers: state.spelers.map((p) => ({
       speler_id: p.id, naam: p.naam, geslacht: p.geslacht, status: p.status,
@@ -2116,6 +2211,7 @@ const clearWedstrijd = (
     log: [],
     attacks: [],
     currentAttackId: null,
+    vakPeriods: [],
     goalsSinceLastSwitch: 0,
 
     fieldEvents: [],
@@ -2147,6 +2243,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     wedstrijd: "Wedstrijdregistratie",
     verslag: "Wedstrijdverslag",
     insights: "Insights & analyse",
+    combinaties: "Vakcombinaties",
     seizoen: "Seizoensdashboard",
   };
 
@@ -2211,6 +2308,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
               <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Team</div>
               <div className="space-y-1">
                 <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
+                <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
                 <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
               </div>
             </section>
@@ -2283,6 +2381,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                     <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Team</div>
                     <div className="space-y-1">
                       <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
+                      <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
                       <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
                     </div>
                   </section>
@@ -2421,6 +2520,10 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           opponentName={state.opponentName}
           dbSheets={dbSheets}
         />
+      )}
+
+      {tab === "combinaties" && (
+        <VakcombinatiesDashboard dbSheets={dbSheets} />
       )}
 
       {tab === "seizoen" && (
@@ -4325,6 +4428,21 @@ function MatchReport({
     return { vakId, attacks: attacks.length, attempts: attempts.length, goals, quality: attempts.length ? directed / attempts.length * 100 : 0 };
   });
 
+  const combinationRows = Array.from(new Set(state.vakPeriods.map((p) => p.combinatieKey).filter(Boolean))).map((key) => {
+    const periods = state.vakPeriods.filter((p) => p.combinatieKey === key);
+    const seconds = periods.reduce((sum, p) => sum + Math.max(0, (p.endSeconden ?? state.tijdSeconden) - p.startSeconden), 0);
+    const ids = periods[0]?.spelerIds ?? [];
+    const attacks = korbisAttacks.filter((a) => a.combinatieKey === key);
+    const attackIds = new Set(attacks.map((a) => a.id));
+    const attempts = state.fieldEvents.filter((e) => e.attackId && attackIds.has(e.attackId) && Boolean(e.actie));
+    const goals = attempts.filter((e) => e.resultaat === "raak").length;
+    return {
+      key, ids, seconds, attacks: attacks.length, attempts: attempts.length, goals,
+      goalsPer10: attacks.length ? goals / attacks.length * 10 : 0,
+      names: ids.map((id) => spelersMap.get(id)?.naam ?? id),
+    };
+  }).filter((row) => row.ids.length === 4).sort((a,b) => b.seconds-a.seconds);
+
   const playerRows = Array.from(spelersMap.values()).map((p) => {
     const logs = state.log.filter((e) => e.spelerId === p.id);
     const goals = logs.filter((e) => e.reden === "Doelpunt" || e.reden === "Gescoord").length;
@@ -4384,9 +4502,66 @@ function MatchReport({
 
       <div className="rounded-2xl border bg-white p-5"><div className="mb-4"><h3 className="text-lg font-bold">Vak 1 versus Vak 2</h3><p className="text-sm text-slate-500">Vergelijking op basis van de vaste vakidentiteit.</p></div><div className="grid gap-4 md:grid-cols-2">{vakStats.map(v=><div key={v.vakId} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"><div className="mb-3 text-lg font-extrabold text-blue-800">Vak {v.vakId}</div><div className="grid grid-cols-4 gap-2 text-center"><div><div className="text-xl font-extrabold">{v.attacks}</div><div className="text-[11px] text-slate-500">Aanvallen</div></div><div><div className="text-xl font-extrabold">{v.attempts}</div><div className="text-[11px] text-slate-500">Kansen</div></div><div><div className="text-xl font-extrabold">{v.goals}</div><div className="text-[11px] text-slate-500">Goals</div></div><div><div className="text-xl font-extrabold">{v.quality.toFixed(0)}%</div><div className="text-[11px] text-slate-500">Korfgericht</div></div></div></div>)}</div></div>
 
+      <div className="rounded-2xl border bg-white p-5">
+        <div className="mb-4"><h3 className="text-lg font-bold">Vakcombinaties</h3><p className="text-sm text-slate-500">Niet Vak 1 of Vak 2 bepaalt de identiteit, maar de vier spelers die samen staan. Een wissel start automatisch een nieuwe vakperiode.</p></div>
+        {combinationRows.length ? <div className="overflow-auto"><table className="w-full min-w-[720px] text-sm"><thead><tr className="text-slate-500"><th className="py-2 text-left">Combinatie</th><th className="text-right">Tijd samen</th><th className="text-right">Aanvallen</th><th className="text-right">Kansen</th><th className="text-right">Goals</th><th className="text-right">Goals / 10 aanv.</th></tr></thead><tbody>{combinationRows.map((row)=><tr key={row.key} className="border-t"><td className="py-3 font-semibold">{row.names.join(" · ")}</td><td className="text-right">{Math.floor(row.seconds/60)} min</td><td className="text-right">{row.attacks}</td><td className="text-right">{row.attempts}</td><td className="text-right">{row.goals}</td><td className="text-right font-bold">{row.attacks ? row.goalsPer10.toFixed(2) : "—"}</td></tr>)}</tbody></table></div> : <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Vakcombinaties worden vanaf deze versie automatisch opgebouwd zodra een nieuwe wedstrijd start.</div>}
+      </div>
+
       <div className="flex flex-wrap justify-end gap-2"><Button variant="secondary" onClick={onBackToMatch}>Terug naar wedstrijd</Button></div>
     </div>
   );
+}
+
+function VakcombinatiesDashboard({ dbSheets }: { dbSheets: DatabaseSheetsData | null }) {
+  const periods = dbSheets?.vakperiodes ?? [];
+  const events = dbSheets?.events ?? [];
+  const attacks = dbSheets?.attacks ?? [];
+
+  const stats = useMemo(() => {
+    const map = new Map<string, { key:string; names:string[]; seconds:number; matches:Set<string>; attacks:number; attempts:number; goals:number }>();
+    const ensure = (key:string, names:string[]) => {
+      if (!map.has(key)) map.set(key, { key, names, seconds:0, matches:new Set(), attacks:0, attempts:0, goals:0 });
+      return map.get(key)!;
+    };
+    for (const p of periods) {
+      const key=String(p.combinatie_key ?? ""); if (!key) continue;
+      const names=String(p.combinatie_spelers ?? "").split(" · ").filter(Boolean);
+      const r=ensure(key,names); r.seconds += Number(p.duur_seconden ?? 0) || 0; r.matches.add(String(p.wedstrijd_id ?? ""));
+    }
+    for (const a of attacks) {
+      const key=String(a.combinatie_key ?? ""); if (!key) continue;
+      const names=String(a.combinatie_spelers ?? "").split(" · ").filter(Boolean);
+      const r=ensure(key,names); if (String(a.team ?? "").toLowerCase()==="korbis") r.attacks += 1;
+    }
+    for (const e of events) {
+      const key=String(e.combinatie_key ?? ""); if (!key || String(e.team ?? "").toLowerCase()!=="korbis") continue;
+      const names=String(e.combinatie_spelers ?? "").split(" · ").filter(Boolean); const r=ensure(key,names);
+      const actie=String(e.actie ?? "").toLowerCase(); const uitkomst=String(e.uitkomst ?? "").toLowerCase();
+      if (["schot","doorloop","vrijebal","vrije bal","strafworp"].includes(actie)) { r.attempts += 1; if (uitkomst==="raak") r.goals += 1; }
+    }
+    return [...map.values()].filter(r=>r.names.length).sort((a,b)=>b.seconds-a.seconds);
+  }, [periods, events, attacks]);
+
+  const duoStats = useMemo(() => {
+    const map=new Map<string,{names:string[];seconds:number;goals:number;attempts:number}>();
+    const add=(names:string[], seconds=0, goals=0, attempts=0)=>{ for(let i=0;i<names.length;i++) for(let j=i+1;j<names.length;j++){ const pair=[names[i],names[j]].sort(); const key=pair.join("||"); const r=map.get(key)??{names:pair,seconds:0,goals:0,attempts:0}; r.seconds+=seconds;r.goals+=goals;r.attempts+=attempts;map.set(key,r); } };
+    for(const r of stats) add(r.names,r.seconds,r.goals,r.attempts);
+    return [...map.values()].sort((a,b)=>b.seconds-a.seconds).slice(0,12);
+  },[stats]);
+
+  const totalSeconds=stats.reduce((s,r)=>s+r.seconds,0);
+  return <div className="space-y-5">
+    <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm">
+      <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Combinations</div>
+      <h2 className="mt-1 text-2xl font-bold">Vakcombinaties</h2>
+      <p className="mt-1 max-w-3xl text-sm text-slate-500">Iedere combinatie ontstaat automatisch zodra vier spelers samen in een vak staan. Je hoeft hier niets handmatig aan te maken of te benoemen. Een wissel start automatisch een nieuwe combinatieperiode.</p>
+    </div>
+    {!stats.length ? <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">Nog geen vakcombinaties in de database. Speel een wedstrijd met deze versie of laad een backup met het tabblad Vakperiodes.</div> : <>
+      <div className="grid gap-4 md:grid-cols-3"><div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase text-slate-400">Unieke viertallen</div><div className="mt-1 text-3xl font-black text-blue-700">{stats.length}</div></div><div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase text-slate-400">Geregistreerde vaktijd</div><div className="mt-1 text-3xl font-black text-slate-800">{Math.round(totalSeconds/60)} min</div></div><div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase text-slate-400">Meest gebruikte combinatie</div><div className="mt-2 font-bold text-slate-800">{stats[0]?.names.join(" · ")}</div></div></div>
+      <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Viertallen</h3><p className="mb-4 text-sm text-slate-500">Sorteert op tijd samen. Rendement wordt pas betekenisvol als een combinatie voldoende minuten en aanvallen heeft.</p><div className="overflow-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-b text-slate-500"><th className="py-2 text-left">Combinatie</th><th className="text-right">Wedstr.</th><th className="text-right">Tijd</th><th className="text-right">Aanvallen</th><th className="text-right">Kansen</th><th className="text-right">Goals</th><th className="text-right">Goals / 10 aanv.</th></tr></thead><tbody>{stats.map(r=><tr key={r.key} className="border-b last:border-0"><td className="py-3 font-semibold">{r.names.join(" · ")}</td><td className="text-right">{r.matches.size}</td><td className="text-right">{Math.round(r.seconds/60)} min</td><td className="text-right">{r.attacks}</td><td className="text-right">{r.attempts}</td><td className="text-right font-semibold">{r.goals}</td><td className="text-right font-bold">{r.attacks ? (r.goals/r.attacks*10).toFixed(2) : "—"}</td></tr>)}</tbody></table></div></div>
+      <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Duo's binnen vakken</h3><p className="mb-4 text-sm text-slate-500">Automatisch afgeleid uit de viertallen. Hiermee worden patronen zichtbaar, ook als het complete viertal regelmatig verandert.</p><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{duoStats.map((d,i)=><div key={d.names.join("-")} className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100"><div className="flex items-start justify-between gap-3"><div className="font-bold">{d.names.join(" + ")}</div><span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-slate-500">#{i+1}</span></div><div className="mt-2 text-sm text-slate-500">{Math.round(d.seconds/60)} min samen · {d.goals}/{d.attempts} kansen raak</div></div>)}</div></div>
+    </>}
+  </div>;
 }
 
 function SeasonDashboard({
@@ -7771,6 +7946,7 @@ function HitMissBarChart({
     </div>
   );
 }
+
 //////////////////////////////////////////////////////////////////////////////
 // --- UI bits ---------------------------------------------------------------
 //////////////////////////////////////////////////////////////////////////////
