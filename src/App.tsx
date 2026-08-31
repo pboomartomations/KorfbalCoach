@@ -35,7 +35,7 @@ function Button({
 }
 
 // =============================================================
-// Korfbal Coach – volledige TSX app (tabs + vakindeling + wedstrijd)
+// KorbIQ – volledige TSX app (tabs + vakindeling + wedstrijd)
 // =============================================================
 // - Sanitizer voor oude localStorage → voorkomt NaN (halfMinuten etc.)
 // - Wissels worden gelogd (Wissel in/uit, positie 1..4)
@@ -541,6 +541,37 @@ const formatImportedDate = (value: any) => {
 //////////////////////////////////////////////////////////////////////////////
 // --- Main component --------------------------------------------------------
 //////////////////////////////////////////////////////////////////////////////
+
+
+function KorbIQLogo({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="flex items-center gap-3 select-none">
+      <div className={`${compact ? "h-9 w-9" : "h-11 w-11"} relative shrink-0`} aria-hidden="true">
+        <div className="absolute inset-[2px] rounded-full border-[7px] border-blue-600" />
+        <div className="absolute left-1/2 bottom-0 h-[45%] w-[8px] -translate-x-1/2 rounded-sm bg-blue-700" />
+        <div className="absolute left-1/2 top-1/2 h-[42%] w-[42%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" />
+      </div>
+      <div className="leading-none">
+        <div className={`${compact ? "text-xl" : "text-2xl"} font-extrabold tracking-tight text-[#124a98]`}>
+          Korb<span className="text-blue-600">IQ</span>
+        </div>
+        {!compact && <div className="mt-1 text-[10px] font-medium tracking-wide text-slate-500">Inzicht in elke actie</div>}
+      </div>
+    </div>
+  );
+}
+
+function NavGlyph({ type }: { type: "match" | "insights" | "season" | "players" | "settings" | "export" | "share" | "reset" }) {
+  const common = "h-5 w-5 shrink-0";
+  if (type === "players") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="8" r="3"/><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"/></svg>;
+  if (type === "settings") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>;
+  if (type === "insights") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg>;
+  if (type === "season") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></svg>;
+  if (type === "export") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>;
+  if (type === "share") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.3 10.8 7.4-4.3M8.3 13.2l7.4 4.3"/></svg>;
+  if (type === "reset") return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14"/></svg>;
+  return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>;
+}
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => {
@@ -2002,96 +2033,135 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
   //////////////////////////////////////////////////////////////////////////////
   // UI ------------------------------------------------------------------------
   //////////////////////////////////////////////////////////////////////////////
+  const sectionTitle: Record<typeof tab, string> = {
+    spelers: "Spelers",
+    vakken: "Wedstrijdinstellingen",
+    wedstrijd: "Wedstrijdregistratie",
+    insights: "Insights & analyse",
+    seizoen: "Seizoensdashboard",
+  };
+
+  const shareMatch = () => {
+    try {
+      const encoded = encodeStateForShare(state);
+      const url = `${window.location.origin}${window.location.pathname}?s=${encoded}`;
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(url);
+        alert("Deel-link gekopieerd naar je klembord ✅");
+      } else {
+        prompt("Kopieer deze link:", url);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Het lukt niet om een deel-link te maken 😅");
+    }
+  };
+
+  const SideNavButton = ({ id, label, icon }: { id: typeof tab; label: string; icon: "match" | "insights" | "season" | "players" | "settings" }) => (
+    <button
+      onClick={() => setTab(id)}
+      className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${
+        tab === id
+          ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-100"
+          : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+      }`}
+    >
+      <NavGlyph type={icon} />
+      <span>{label}</span>
+    </button>
+  );
+
   return (
-    <div className="p-3 md:p-6 max-w-5xl mx-auto w-full min-h-screen self-start">
-      <header className="mb-4">
-        {/* Vaste kop: logo en titel veranderen nooit van positie per tab */}
-        <div className="flex items-center gap-3 mb-3">
-          <img
-            src="/korbis.png"
-            alt="Korfbal Coach logo"
-            className="h-10 w-10 rounded-xl object-contain shrink-0"
-          />
-          <h1 className="text-2xl font-bold">Korfbal Coach</h1>
-        </div>
+    <div className="korbiq-app min-h-screen bg-[#f6f8fc] text-slate-900">
+      <style>{`
+        html, body, #root { min-height: 100%; margin: 0; background: #f6f8fc; }
+        body { align-items: flex-start !important; justify-content: flex-start !important; place-items: start !important; }
+        #root { width: 100%; max-width: none !important; margin: 0 !important; padding: 0 !important; }
+        .korbiq-main .border.rounded-2xl, .korbiq-main .border.rounded-xl { border-color: #e4eaf2; box-shadow: 0 1px 2px rgba(15,23,42,.025), 0 8px 24px rgba(15,23,42,.035); }
+        .korbiq-main table thead { color: #64748b; }
+        .korbiq-main input, .korbiq-main select, .korbiq-main textarea { border-color: #dbe3ee; }
+        .korbiq-main h2, .korbiq-main h3 { letter-spacing: -.01em; }
+        @media (max-width: 1023px) { .korbiq-desktop-sidebar { display:none; } }
+      `}</style>
 
-        {/* Vaste actiebalk: altijd dezelfde volgorde en kolompositie */}
-        <div className="overflow-x-auto pb-1">
-          <div className="grid grid-cols-5 gap-2 min-w-[760px]">
-            <Button
-              variant="secondary"
-              className="w-full whitespace-nowrap"
-              onClick={() => {
-                try {
-                  const encoded = encodeStateForShare(state);
-                  const url = `${window.location.origin}${window.location.pathname}?s=${encoded}`;
-                  if (navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(url);
-                    alert("Deel-link gekopieerd naar je klembord ✅");
-                  } else {
-                    // fallback: toon link in prompt
-                    prompt("Kopieer deze link:", url);
-                  }
-                } catch (e) {
-                  console.error(e);
-                  alert("Het lukt niet om een deel-link te maken 😅");
-                }
-              }}
-            >
-              Deel wedstrijd
-            </Button>
-            <Button variant="secondary" className="w-full whitespace-nowrap" onClick={exportToExcel}>
-              Export naar Excel
-            </Button>
-            <Button
-              variant="secondary"
-              className="w-full whitespace-nowrap"
-              onClick={() => dbFileInputRef.current?.click()}
-            >
-              Laad Excel database
-            </Button>
-            <Button variant="danger" className="w-full whitespace-nowrap" onClick={requestNieuweWedstrijd}>
-              Nieuwe wedstrijd
-            </Button>
-            <Button variant="danger" className="w-full whitespace-nowrap" onClick={resetAlles}>
-              Reset alles
-            </Button>
+      <div className="flex min-h-screen w-full items-start">
+        <aside className="korbiq-desktop-sidebar sticky top-0 h-screen w-[250px] shrink-0 border-r border-slate-200/90 bg-white px-4 py-5 shadow-[2px_0_16px_rgba(15,23,42,0.025)]">
+          <div className="px-2 pb-6"><KorbIQLogo /></div>
+
+          <nav className="space-y-5">
+            <section>
+              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Wedstrijd</div>
+              <div className="space-y-1">
+                <button onClick={requestNieuweWedstrijd} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
+                <SideNavButton id="wedstrijd" label="Huidige / live wedstrijd" icon="match" />
+              </div>
+            </section>
+
+            <section className="border-t border-slate-200 pt-5">
+              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Team</div>
+              <div className="space-y-1">
+                <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
+                <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
+              </div>
+            </section>
+
+            <section className="border-t border-slate-200 pt-5">
+              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Beheer</div>
+              <div className="space-y-1">
+                <SideNavButton id="spelers" label="Spelers" icon="players" />
+                <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
+                <button onClick={exportToExcel} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="export"/><span>Exporteren</span></button>
+                <button onClick={() => dbFileInputRef.current?.click()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="export"/><span>Backup laden</span></button>
+                <button onClick={shareMatch} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="share"/><span>Deel wedstrijd</span></button>
+                <button onClick={resetAlles} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
+              </div>
+            </section>
+          </nav>
+
+          <div className="absolute bottom-5 left-4 right-4 rounded-2xl bg-slate-50 p-3 text-xs text-slate-500 ring-1 ring-slate-200">
+            <div className="font-bold text-slate-700">{state.season}</div>
+            <div className="mt-1">{databaseMatches.length} wedstrijd{databaseMatches.length === 1 ? "" : "en"} opgeslagen</div>
+            <div className={`mt-2 font-semibold ${databaseReady && dbSheets ? "text-emerald-700" : "text-amber-700"}`}>
+              {!databaseReady ? "● Database laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
+            </div>
           </div>
-        </div>
-        <div className="mt-2 text-xs text-gray-500 flex flex-wrap items-center gap-x-4 gap-y-1">
-          <span className="font-semibold text-gray-700">Database: {state.season}</span>
-          <span>{databaseMatches.length} wedstrijd{databaseMatches.length === 1 ? "" : "en"} opgeslagen</span>
-          {latestDatabaseMatch && <span>Laatste: {formatImportedDate(latestDatabaseMatch.datum)}{latestDatabaseMatch.tegenstander ? ` · ${latestDatabaseMatch.tegenstander}` : ""}</span>}
-          <span className={databaseReady && dbSheets ? "text-emerald-700" : "text-amber-700"}>
-            {!databaseReady ? "Browserdatabase laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
-          </span>
-        </div>
-      </header>
+        </aside>
 
-      {/* Vaste hoofdnavigatie als duidelijke tabbladen */}
-      <div className="overflow-x-auto mb-5 border-b border-gray-300">
-        <div className="grid grid-cols-5 gap-0 min-w-[780px]">
-          {([
-            { id: "spelers", label: "Spelers" },
-            { id: "vakken", label: "Wedstrijdinstellingen" },
-            { id: "wedstrijd", label: "Wedstrijd" },
-            { id: "insights", label: "Insights" },
-            { id: "seizoen", label: "Seizoen" },
-          ] as const).map((t) => (
-            <button
-              key={t.id}
-              className={`w-full whitespace-nowrap px-3 py-3 border border-b-0 -mb-px font-semibold transition ${
-                tab === t.id
-                  ? "bg-white text-blue-800 border-gray-300 border-t-4 border-t-blue-600 rounded-t-xl"
-                  : "bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-50 rounded-t-lg"
-              }`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
+        <div className="min-w-0 flex-1">
+          <header className="sticky top-0 z-30 border-b border-slate-200/90 bg-white/95 backdrop-blur">
+            <div className="flex min-h-[70px] items-center justify-between gap-4 px-4 md:px-6 xl:px-8">
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="lg:hidden"><KorbIQLogo compact /></div>
+                <div className="hidden h-8 w-px bg-slate-200 lg:block" />
+                <div className="min-w-0">
+                  <div className="truncate text-lg font-bold text-slate-900">{sectionTitle[tab]}</div>
+                  <div className="mt-0.5 hidden truncate text-xs text-slate-500 md:block">
+                    {state.opponentName ? `Korbis · ${state.opponentName}` : "KorbIQ · wedstrijddata en coaching"}
+                  </div>
+                </div>
+              </div>
+              <div className="hidden items-center gap-3 text-xs md:flex">
+                {latestDatabaseMatch && <span className="text-slate-500">Laatste: {formatImportedDate(latestDatabaseMatch.datum)}{latestDatabaseMatch.tegenstander ? ` · ${latestDatabaseMatch.tegenstander}` : ""}</span>}
+                <span className={`rounded-full px-3 py-1.5 font-semibold ${databaseReady && dbSheets ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                  {!databaseReady ? "● Database laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
+                </span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto border-t border-slate-100 lg:hidden">
+              <div className="grid min-w-[650px] grid-cols-5 bg-white px-3">
+                {([
+                  { id: "spelers", label: "Spelers" },
+                  { id: "vakken", label: "Instellingen" },
+                  { id: "wedstrijd", label: "Wedstrijd" },
+                  { id: "insights", label: "Insights" },
+                  { id: "seizoen", label: "Seizoen" },
+                ] as const).map((t) => <button key={t.id} onClick={() => setTab(t.id)} className={`border-b-2 px-3 py-3 text-sm font-semibold ${tab === t.id ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}>{t.label}</button>)}
+              </div>
+            </div>
+          </header>
+
+          <main className="korbiq-main mx-auto w-full max-w-[1500px] px-4 py-5 md:px-6 md:py-7 xl:px-8">
       {tab === "spelers" && (
         <SpelersTab
           spelers={state.spelers}
@@ -2342,17 +2412,10 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
         className="hidden"
         onChange={handleImportDatabaseFile}
       />
-
-
-
-
-
-
+          </main>
+        </div>
+      </div>
     </div>
-
-
-
-
   );
 }
 //////////////////////////////////////////////////////////////////////////////
