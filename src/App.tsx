@@ -68,6 +68,26 @@ type FieldEvent = {
   resultaat?: "raak" | "mis" | "korf" | "verdedigd";
 };
 
+
+type ShotZone = "Korte kans" | "Afstandsschot" | "Ver afstandsschot";
+
+// Centrale schotzone-helper: gebruikt door zowel live coachsignalen als Insights.
+const getShotZone = (ev: FieldEvent): ShotZone => {
+  const leftEllipse =
+    Math.pow((ev.x - 30.2) / 12.5, 2) +
+    Math.pow((ev.y - 50.0) / 13.0, 2);
+
+  const rightEllipse =
+    Math.pow((ev.x - 46.1) / 13.9, 2) +
+    Math.pow((ev.y - 50.0) / 13.0, 2);
+
+  const zoneDistance = Math.sqrt(Math.min(leftEllipse, rightEllipse));
+
+  if (zoneDistance <= 1) return "Korte kans";
+  if (zoneDistance <= 2) return "Afstandsschot";
+  return "Ver afstandsschot";
+};
+
 type Geslacht = (typeof GESLACHTEN)[number];
 
 type Player = { id: string; naam: string; geslacht: Geslacht; foto?: string };
@@ -3951,31 +3971,6 @@ function InsightsTab({
     if (ev.resultaat === "korf") return "#f97316";
     if (ev.resultaat === "verdedigd") return "#0f172a";
     return "#111827";
-  };
-
-  type ShotZone = "Korte kans" | "Afstandsschot" | "Ver afstandsschot";
-
-  // De oranje zone in VeldLinks.jpg bestaat uit twee overlappende lobben.
-  // We rekenen met percentages, zodat de indeling onafhankelijk is van de
-  // schermgrootte waarop het veld wordt getoond.
-  //
-  // zoneDistance <= 1.0  -> binnen het oranje vlak
-  // zoneDistance <= 2.0  -> normale afstand
-  // zoneDistance > 2.0   -> verre afstand
-  const getShotZone = (ev: FieldEvent): ShotZone => {
-    const leftEllipse =
-      Math.pow((ev.x - 30.2) / 12.5, 2) +
-      Math.pow((ev.y - 50.0) / 13.0, 2);
-
-    const rightEllipse =
-      Math.pow((ev.x - 46.1) / 13.9, 2) +
-      Math.pow((ev.y - 50.0) / 13.0, 2);
-
-    const zoneDistance = Math.sqrt(Math.min(leftEllipse, rightEllipse));
-
-    if (zoneDistance <= 1) return "Korte kans";
-    if (zoneDistance <= 2) return "Afstandsschot";
-    return "Ver afstandsschot";
   };
 
   const SHOT_ZONES: ShotZone[] = [
