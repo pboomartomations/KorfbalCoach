@@ -4038,6 +4038,33 @@ function InsightsTab({
   }, [state.spelers, selectedPlayerId]);
 
   const databaseMatches = dbSheets?.matches ?? [];
+  const insightModeButtons = (
+    <div className="inline-flex w-full rounded-xl border bg-white p-1 gap-1">
+      <button
+        type="button"
+        onClick={() => setAnalysisMode("speler")}
+        className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
+          analysisMode === "speler"
+            ? "bg-blue-600 text-white"
+            : "text-gray-600 hover:bg-gray-50"
+        }`}
+      >
+        Speleranalyse
+      </button>
+      <button
+        type="button"
+        onClick={() => setAnalysisMode("team")}
+        className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
+          analysisMode === "team"
+            ? "bg-blue-600 text-white"
+            : "text-gray-600 hover:bg-gray-50"
+        }`}
+      >
+        Teamanalyse
+      </button>
+    </div>
+  );
+
   const matchSelector = (
     <label className="flex flex-col gap-1 min-w-[260px]">
       <span className="text-xs font-semibold text-gray-500">Wedstrijd</span>
@@ -4417,17 +4444,113 @@ function InsightsTab({
     const playerPrevious = summarizePlayerWindow(playerPeriodTrend.slice(-6,-3));
     const playerComparisonReliable = playerPeriodTrend.length >= 6 && playerRecent.attempts >= 6 && playerPrevious.attempts >= 6;
 
+    const isDefensiveContribution = (e:any) => {
+      const vak = String(e.vak ?? "").toLowerCase();
+      const defensiveVak = vak.includes("verdedig");
+      const stop = String(e.uitkomst ?? "") === "Verdedigd";
+      const steal = e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept";
+      return defensiveVak && (stop || steal);
+    };
+    const selectedPlayerDefensiveActions = selectedPlayerAllEvents.filter(isDefensiveContribution).length;
+    const periodTeamDefensiveActions = playerPeriodEvents.filter((e:any) => isKorbis(e) && isDefensiveContribution(e)).length;
+    const teamAvgDefensiveActionsPerPlayer = periodTeamDefensiveActions / teamPlayerCount;
+    const teamAvgGoalsPerPlayer = periodGoals / teamPlayerCount;
+
+    const historyPlayerControl = (
+      <label className="flex flex-col gap-1 min-w-0">
+        <span className="text-xs font-semibold text-gray-500">Speler</span>
+        <select
+          value={analysisMode === "speler" ? selectedHistoryPlayer : ""}
+          onChange={(e) => setHistoryPlayerName(e.target.value)}
+          disabled={analysisMode !== "speler"}
+          className="w-full border rounded-xl px-3 py-2 bg-white text-sm min-w-0 disabled:bg-gray-50 disabled:text-gray-400"
+        >
+          {analysisMode !== "speler" && <option value="">Niet van toepassing</option>}
+          {names.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+      </label>
+    );
+    const historyPeriodControl = (
+      <label className="flex flex-col gap-1 min-w-0">
+        <span className="text-xs font-semibold text-gray-500">Periode</span>
+        <select
+          value={all && analysisMode === "speler" ? historyPlayerPeriod : "wedstrijd"}
+          onChange={(e) => setHistoryPlayerPeriod(e.target.value as "all" | "3" | "5" | "10")}
+          disabled={!all || analysisMode !== "speler"}
+          className="w-full border rounded-xl px-3 py-2 bg-white text-sm min-w-0 disabled:bg-gray-50 disabled:text-gray-400"
+        >
+          {!all && <option value="wedstrijd">Deze wedstrijd</option>}
+          {all && <>
+            <option value="all">Hele selectie</option>
+            <option value="3">Laatste 3</option>
+            <option value="5">Laatste 5</option>
+            <option value="10">Laatste 10</option>
+          </>}
+        </select>
+      </label>
+    );
+    const historyInsightsHeader = (
+      <div className="space-y-4">
+        <div className="border-b pb-3">
+          <h2 className="text-2xl font-bold">{analysisMode === "speler" ? "Insights per speler" : "Team Insights"}</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {all
+              ? "Analyse op basis van de geselecteerde wedstrijden uit de geladen database."
+              : "Analyse van de geselecteerde wedstrijd uit de geladen database."}
+          </p>
+        </div>
+        <div className="grid gap-3 grid-cols-1 md:grid-cols-[minmax(280px,1.8fr)_250px_minmax(190px,1fr)_165px] items-end">
+          <div className="min-w-0">{matchSelector}</div>
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-gray-500 mb-1">Analyse</div>
+            {insightModeButtons}
+          </div>
+          {historyPlayerControl}
+          {historyPeriodControl}
+        </div>
+      </div>
+    );
+
     return <div className="space-y-6">
+      {historyInsightsHeader}
       <div className="flex flex-col gap-4">
-        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4"><div><h2 className="text-2xl font-bold">{all?"Historische Insights":"Wedstrijd Insights"}</h2><p className="text-sm text-gray-500">Data uit de geladen Excel-database.</p></div>{matchSelector}</div>
         {all && <div className="flex flex-col sm:flex-row gap-3 border rounded-2xl p-4 bg-gray-50">
           <label className="flex flex-col gap-1 min-w-[230px]"><span className="text-xs font-semibold text-gray-500">Seizoen</span><select value={historySeason} onChange={(e)=>setHistorySeason(e.target.value)} className="border rounded-xl px-3 py-2 bg-white text-sm"><option value="__all__">Alle seizoenen</option>{historySeasons.map(season=><option key={season} value={season}>{season}</option>)}</select></label>
           <label className="flex flex-col gap-1 min-w-[210px]"><span className="text-xs font-semibold text-gray-500">Wedstrijdtype</span><select value={historyMatchType} onChange={(e)=>setHistoryMatchType(e.target.value)} className="border rounded-xl px-3 py-2 bg-white text-sm"><option value="__all__">Alle wedstrijdtypen</option>{historyMatchTypes.map(type=><option key={type} value={type}>{type}</option>)}</select></label>
           <div className="text-sm text-gray-600 sm:self-end sm:pb-2">{selectedMatches.length} wedstrijd{selectedMatches.length===1?"":"en"} in deze selectie</div>
         </div>}
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">{[["Wedstrijden",selectedMatches.length],["Kansen raak",own.length?`${scorePct.toFixed(1)}%`:"—"],["Korfgerichtheid",own.length?`${qualityPct.toFixed(1)}%`:"—"],["Aanvallende rebounds gewonnen",rebounds+noRebounds?`${reboundPct.toFixed(0)}%`:"—"],["Kansen tegenstander raak",opp.length?`${oppPct.toFixed(1)}%`:"—"]].map(([l,v])=><div key={String(l)} className="border rounded-2xl p-4 bg-white"><div className="text-xs font-semibold text-gray-500">{l}</div><div className="text-3xl font-extrabold mt-1">{v}</div></div>)}</div>
-      {all && <><div className="border rounded-2xl p-5 bg-white">
+      {analysisMode === "speler" && names.length > 0 ? (
+        <>
+          <div className="border rounded-2xl p-4 bg-gradient-to-br from-blue-50 to-white">
+            <div className="flex items-center gap-3">
+              <div className="w-14 h-14 rounded-full border bg-white flex items-center justify-center">
+                <span className="text-xl font-bold text-gray-400">{selectedHistoryPlayer.slice(0,1).toUpperCase() || "?"}</span>
+              </div>
+              <div>
+                <div className="text-xl font-bold">{selectedHistoryPlayer || "Speler"}</div>
+                <div className="text-sm text-gray-500">{selectedMatches.length} wedstrijd{selectedMatches.length===1?"":"en"} in deze selectie</div>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            {[
+              { label:"Acties", value:selectedPlayerAllAttempts.length.toString(), benchmark:teamAvgAttemptsPerPlayer, metric:selectedPlayerAllAttempts.length, sub:`Teamgem.: ${teamAvgAttemptsPerPlayer.toFixed(1)}` },
+              { label:"Doelpunten", value:selectedPlayerAllGoals.toString(), benchmark:teamAvgGoalsPerPlayer, metric:selectedPlayerAllGoals, sub:`Teamgem.: ${teamAvgGoalsPerPlayer.toFixed(1)} · ${selectedPlayerOverallScore.toFixed(0)}% raak` },
+              { label:"Schotkwaliteit", value:selectedPlayerAllAttempts.length ? `${selectedPlayerOverallQuality.toFixed(0)}%` : "—", benchmark:teamPeriodQualityPct, metric:selectedPlayerOverallQuality, sub:`Teamgem.: ${teamPeriodQualityPct.toFixed(0)}% · raak + korf` },
+              { label:"Rebounds", value:selectedPlayerAllRebounds.toString(), benchmark:teamAvgReboundsPerPlayer, metric:selectedPlayerAllRebounds, sub:`Teamgem.: ${teamAvgReboundsPerPlayer.toFixed(1)}` },
+              { label:"Verdedigend", value:selectedPlayerDefensiveActions.toString(), benchmark:teamAvgDefensiveActionsPerPlayer, metric:selectedPlayerDefensiveActions, sub:`Teamgem.: ${teamAvgDefensiveActionsPerPlayer.toFixed(1)} acties` },
+            ].map((card) => {
+              const same=Math.abs(card.metric-card.benchmark)<0.05;
+              const tone=same?"text-gray-900":card.metric>card.benchmark?"text-emerald-600":"text-red-600";
+              return <div key={card.label} className="border rounded-2xl p-4 bg-white shadow-sm"><div className="text-xs font-semibold uppercase tracking-wide text-gray-500">{card.label}</div><div className={`text-3xl font-extrabold mt-1 ${tone}`}>{card.value}</div><div className="text-xs text-gray-500 mt-1">{card.sub}</div></div>;
+            })}
+          </div>
+        </>
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">{[["Wedstrijden",selectedMatches.length],["Kansen raak",own.length?`${scorePct.toFixed(1)}%`:"—"],["Korfgerichtheid",own.length?`${qualityPct.toFixed(1)}%`:"—"],["Aanvallende rebounds gewonnen",rebounds+noRebounds?`${reboundPct.toFixed(0)}%`:"—"],["Kansen tegenstander raak",opp.length?`${oppPct.toFixed(1)}%`:"—"]].map(([l,v])=><div key={String(l)} className="border rounded-2xl p-4 bg-white"><div className="text-xs font-semibold text-gray-500">{l}</div><div className="text-3xl font-extrabold mt-1">{v}</div></div>)}</div>
+      )}
+      {all && analysisMode === "team" && <><div className="border rounded-2xl p-5 bg-white">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2 mb-4"><div><div className="text-lg font-bold">Laatste 3 vs. de 3 daarvoor</div><div className="text-sm text-gray-500">Percentages worden gewogen op het aantal kansen.</div></div><div className="text-xs font-semibold text-gray-500">{trend.length >= 6 ? "Volledige vergelijking" : `${trend.length}/6 wedstrijden beschikbaar`}</div></div>
         {trend.length >= 6 ? <div className="overflow-auto"><table className="w-full text-sm min-w-[760px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Kengetal</th><th className="text-right p-3">3 daarvoor</th><th className="text-right p-3">Laatste 3</th><th className="text-right p-3">Verschil</th></tr></thead><tbody>{[
           ["Kansen raak",previousSummary.score,recentSummary.score,"%"],["Korfgerichtheid",previousSummary.quality,recentSummary.quality,"%"],["Aanvallende rebounds gewonnen",previousSummary.reboundPct,recentSummary.reboundPct,"%"],["Kansen per aanval",previousSummary.attemptsPerAttack,recentSummary.attemptsPerAttack,""],["Kansen tegenstander raak",previousSummary.oppScore,recentSummary.oppScore,"%"],["Pogingen tegenstander verdedigd",previousSummary.defendedPct,recentSummary.defendedPct,"%"]
@@ -4451,32 +4574,9 @@ function InsightsTab({
         <div className="grid gap-4 lg:grid-cols-2"><Trend title="Kansen raak" values={trend.map(m=>m.score)} labels={trend.map(m=>m.axisLabel)} suffix="%"/><Trend title="Korfgerichtheid" values={trend.map(m=>m.quality)} labels={trend.map(m=>m.axisLabel)} suffix="%"/><Trend title="Aanvallende rebounds gewonnen" values={trend.map(m=>m.reboundPct)} labels={trend.map(m=>m.axisLabel)} suffix="%"/><Trend title="Aanvalstijd Korbis" values={trend.map(m=>m.attack)} labels={trend.map(m=>m.axisLabel)} suffix="%"/><Trend title="Balbezit Korbis" values={trend.map(m=>m.possession)} labels={trend.map(m=>m.axisLabel)} suffix="%"/><Trend title="Kansen tegenstander raak" values={trend.map(m=>m.oppScore)} labels={trend.map(m=>m.axisLabel)} suffix="%"/></div>
         <div className="border rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b font-bold">Wedstrijdontwikkeling</div><div className="overflow-auto"><table className="w-full text-sm min-w-[900px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Datum</th><th className="text-right p-3">Uitslag</th><th className="text-right p-3">% raak</th><th className="text-right p-3">% raak of korf</th><th className="text-right p-3">Aanv. rebound %</th><th className="text-right p-3">Aanvalstijd %</th><th className="text-right p-3">Balbezit %</th><th className="text-right p-3">Tegenstander % raak</th></tr></thead><tbody>{trend.map(m=><tr key={m.id} className="border-t"><td className="p-3">{m.label}</td><td className="p-3 text-right">{m.goals}-{m.against}</td><td className={`p-3 text-right ${metricTone(m.score,average(trend.map(x=>x.score)))}`}>{m.score.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(m.quality,average(trend.map(x=>x.quality)))}`}>{m.quality.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(m.reboundPct,average(trend.map(x=>x.reboundPct)))}`}>{m.reboundPct.toFixed(0)}%</td><td className={`p-3 text-right ${metricTone(m.attack,average(trend.map(x=>x.attack)))}`}>{m.attack.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(m.possession,average(trend.map(x=>x.possession)))}`}>{m.possession.toFixed(1)}%</td><td className={`p-3 text-right ${metricTone(m.oppScore,average(trend.map(x=>x.oppScore)),true)}`}>{m.oppScore.toFixed(1)}%</td></tr>)}</tbody></table></div></div>
       </>}
-      {all && names.length > 0 && (
+      {all && analysisMode === "speler" && names.length > 0 && (
         <div className="space-y-4">
-          <div className="rounded-2xl border-2 border-blue-200 bg-blue-50 p-5 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-            <div>
-              <div className="text-xs font-extrabold uppercase tracking-widest text-blue-700">Speleranalyse</div>
-              <h3 className="text-2xl font-extrabold text-blue-950 mt-1">Ontwikkeling per speler</h3>
-              <p className="text-sm text-gray-500">Volg per wedstrijd of een speler vooruitgaat, stabiel blijft of terugvalt.</p>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <label className="flex flex-col gap-1 min-w-[220px]">
-                <span className="text-xs font-semibold text-gray-500">Speler</span>
-                <select value={selectedHistoryPlayer} onChange={(e) => setHistoryPlayerName(e.target.value)} className="border rounded-xl px-3 py-2 bg-white text-sm">
-                  {names.map((name) => <option key={name} value={name}>{name}</option>)}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 min-w-[160px]">
-                <span className="text-xs font-semibold text-gray-500">Periode</span>
-                <select value={historyPlayerPeriod} onChange={(e) => setHistoryPlayerPeriod(e.target.value as "all" | "3" | "5" | "10")} className="border rounded-xl px-3 py-2 bg-white text-sm">
-                  <option value="all">Hele selectie</option>
-                  <option value="3">Laatste 3</option>
-                  <option value="5">Laatste 5</option>
-                  <option value="10">Laatste 10</option>
-                </select>
-              </label>
-            </div>
-          </div>
+          <div className="border-b pb-2"><h3 className="text-xl font-bold">Ontwikkeling per speler</h3><p className="text-sm text-gray-500">Volg per wedstrijd of een speler vooruitgaat, stabiel blijft of terugvalt.</p></div>
 
           <div className="border rounded-2xl p-4 bg-white">
             <div className="font-bold">Laatste 3 vs. de 3 daarvoor</div>
@@ -4508,9 +4608,9 @@ function InsightsTab({
         </div>
       )}
 
-      {all && playtimeByPlayer.size > 0 && <div className="border-2 border-blue-100 rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b bg-blue-50"><div className="text-lg font-bold text-blue-950">Speelminuten basisspelers</div><div className="text-sm text-blue-700">Groen = boven het gemiddelde van de basisspelers in deze selectie, rood = eronder. Gasten staan apart vermeld.</div></div><div className="overflow-auto"><table className="w-full text-sm min-w-[620px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Speler</th><th className="text-left p-3">Status</th><th className="text-right p-3">Wedstrijden gespeeld</th><th className="text-right p-3">Minuten</th><th className="text-right p-3">Verschil t.o.v. basisgem.</th></tr></thead><tbody>{Array.from(playtimeByPlayer.entries()).sort((a,b)=>a[1].status.localeCompare(b[1].status)||a[0].localeCompare(b[0])).map(([name,v])=>{const minutes=v.seconds/60;const delta=minutes-avgStarterMinutes;return <tr key={name} className="border-t"><td className="p-3 font-semibold">{name}</td><td className="p-3">{v.status}</td><td className="p-3 text-right">{v.matches}</td><td className={`p-3 text-right ${v.status==="Basisspeler"?metricTone(minutes,avgStarterMinutes):"bg-gray-50 text-gray-700"}`}>{Math.round(minutes)}</td><td className="p-3 text-right">{v.status==="Basisspeler"?`${delta>=0?"+":""}${Math.round(delta)} min`:"—"}</td></tr>})}</tbody></table></div></div>}
+      {all && analysisMode === "speler" && playtimeByPlayer.size > 0 && <div className="border-2 border-blue-100 rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b bg-blue-50"><div className="text-lg font-bold text-blue-950">Speelminuten basisspelers</div><div className="text-sm text-blue-700">Groen = boven het gemiddelde van de basisspelers in deze selectie, rood = eronder. Gasten staan apart vermeld.</div></div><div className="overflow-auto"><table className="w-full text-sm min-w-[620px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Speler</th><th className="text-left p-3">Status</th><th className="text-right p-3">Wedstrijden gespeeld</th><th className="text-right p-3">Minuten</th><th className="text-right p-3">Verschil t.o.v. basisgem.</th></tr></thead><tbody>{Array.from(playtimeByPlayer.entries()).sort((a,b)=>a[1].status.localeCompare(b[1].status)||a[0].localeCompare(b[0])).map(([name,v])=>{const minutes=v.seconds/60;const delta=minutes-avgStarterMinutes;return <tr key={name} className="border-t"><td className="p-3 font-semibold">{name}</td><td className="p-3">{v.status}</td><td className="p-3 text-right">{v.matches}</td><td className={`p-3 text-right ${v.status==="Basisspeler"?metricTone(minutes,avgStarterMinutes):"bg-gray-50 text-gray-700"}`}>{Math.round(minutes)}</td><td className="p-3 text-right">{v.status==="Basisspeler"?`${delta>=0?"+":""}${Math.round(delta)} min`:"—"}</td></tr>})}</tbody></table></div></div>}
 
-      <div className="border rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b"><div className="text-lg font-bold">Spelers</div><div className="text-sm text-gray-500">{all?"Totaal over alle gekozen wedstrijden.":"Prestatie in deze wedstrijd."}</div></div><div className="overflow-auto"><table className="w-full text-sm min-w-[700px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Speler</th><th className="text-right p-3">Kansen</th><th className="text-right p-3">Goals</th><th className="text-right p-3">% raak</th><th className="text-right p-3">% raak of korf</th><th className="text-right p-3">Rebounds</th></tr></thead><tbody>{players.map(p=><tr key={p.name} className="border-t"><td className="p-3 font-semibold">{p.name}</td><td className="p-3 text-right">{p.attempts}</td><td className="p-3 text-right">{p.goals}</td><td className="p-3 text-right">{p.attempts?`${p.score.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{p.attempts?`${p.quality.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{p.rebounds}</td></tr>)}</tbody></table></div></div>
+      {analysisMode === "team" && <div className="border rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b"><div className="text-lg font-bold">Spelers</div><div className="text-sm text-gray-500">{all?"Totaal over alle gekozen wedstrijden.":"Prestatie in deze wedstrijd."}</div></div><div className="overflow-auto"><table className="w-full text-sm min-w-[700px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Speler</th><th className="text-right p-3">Kansen</th><th className="text-right p-3">Goals</th><th className="text-right p-3">% raak</th><th className="text-right p-3">% raak of korf</th><th className="text-right p-3">Rebounds</th></tr></thead><tbody>{players.map(p=><tr key={p.name} className="border-t"><td className="p-3 font-semibold">{p.name}</td><td className="p-3 text-right">{p.attempts}</td><td className="p-3 text-right">{p.goals}</td><td className="p-3 text-right">{p.attempts?`${p.score.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{p.attempts?`${p.quality.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{p.rebounds}</td></tr>)}</tbody></table></div></div>}
     </div>;
   }
 
@@ -5377,32 +5477,33 @@ function InsightsTab({
     };
   });
 
-  const modeButtons = (
-    <div className="inline-flex w-full rounded-xl border bg-white p-1 gap-1">
-      <button
-        type="button"
-        onClick={() => setAnalysisMode("speler")}
-        className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
-          analysisMode === "speler"
-            ? "bg-blue-600 text-white"
-            : "text-gray-600 hover:bg-gray-50"
-        }`}
-      >
-        Speleranalyse
-      </button>
-      <button
-        type="button"
-        onClick={() => setAnalysisMode("team")}
-        className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
-          analysisMode === "team"
-            ? "bg-blue-600 text-white"
-            : "text-gray-600 hover:bg-gray-50"
-        }`}
-      >
-        Teamanalyse
-      </button>
-    </div>
-  );
+  const liveActivePlayerIds = new Set<string>();
+  Object.entries(state.speelSeconden).forEach(([id, seconds]) => {
+    if (Number(seconds) > 0) liveActivePlayerIds.add(id);
+  });
+  [...state.aanval, ...state.verdediging].forEach((id) => {
+    if (id) liveActivePlayerIds.add(id);
+  });
+  state.log.forEach((e) => {
+    if (e.spelerId && e.spelerId !== TEGENSTANDER_ID) liveActivePlayerIds.add(e.spelerId);
+  });
+  const livePlayerCount = Math.max(1, liveActivePlayerIds.size);
+  const liveTeamAvgAttempts = homeAttempts / livePlayerCount;
+  const liveTeamAvgGoals = homeGoals / livePlayerCount;
+  const liveTeamAvgRebounds = wonRebounds.length / livePlayerCount;
+  const liveTeamDefensiveActions = state.log.filter((e) =>
+    e.spelerId &&
+    e.spelerId !== TEGENSTANDER_ID &&
+    e.vak === "verdedigend" &&
+    (e.resultaat === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept")
+  ).length;
+  const liveTeamAvgDefensiveActions = liveTeamDefensiveActions / livePlayerCount;
+  const liveMetricTextTone = (value:number, benchmark:number) => {
+    if (!Number.isFinite(value) || !Number.isFinite(benchmark) || Math.abs(value-benchmark) < 0.05) return "text-gray-900";
+    return value > benchmark ? "text-emerald-600" : "text-red-600";
+  };
+
+  const modeButtons = insightModeButtons;
 
   const livePlayerControl = (
     <label className="flex flex-col gap-1 min-w-0">
@@ -5915,17 +6016,17 @@ function InsightsTab({
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         {[
-          { label: "Acties", value: attempts.toString(), sub: "aanvallend" },
-          { label: "Doelpunten", value: goals.toString(), sub: `${scorePct.toFixed(0)}% raak` },
-          { label: "Schotkwaliteit", value: `${qualityPct.toFixed(0)}%`, sub: "raak + korf" },
-          { label: "Rebounds", value: reboundEvents.length.toString(), sub: allReboundMoments.length > 0 ? `${reboundSharePct.toFixed(0)}% aandeel` : "nog geen rebounddata" },
-          { label: "Verdedigend", value: (defensiveStops + steals).toString(), sub: `${defensiveStops} verdedigd · ${steals} steals` },
+          { label: "Acties", value: attempts.toString(), metric: attempts, benchmark: liveTeamAvgAttempts, sub: `Teamgem.: ${liveTeamAvgAttempts.toFixed(1)} · aanvallend` },
+          { label: "Doelpunten", value: goals.toString(), metric: goals, benchmark: liveTeamAvgGoals, sub: `Teamgem.: ${liveTeamAvgGoals.toFixed(1)} · ${scorePct.toFixed(0)}% raak` },
+          { label: "Schotkwaliteit", value: `${qualityPct.toFixed(0)}%`, metric: qualityPct, benchmark: homeQualityPct, sub: `Teamgem.: ${homeQualityPct.toFixed(0)}% · raak + korf` },
+          { label: "Rebounds", value: reboundEvents.length.toString(), metric: reboundEvents.length, benchmark: liveTeamAvgRebounds, sub: `Teamgem.: ${liveTeamAvgRebounds.toFixed(1)}${allReboundMoments.length > 0 ? ` · ${reboundSharePct.toFixed(0)}% aandeel` : ""}` },
+          { label: "Verdedigend", value: (defensiveStops + steals).toString(), metric: defensiveStops + steals, benchmark: liveTeamAvgDefensiveActions, sub: `Teamgem.: ${liveTeamAvgDefensiveActions.toFixed(1)} · ${defensiveStops} verdedigd · ${steals} steals` },
         ].map((card) => (
           <div key={card.label} className="border rounded-2xl p-4 bg-white shadow-sm">
             <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
               {card.label}
             </div>
-            <div className="text-3xl font-extrabold mt-1">{card.value}</div>
+            <div className={`text-3xl font-extrabold mt-1 ${liveMetricTextTone(card.metric, card.benchmark)}`}>{card.value}</div>
             <div className="text-xs text-gray-500 mt-1">{card.sub}</div>
           </div>
         ))}
