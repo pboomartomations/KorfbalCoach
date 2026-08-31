@@ -647,7 +647,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "seizoen">("spelers");
+  useState<"spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "seizoen">("spelers");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -2245,6 +2245,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     insights: "Insights & analyse",
     combinaties: "Vakcombinaties",
     seizoen: "Seizoensdashboard",
+    profielen: "Spelerprofielen",
   };
 
   const shareMatch = () => {
@@ -2309,6 +2310,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
               <div className="space-y-1">
                 <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
                 <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
+                <SideNavButton id="profielen" label="Spelerprofielen" icon="players" />
                 <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
               </div>
             </section>
@@ -2382,6 +2384,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                     <div className="space-y-1">
                       <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
                       <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
+                      <SideNavButton id="profielen" label="Spelerprofielen" icon="players" />
                       <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
                     </div>
                   </section>
@@ -2524,6 +2527,10 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
 
       {tab === "combinaties" && (
         <VakcombinatiesDashboard dbSheets={dbSheets} />
+      )}
+
+      {tab === "profielen" && (
+        <SpelerprofielenDashboard spelers={state.spelers} dbSheets={dbSheets} />
       )}
 
       {tab === "seizoen" && (
@@ -4592,7 +4599,7 @@ function VakcombinatiesDashboard({ dbSheets }: { dbSheets: DatabaseSheetsData | 
     return [...map.values()].map(d=>({...d,reliability:reliability(d.seconds),goals10:d.attacks?d.goals/d.attacks*10:0,scorePct:safePct(d.goals,d.attempts)})).sort((a,b)=>b.seconds-a.seconds).slice(0,12);
   },[stats]);
 
-  const MetricBadge=({value,base,tone,suffix=""}:{value:string;base:string;tone:"green"|"orange"|"red"|"blue";suffix?:string})=>{const cls=tone==="green"?"bg-emerald-50 text-emerald-800 border-emerald-200":tone==="red"?"bg-red-50 text-red-800 border-red-200":tone==="orange"?"bg-orange-50 text-orange-800 border-orange-200":"bg-blue-50 text-blue-800 border-blue-200";return <div className={`rounded-xl border px-3 py-2 ${cls}`}><div className="font-extrabold">{value}{suffix}</div><div className="text-[11px] opacity-70">Team {base}{suffix}</div></div>};
+  const MetricBadge=({label,value,base,tone,suffix=""}:{label:string;value:string;base:string;tone:"green"|"orange"|"red"|"blue";suffix?:string})=>{const cls=tone==="green"?"bg-emerald-50 text-emerald-800 border-emerald-200":tone==="red"?"bg-red-50 text-red-800 border-red-200":tone==="orange"?"bg-orange-50 text-orange-800 border-orange-200":"bg-blue-50 text-blue-800 border-blue-200";return <div className="min-w-0"><div className={`rounded-xl border px-3 py-2 ${cls}`}><div className="font-extrabold">{value}{suffix}</div><div className="text-[11px] opacity-70">Team {base}{suffix}</div></div><div className="mt-1.5 px-1 text-[11px] font-semibold leading-tight text-slate-400">{label}</div></div>};
   const Reliability=({seconds}:{seconds:number})=>{const rel=reliability(seconds);return <div className="flex items-center gap-2"><div className="flex gap-1" aria-label={`${rel.level} van 4 betrouwbaarheidsstappen`}>{[1,2,3,4].map(i=><span key={i} className={`h-2 w-2 rounded-full ${i<=rel.level?(rel.tone==="green"?"bg-emerald-500":rel.tone==="orange"?"bg-orange-400":"bg-blue-500"):"bg-slate-200"}`}/>)}</div><span className="text-xs text-slate-500">{rel.label}</span></div>};
   const SummaryCard=({label,row,tone}:{label:string;row:typeof enriched[number]|undefined;tone:"green"|"orange"|"red"|"blue"})=>{const cls=tone==="green"?"border-emerald-200 bg-emerald-50/60":tone==="red"?"border-red-200 bg-red-50/60":tone==="orange"?"border-orange-200 bg-orange-50/60":"border-blue-200 bg-blue-50/60";return <div className={`rounded-2xl border p-4 ${cls}`}><div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-slate-500"><SignalDot tone={tone}/>{label}</div>{row?<><div className="mt-2 font-bold text-slate-900">{row.names.join(" · ")}</div><div className="mt-1 text-sm text-slate-600">{Math.round(row.seconds/60)} min · {row.goals10.toFixed(2)} goals / 10 aanv.</div><div className="mt-2"><Reliability seconds={row.seconds}/></div></>:<div className="mt-2 text-sm text-slate-500">Nog onvoldoende data voor deze conclusie.</div>}</div>};
 
@@ -4600,7 +4607,7 @@ function VakcombinatiesDashboard({ dbSheets }: { dbSheets: DatabaseSheetsData | 
     <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Combinations</div><h2 className="mt-1 text-2xl font-bold">Vakcombinaties</h2><p className="mt-1 max-w-4xl text-sm text-slate-500">Prestaties worden vanaf de eerste minuut meegenomen. De betrouwbaarheidsindicator voorkomt dat een korte, toevallig sterke periode dezelfde waarde krijgt als een combinatie die al veel samen heeft gespeeld.</p></div>
     {!stats.length ? <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">Nog geen vakcombinaties in de database. Speel een wedstrijd met deze versie of laad een backup met het tabblad Vakperiodes.</div> : <>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><SummaryCard label="Bewezen sterk" row={bestProven} tone="green"/><SummaryCard label="Veelbelovend" row={promising} tone="blue"/><SummaryCard label="Beste aanval" row={bestAttack} tone="green"/><SummaryCard label="Aandacht" row={attention && attention.score<0?attention:undefined} tone="orange"/></div>
-      <div className="rounded-2xl border bg-white p-5"><div className="flex flex-col gap-1 lg:flex-row lg:items-end lg:justify-between"><div><h3 className="text-lg font-bold">Viertallen – prestatie versus team</h3><p className="text-sm text-slate-500">Groen is bovengemiddeld, oranje ligt rond het teamniveau en rood is een aandachtspunt. Betrouwbaarheid staat daar los van.</p></div><div className="text-xs text-slate-500">Drempels: 0–15 · 15–30 · 30–60 · 60+ minuten</div></div><div className="mt-4 space-y-3">{enriched.map(r=><div key={r.key} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between"><div><div className="font-bold text-slate-900">{r.names.join(" · ")}</div><div className="mt-1 text-xs text-slate-500">{r.matches.size} wedstr. · {Math.round(r.seconds/60)} min · {r.attacks} aanvallen · {r.attempts} kansen</div><div className="mt-2"><Reliability seconds={r.seconds}/></div></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6"><MetricBadge value={r.goals10.toFixed(2)} base={baseline.goals10.toFixed(2)} tone={r.tones[0]}/><MetricBadge value={r.chancesAttack.toFixed(2)} base={baseline.chancesAttack.toFixed(2)} tone={r.tones[1]}/><MetricBadge value={r.qualityPct.toFixed(1)} base={baseline.quality.toFixed(1)} tone={r.tones[2]} suffix="%"/><MetricBadge value={r.reboundPct.toFixed(1)} base={baseline.rebound.toFixed(1)} tone={r.tones[3]} suffix="%"/><MetricBadge value={r.turnovers10.toFixed(2)} base={baseline.turnovers10.toFixed(2)} tone={r.tones[4]}/><MetricBadge value={r.oppScorePct.toFixed(1)} base={baseline.oppScore.toFixed(1)} tone={r.tones[5]} suffix="%"/></div></div><div className="mt-2 grid grid-cols-2 gap-2 text-[11px] font-semibold text-slate-400 sm:grid-cols-3 xl:grid-cols-6"><span>Goals / 10 aanv.</span><span>Kansen / aanval</span><span>Korfgerichtheid</span><span>Aanv. rebound</span><span>Balverlies / 10</span><span>Tegenstander raak</span></div></div>)}</div></div>
+      <div className="rounded-2xl border bg-white p-5"><div className="flex flex-col gap-1 lg:flex-row lg:items-end lg:justify-between"><div><h3 className="text-lg font-bold">Viertallen – prestatie versus team</h3><p className="text-sm text-slate-500">Groen is bovengemiddeld, oranje ligt rond het teamniveau en rood is een aandachtspunt. Betrouwbaarheid staat daar los van.</p></div><div className="text-xs text-slate-500">Drempels: 0–15 · 15–30 · 30–60 · 60+ minuten</div></div><div className="mt-4 space-y-3">{enriched.map(r=><div key={r.key} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between"><div><div className="font-bold text-slate-900">{r.names.join(" · ")}</div><div className="mt-1 text-xs text-slate-500">{r.matches.size} wedstr. · {Math.round(r.seconds/60)} min · {r.attacks} aanvallen · {r.attempts} kansen</div><div className="mt-2"><Reliability seconds={r.seconds}/></div></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6"><MetricBadge label="Goals / 10 aanv." value={r.goals10.toFixed(2)} base={baseline.goals10.toFixed(2)} tone={r.tones[0]}/><MetricBadge label="Kansen / aanval" value={r.chancesAttack.toFixed(2)} base={baseline.chancesAttack.toFixed(2)} tone={r.tones[1]}/><MetricBadge label="Korfgerichtheid" value={r.qualityPct.toFixed(1)} base={baseline.quality.toFixed(1)} tone={r.tones[2]} suffix="%"/><MetricBadge label="Aanv. rebound" value={r.reboundPct.toFixed(1)} base={baseline.rebound.toFixed(1)} tone={r.tones[3]} suffix="%"/><MetricBadge label="Balverlies / 10" value={r.turnovers10.toFixed(2)} base={baseline.turnovers10.toFixed(2)} tone={r.tones[4]}/><MetricBadge label="Tegenstander raak" value={r.oppScorePct.toFixed(1)} base={baseline.oppScore.toFixed(1)} tone={r.tones[5]} suffix="%"/></div></div></div>)}</div></div>
       <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Duo's binnen vakken</h3><p className="mb-4 text-sm text-slate-500">Ook duo's tellen vanaf de eerste minuut mee. De betrouwbaarheidsindicator blijft zichtbaar, omdat een duo in verschillende viertallen kan voorkomen.</p><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{duoStats.map((d,i)=><div key={d.names.join("-")} className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100"><div className="flex items-start justify-between gap-3"><div className="font-bold">{d.names.join(" + ")}</div><span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-slate-500">#{i+1}</span></div><div className="mt-2 text-sm text-slate-600">{Math.round(d.seconds/60)} min · {d.goals10.toFixed(2)} goals / 10 aanv. · {d.scorePct.toFixed(1)}% raak</div><div className="mt-2"><Reliability seconds={d.seconds}/></div></div>)}</div></div>
     </>}
   </div>;
@@ -4711,6 +4718,120 @@ function SeasonDashboard({
       <div className="grid gap-4 lg:grid-cols-2"><div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Vak 1 vs Vak 2 – seizoen</div><div className="overflow-auto"><table className="w-full text-sm"><thead><tr className="text-gray-500"><th className="text-left py-2">Kengetal</th><th className="text-right">Vak 1</th><th className="text-right">Vak 2</th></tr></thead><tbody>{[["Kansen",v1.attempts,v2.attempts],["Goals",v1.goals,v2.goals],["Kansen raak",`${v1.score.toFixed(1)}%`,`${v2.score.toFixed(1)}%`],["Tegenstander kansen raak",`${v1.oppScore.toFixed(1)}%`,`${v2.oppScore.toFixed(1)}%`]].map(([l,a,b])=><tr key={String(l)} className="border-t"><td className="py-2 font-semibold">{l}</td><td className="text-right">{a}</td><td className="text-right">{b}</td></tr>)}</tbody></table></div></div><div className="border rounded-2xl p-5 bg-white"><div className="text-lg font-bold mb-3">Spelers – seizoen</div><div className="overflow-auto max-h-[260px]"><table className="w-full text-sm"><thead className="sticky top-0 bg-white"><tr className="text-gray-500"><th className="text-left py-2">Speler</th><th className="text-right">Goals</th><th className="text-right">Kansen</th><th className="text-right">% raak</th><th className="text-right">Reb.</th></tr></thead><tbody>{playerRows.map(p=><tr key={p.name} className="border-t"><td className="py-2 font-semibold">{p.name}</td><td className="text-right">{p.goals}</td><td className="text-right">{p.attempts}</td><td className="text-right">{p.score.toFixed(1)}%</td><td className="text-right">{p.rebounds}</td></tr>)}</tbody></table></div></div></div>
       <div className="border rounded-2xl overflow-hidden bg-white"><div className="p-4 border-b font-bold">Wedstrijden – {season}</div><div className="overflow-auto"><table className="w-full text-sm min-w-[720px]"><thead className="bg-gray-50"><tr><th className="text-left p-3">Datum</th><th className="text-left p-3">Tegenstander</th><th className="text-left p-3">Type</th><th className="text-right p-3">Uitslag</th><th className="text-right p-3">Kansen raak</th></tr></thead><tbody>{seasonMatches.map((m:any)=>{const pm=perMatch.find(x=>x.id===String(m.wedstrijd_id));return <tr key={String(m.wedstrijd_id)} className="border-t"><td className="p-3">{String(m.datum??"").slice(0,10)}</td><td className="p-3 font-semibold">{m.tegenstander||m.wedstrijd_naam||"-"}</td><td className="p-3">{m.wedstrijdtype||"Competitie"}</td><td className="p-3 text-right font-bold">{m.score_korbis}-{m.score_tegenstander}</td><td className="p-3 text-right">{pm?`${pm.score.toFixed(1)}%`:"-"}</td></tr>})}</tbody></table></div></div>
     </>}
+  </div>;
+}
+
+
+function SpelerprofielenDashboard({
+  spelers,
+  dbSheets,
+}: {
+  spelers: Player[];
+  dbSheets: DatabaseSheetsData | null;
+}) {
+  const [selectedId, setSelectedId] = useState<string>(() => spelers[0]?.id ?? "");
+  const [seasonFilter, setSeasonFilter] = useState<string>("__all__");
+
+  useEffect(() => {
+    if (!spelers.length) {
+      if (selectedId) setSelectedId("");
+      return;
+    }
+    if (!spelers.some((p) => p.id === selectedId)) setSelectedId(spelers[0].id);
+  }, [spelers, selectedId]);
+
+  const matches = dbSheets?.matches ?? [];
+  const events = dbSheets?.events ?? [];
+  const attacks = dbSheets?.attacks ?? [];
+  const vakperiodes = ((dbSheets as any)?.vakperiodes ?? []) as any[];
+  const selected = spelers.find((p) => p.id === selectedId);
+  const seasons = Array.from(new Set(matches.map((m:any) => String(m.seizoen ?? "").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+  const selectedMatches = matches.filter((m:any) => seasonFilter === "__all__" || String(m.seizoen ?? "") === seasonFilter);
+  const matchIds = new Set(selectedMatches.map((m:any) => String(m.wedstrijd_id ?? "")));
+  const own = (e:any) => ["korbis","thuis"].includes(String(e.team ?? "").trim().toLowerCase());
+  const result = (e:any) => String(e.uitkomst ?? e.resultaat ?? "").trim().toLowerCase();
+  const isAttempt = (e:any) => ["schot","doorloop","vrijebal","strafworp"].includes(String(e.actie ?? "").trim().toLowerCase());
+  const playerEvents = events.filter((e:any) => matchIds.has(String(e.wedstrijd_id ?? "")) && own(e) && (String(e.spelerId ?? "") === selectedId || (!!selected?.naam && String(e.spelerNaam ?? "") === selected.naam)));
+  const attempts = playerEvents.filter(isAttempt);
+  const goals = attempts.filter((e:any) => result(e) === "raak").length;
+  const korf = attempts.filter((e:any) => result(e) === "korf").length;
+  const rebounds = playerEvents.filter((e:any) => String(e.actie ?? "").toLowerCase() === "rebound" && String(e.reden ?? "").toLowerCase() === "rebound").length;
+  const defense = playerEvents.filter((e:any) => ["verdedigd","bal onderschept","pass onderschept"].includes(String(e.reden ?? "").trim().toLowerCase())).length;
+  const turnovers = playerEvents.filter((e:any) => ["bal uit","pass onderschept"].includes(String(e.reden ?? "").trim().toLowerCase())).length;
+  const scorePct = attempts.length ? goals / attempts.length * 100 : 0;
+  const qualityPct = attempts.length ? (goals + korf) / attempts.length * 100 : 0;
+
+  const minutesByMatch = new Map<string, number>();
+  selectedMatches.forEach((m:any) => {
+    let parsed:any[] = [];
+    try { parsed = JSON.parse(String(m.speeltijd_spelers_json ?? "[]")); } catch { parsed = []; }
+    const row = parsed.find((x:any) => String(x.spelerId ?? x.id ?? "") === selectedId || (!!selected?.naam && String(x.spelerNaam ?? x.naam ?? "") === selected.naam));
+    const sec = Number(row?.seconden ?? row?.seconds ?? 0);
+    if (Number.isFinite(sec) && sec > 0) minutesByMatch.set(String(m.wedstrijd_id ?? ""), sec / 60);
+  });
+  if (!minutesByMatch.size && vakperiodes.length) {
+    vakperiodes.filter((v:any) => matchIds.has(String(v.wedstrijd_id ?? ""))).forEach((v:any) => {
+      const raw = String(v.combinatie_speler_ids ?? "");
+      if (!raw.includes(selectedId)) return;
+      const id = String(v.wedstrijd_id ?? "");
+      const sec = Number(v.duur_seconden ?? 0);
+      if (Number.isFinite(sec)) minutesByMatch.set(id, (minutesByMatch.get(id) ?? 0) + sec / 60);
+    });
+  }
+  const totalMinutes = Array.from(minutesByMatch.values()).reduce((a,b)=>a+b,0);
+  const playedMatches = minutesByMatch.size || new Set(playerEvents.map((e:any)=>String(e.wedstrijd_id ?? ""))).size;
+  const reliability = totalMinutes >= 300 ? {label:"Sterk", dots:"●●●●", cls:"text-emerald-700"} : totalMinutes >= 150 ? {label:"Redelijk", dots:"●●●○", cls:"text-blue-700"} : totalMinutes >= 60 ? {label:"Beperkt", dots:"●●○○", cls:"text-amber-700"} : {label:"Zeer beperkt", dots:"●○○○", cls:"text-slate-500"};
+
+  const teamAttempts = events.filter((e:any) => matchIds.has(String(e.wedstrijd_id ?? "")) && own(e) && isAttempt(e));
+  const teamGoals = teamAttempts.filter((e:any)=>result(e)==="raak").length;
+  const teamKorf = teamAttempts.filter((e:any)=>result(e)==="korf").length;
+  const teamScore = teamAttempts.length ? teamGoals/teamAttempts.length*100 : 0;
+  const teamQuality = teamAttempts.length ? (teamGoals+teamKorf)/teamAttempts.length*100 : 0;
+  const metricSignal = (value:number, benchmark:number, threshold:number) => value >= benchmark + threshold ? "green" : value <= benchmark - threshold ? "red" : "orange";
+  const signalClass = (tone:"green"|"orange"|"red") => tone === "green" ? "bg-emerald-50 text-emerald-800 border-emerald-200" : tone === "red" ? "bg-red-50 text-red-800 border-red-200" : "bg-amber-50 text-amber-800 border-amber-200";
+
+  const perMatch = selectedMatches.map((m:any) => {
+    const id=String(m.wedstrijd_id ?? "");
+    const ev=playerEvents.filter((e:any)=>String(e.wedstrijd_id ?? "")===id);
+    const at=ev.filter(isAttempt); const g=at.filter((e:any)=>result(e)==="raak").length; const k=at.filter((e:any)=>result(e)==="korf").length;
+    return {id, date:formatImportedDate(m.datum), opponent:String(m.tegenstander ?? m.wedstrijd_naam ?? "-"), minutes:minutesByMatch.get(id) ?? 0, attempts:at.length, goals:g, score:at.length?g/at.length*100:0, quality:at.length?(g+k)/at.length*100:0};
+  }).filter(x=>x.minutes>0 || x.attempts>0).sort((a,b)=>a.date.localeCompare(b.date));
+
+  const comboMap = new Map<string,{names:string; minutes:number; attacks:number; goals:number}>();
+  vakperiodes.filter((v:any)=>matchIds.has(String(v.wedstrijd_id ?? "")) && String(v.combinatie_speler_ids ?? "").includes(selectedId)).forEach((v:any)=>{
+    const key=String(v.combinatie_key ?? v.combinatie_spelers ?? ""); if(!key)return;
+    const cur=comboMap.get(key) ?? {names:String(v.combinatie_spelers ?? key),minutes:0,attacks:0,goals:0};
+    cur.minutes += Number(v.duur_seconden ?? 0)/60; comboMap.set(key,cur);
+  });
+  attacks.filter((a:any)=>matchIds.has(String(a.wedstrijd_id ?? "")) && String(a.combinatie_speler_ids ?? "").includes(selectedId)).forEach((a:any)=>{const key=String(a.combinatie_key ?? a.combinatie_spelers ?? ""); const cur=comboMap.get(key); if(cur)cur.attacks+=1;});
+  events.filter((e:any)=>matchIds.has(String(e.wedstrijd_id ?? "")) && own(e) && result(e)==="raak" && String(e.combinatie_speler_ids ?? "").includes(selectedId)).forEach((e:any)=>{const key=String(e.combinatie_key ?? e.combinatie_spelers ?? ""); const cur=comboMap.get(key); if(cur)cur.goals+=1;});
+  const combos=Array.from(comboMap.values()).sort((a,b)=>b.minutes-a.minutes).slice(0,5);
+
+  if (!dbSheets) return <div className="rounded-2xl border bg-white p-6 text-slate-600">Laad eerst een database om spelerprofielen op te bouwen.</div>;
+  if (!spelers.length) return <div className="rounded-2xl border bg-white p-6 text-slate-600">Voeg eerst spelers toe.</div>;
+
+  const strengths:{tone:"green"|"orange"|"red"; title:string; text:string}[] = [];
+  if (attempts.length) strengths.push({tone:metricSignal(scorePct,teamScore,4),title:"Scorend vermogen",text:`${scorePct.toFixed(1)}% raak tegenover ${teamScore.toFixed(1)}% teamgemiddeld.`});
+  if (attempts.length) strengths.push({tone:metricSignal(qualityPct,teamQuality,6),title:"Korfgerichtheid",text:`${qualityPct.toFixed(1)}% raak of korf tegenover ${teamQuality.toFixed(1)}% teamgemiddeld.`});
+  if (rebounds) strengths.push({tone:"green",title:"Reboundbijdrage",text:`${rebounds} gewonnen aanvallende rebounds in de gekozen periode.`});
+  if (turnovers) strengths.push({tone:turnovers <= Math.max(1,playedMatches) ? "orange" : "red",title:"Balverlies",text:`${turnovers} geregistreerde momenten van balverlies.`});
+
+  return <div className="space-y-5">
+    <div className="rounded-3xl bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-sm">
+      <div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-100">KorbIQ Player</div>
+      <div className="mt-1 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><h2 className="text-3xl font-black">Spelerprofiel</h2><p className="mt-1 text-blue-100">Ontwikkeling, rendement en samenwerking over meerdere wedstrijden.</p></div><div className="flex flex-wrap gap-2"><select value={selectedId} onChange={e=>setSelectedId(e.target.value)} className="min-w-[190px] rounded-xl border-0 bg-white px-3 py-2 text-sm font-bold text-slate-800">{spelers.map(p=><option key={p.id} value={p.id}>{p.naam}</option>)}</select><select value={seasonFilter} onChange={e=>setSeasonFilter(e.target.value)} className="rounded-xl border-0 bg-white px-3 py-2 text-sm font-semibold text-slate-800"><option value="__all__">Alle seizoenen</option>{seasons.map(x=><option key={x} value={x}>{x}</option>)}</select></div></div>
+    </div>
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      {[['Wedstrijden',playedMatches],['Minuten',Math.round(totalMinutes)],['Goals',goals],['Kansen',attempts.length],['Raak',attempts.length?`${scorePct.toFixed(1)}%`:'—'],['Korfgericht',attempts.length?`${qualityPct.toFixed(1)}%`:'—']].map(([l,v])=><div key={String(l)} className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{l}</div><div className="mt-1 text-2xl font-black text-slate-900">{v}</div></div>)}
+    </div>
+    <div className="grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
+      <div className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between gap-3"><div><h3 className="text-lg font-bold">Profielsignalen</h3><p className="text-sm text-slate-500">Vergelijking met Korbis in dezelfde geselecteerde wedstrijden.</p></div><div className={`text-right text-sm font-bold ${reliability.cls}`}><div>{reliability.dots}</div><div>{reliability.label} · {Math.round(totalMinutes)} min</div></div></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{strengths.length?strengths.map((x,i)=><div key={i} className={`rounded-xl border p-3 ${signalClass(x.tone)}`}><div className="font-bold">{x.tone==='green'?'●':x.tone==='red'?'●':'●'} {x.title}</div><div className="mt-1 text-sm">{x.text}</div></div>):<div className="text-sm text-slate-500">Nog onvoldoende acties voor inhoudelijke signalen.</div>}</div></div>
+      <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Bijdrage</h3><div className="mt-4 grid grid-cols-3 gap-3 text-center"><div className="rounded-xl bg-orange-50 p-3"><div className="text-2xl font-black text-orange-700">{rebounds}</div><div className="text-xs font-bold text-orange-800">Rebounds</div></div><div className="rounded-xl bg-blue-50 p-3"><div className="text-2xl font-black text-blue-700">{defense}</div><div className="text-xs font-bold text-blue-800">Verdedigend</div></div><div className="rounded-xl bg-red-50 p-3"><div className="text-2xl font-black text-red-700">{turnovers}</div><div className="text-xs font-bold text-red-800">Balverlies</div></div></div></div>
+    </div>
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Ontwikkeling per wedstrijd</h3><p className="text-sm text-slate-500">Laat zien of prestaties stabiel zijn of veranderen.</p><div className="mt-4 overflow-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="text-slate-500"><th className="py-2 text-left">Datum</th><th className="text-left">Tegenstander</th><th className="text-right">Min.</th><th className="text-right">Goals</th><th className="text-right">Kansen</th><th className="text-right">Raak</th></tr></thead><tbody>{perMatch.slice(-10).map(x=><tr key={x.id} className="border-t"><td className="py-2">{x.date}</td><td className="font-semibold">{x.opponent}</td><td className="text-right">{Math.round(x.minutes)}</td><td className="text-right font-bold">{x.goals}</td><td className="text-right">{x.attempts}</td><td className="text-right">{x.attempts?`${x.score.toFixed(1)}%`:'—'}</td></tr>)}</tbody></table></div></div>
+      <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vakcombinaties met {selected?.naam}</h3><p className="text-sm text-slate-500">De meest gebruikte viertallen waarin deze speler voorkomt.</p><div className="mt-4 space-y-2">{combos.length?combos.map((c,i)=><div key={`${c.names}-${i}`} className="rounded-xl border bg-slate-50 p-3"><div className="font-bold text-slate-800">{c.names}</div><div className="mt-1 flex flex-wrap gap-x-4 text-xs text-slate-500"><span>{Math.round(c.minutes)} min samen</span><span>{c.attacks} aanvallen</span><span>{c.goals} goals</span><span>{c.attacks?`${(c.goals/c.attacks*10).toFixed(1)} goals / 10 aanvallen`:'—'}</span></div></div>):<div className="text-sm text-slate-500">Nog geen vakcombinatiedata voor deze speler.</div>}</div></div>
+    </div>
   </div>;
 }
 
