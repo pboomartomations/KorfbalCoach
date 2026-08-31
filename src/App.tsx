@@ -2405,37 +2405,152 @@ function WedstrijdTab({
     ? (recentWonRebounds / recentRebounds.length) * 100
     : null;
 
-  const liveCoachSignals: { tone: "goed" | "letop" | "info"; text: string }[] = [];
+  type LiveCoachSignal = { priority: 1 | 2 | 3; tone: "goed" | "letop" | "info"; text: string };
+  const liveCoachSignals: LiveCoachSignal[] = [];
+  const addLiveSignal = (signal: LiveCoachSignal) => liveCoachSignals.push(signal);
+
+  const recentAttemptsPerAttack = finishedHomeAttacks.length
+    ? recentHomeAttempts.length / finishedHomeAttacks.length
+    : 0;
+  const allFinishedHomeAttacks = state.attacks.filter((a) => a.team === "thuis");
+  const allHomeEvents = eventsForAttacks(allFinishedHomeAttacks);
+  const allHomeAttempts = allHomeEvents.filter((e) =>
+    liveAttemptEvents.some((x) => x.id === e.id) && attackTeamForEvent(e) === "thuis"
+  );
+  const matchAttemptsPerAttack = allFinishedHomeAttacks.length
+    ? allHomeAttempts.length / allFinishedHomeAttacks.length
+    : 0;
+
+  const recentKorfgericht = recentHomeAttempts.filter(
+    (e) => e.resultaat === "Raak" || e.resultaat === "Korf"
+  ).length;
+  const recentKorfgerichtPct = recentHomeAttempts.length
+    ? (recentKorfgericht / recentHomeAttempts.length) * 100
+    : null;
+
+  const recentAttackIds = new Set(finishedHomeAttacks.map((a) => a.id));
+  const recentFieldShots = state.fieldEvents.filter(
+    (fe) => fe.attackId && recentAttackIds.has(fe.attackId) && !!fe.actie && !!fe.resultaat
+  );
+  const recentFarShots = recentFieldShots.filter((fe) => getShotZone(fe) === "Ver afstandsschot");
+  const recentFarKorfgericht = recentFarShots.filter(
+    (fe) => fe.resultaat === "raak" || fe.resultaat === "korf"
+  ).length;
+
+  const recentWonReboundEvents = recentRebounds.filter((e) => e.reden === "Rebound");
+  const recentSecondChanceGoals = recentWonReboundEvents.filter((rebound) =>
+    recentHomeAttempts.some(
+      (e) =>
+        e.attackId &&
+        e.attackId === rebound.attackId &&
+        e.tijdSeconden >= rebound.tijdSeconden &&
+        e.resultaat === "Raak"
+    )
+  ).length;
+
+  const recentAwayNoChanceAttacks = finishedAwayAttacks.filter((a) =>
+    !recentAwayAttempts.some((e) => e.attackId === a.id)
+  ).length;
+  const recentAwayAttemptsPerAttack = finishedAwayAttacks.length
+    ? recentAwayAttempts.length / finishedAwayAttacks.length
+    : 0;
+
+  const recentHomeByVak = (vakId: VakId) => {
+    const attacks = state.attacks.filter((a) => a.team === "thuis" && a.vakId === vakId).slice(-5);
+    const ev = eventsForAttacks(attacks);
+    const attempts = ev.filter((e) => liveAttemptEvents.some((x) => x.id === e.id) && attackTeamForEvent(e) === "thuis");
+    return { attacks, attempts, goals: attempts.filter((e) => e.resultaat === "Raak").length };
+  };
+  const recentAwayByVak = (vakId: VakId) => {
+    const attacks = state.attacks.filter((a) => a.team === "uit" && a.vakId === vakId).slice(-5);
+    const ev = eventsForAttacks(attacks);
+    const attempts = ev.filter((e) => liveAttemptEvents.some((x) => x.id === e.id) && attackTeamForEvent(e) === "uit");
+    return { attacks, attempts, goals: attempts.filter((e) => e.resultaat === "Raak").length };
+  };
+
+  if (finishedAwayAttacks.length >= 5 && recentAwayGoals >= 3) {
+    addLiveSignal({ priority: 1, tone: "letop", text: `Verdedigend direct aandacht: tegenstander scoorde ${recentAwayGoals} keer uit de laatste 5 aanvallen.` });
+  }
+  ([1, 2] as VakId[]).forEach((vakId) => {
+    const v = recentAwayByVak(vakId);
+    if (v.attacks.length >= 5 && v.goals >= 3) {
+      addLiveSignal({ priority: 1, tone: "letop", text: `Vak ${vakId} onder druk: tegenstander scoorde ${v.goals} keer uit de laatste 5 aanvallen tegen dit vak.` });
+    }
+  });
 
   if (finishedHomeAttacks.length >= 5) {
     if (recentHomeGoals === 0) {
-      liveCoachSignals.push({ tone: "letop", text: "Laatste 5 aanvallen zonder goal." });
+      addLiveSignal({ priority: 1, tone: "letop", text: "Aanvallend direct aandacht: laatste 5 aanvallen zonder goal." });
     } else if (recentHomeGoals >= 3) {
-      liveCoachSignals.push({ tone: "goed", text: `Sterke fase: ${recentHomeGoals} goals uit de laatste 5 aanvallen.` });
+      addLiveSignal({ priority: 3, tone: "goed", text: `Sterke aanvallende fase: ${recentHomeGoals} goals uit de laatste 5 aanvallen.` });
     }
     if (recentNoChanceAttacks >= 2) {
-      liveCoachSignals.push({ tone: "letop", text: `${recentNoChanceAttacks} van de laatste 5 aanvallen eindigden zonder kans.` });
+      addLiveSignal({ priority: 2, tone: "letop", text: `${recentNoChanceAttacks} van de laatste 5 aanvallen eindigden zonder doelpoging.` });
+    }
+    if (matchAttemptsPerAttack >= 1.15 && recentAttemptsPerAttack <= matchAttemptsPerAttack - 0.35) {
+      addLiveSignal({ priority: 2, tone: "letop", text: `Kanscreatie valt terug: recent ${recentAttemptsPerAttack.toFixed(2)} kansen per aanval, wedstrijdgemiddelde ${matchAttemptsPerAttack.toFixed(2)}.` });
+    }
+  }
+
+  if (recentHomeAttempts.length >= 7 && recentKorfgerichtPct != null) {
+    if (recentKorfgerichtPct < 50) {
+      addLiveSignal({ priority: 2, tone: "letop", text: `Korfgerichtheid laag: slechts ${recentKorfgerichtPct.toFixed(0)}% van de laatste ${recentHomeAttempts.length} kansen was raak of raakte de korf.` });
+    } else if (recentKorfgerichtPct >= 75) {
+      addLiveSignal({ priority: 3, tone: "goed", text: `Goede korfgerichtheid: ${recentKorfgerichtPct.toFixed(0)}% van de recente kansen was raak of raakte de korf.` });
+    }
+  }
+
+  if (recentFieldShots.length >= 7 && recentFarShots.length >= 4) {
+    const farShare = (recentFarShots.length / recentFieldShots.length) * 100;
+    const farQuality = recentFarShots.length ? (recentFarKorfgericht / recentFarShots.length) * 100 : 0;
+    if (farShare >= 55 && farQuality < 50) {
+      addLiveSignal({ priority: 2, tone: "letop", text: `Veel verre pogingen: ${recentFarShots.length} van de laatste ${recentFieldShots.length}; slechts ${farQuality.toFixed(0)}% was raak of korfgericht.` });
     }
   }
 
   if (recentReboundPct != null && recentRebounds.length >= 4) {
     if (recentReboundPct < 40) {
-      liveCoachSignals.push({ tone: "letop", text: `Aanvallende rebound in recente fase laag: ${recentReboundPct.toFixed(0)}%.` });
+      addLiveSignal({ priority: 2, tone: "letop", text: `Aanvallende rebound recent laag: ${recentReboundPct.toFixed(0)}%.` });
     } else if (recentReboundPct >= 65) {
-      liveCoachSignals.push({ tone: "goed", text: `Aanvallende rebound sterk: ${recentReboundPct.toFixed(0)}% in de recente fase.` });
+      addLiveSignal({ priority: 3, tone: "goed", text: `Aanvallende rebound sterk: ${recentReboundPct.toFixed(0)}% in de recente fase.` });
     }
   }
 
-  if (finishedAwayAttacks.length >= 5 && recentAwayGoals >= 3) {
-    liveCoachSignals.push({ tone: "letop", text: `Tegenstander scoorde ${recentAwayGoals} keer uit de laatste 5 aanvallen.` });
+  if (recentWonReboundEvents.length >= 4) {
+    const secondChancePct = (recentSecondChanceGoals / recentWonReboundEvents.length) * 100;
+    if (recentSecondChanceGoals === 0) {
+      addLiveSignal({ priority: 2, tone: "letop", text: `${recentWonReboundEvents.length} recente aanvallende rebounds gewonnen, maar nog geen goal uit die tweede kansen.` });
+    } else if (secondChancePct >= 50) {
+      addLiveSignal({ priority: 3, tone: "goed", text: `Tweede kansen leveren op: ${recentSecondChanceGoals} van ${recentWonReboundEvents.length} gewonnen rebounds leidden tot een goal.` });
+    }
   }
 
+  if (finishedAwayAttacks.length >= 5) {
+    if (recentAwayNoChanceAttacks >= 3) {
+      addLiveSignal({ priority: 3, tone: "goed", text: `Sterke verdedigende fase: tegenstander kwam in ${recentAwayNoChanceAttacks} van de laatste 5 aanvallen niet tot een doelpoging.` });
+    } else if (recentAwayAttemptsPerAttack >= 1.8) {
+      addLiveSignal({ priority: 2, tone: "letop", text: `Tegenstander creëert veel: ${recentAwayAttemptsPerAttack.toFixed(1)} kansen per aanval in de laatste 5 aanvallen.` });
+    }
+  }
+
+  ([1, 2] as VakId[]).forEach((vakId) => {
+    const v = recentHomeByVak(vakId);
+    if (v.attacks.length >= 5) {
+      const kpa = v.attempts.length / v.attacks.length;
+      if (kpa < 0.8) addLiveSignal({ priority: 2, tone: "letop", text: `Vak ${vakId} komt moeilijk tot kansen: ${kpa.toFixed(1)} kans per aanval in de laatste 5 aanvallen.` });
+      if (v.goals >= 3) addLiveSignal({ priority: 3, tone: "goed", text: `Vak ${vakId} sterk aanvallend: ${v.goals} goals uit de laatste 5 aanvallen.` });
+    }
+  });
+
+  liveCoachSignals.sort((a, b) => a.priority - b.priority || (a.tone === "letop" ? -1 : b.tone === "letop" ? 1 : 0));
+  const visibleLiveCoachSignals = liveCoachSignals.slice(0, 3);
+
   if (
-    liveCoachSignals.length === 0 &&
+    visibleLiveCoachSignals.length === 0 &&
     !state.matchEnded &&
     (state.tijdSeconden > 0 || state.currentHalf === 2 || state.log.length > 0 || state.attacks.length > 0)
   ) {
-    liveCoachSignals.push({ tone: "info", text: "Geen opvallend live signaal op dit moment." });
+    visibleLiveCoachSignals.push({ priority: 3, tone: "info", text: "Geen opvallend live signaal op dit moment." });
   }
 
 
@@ -2751,8 +2866,8 @@ const attackUitPct =
                   <div className="rounded-xl bg-gray-50 border px-2 py-2"><div className="text-gray-500">Aanv. rebound</div><div className="font-bold text-base">{recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</div></div>
                 </div>
               </div>
-              <div className="mt-3 grid gap-2 md:grid-cols-2">
-                {liveCoachSignals.slice(0, 4).map((signal, i) => (
+              <div className="mt-3 grid gap-2 lg:grid-cols-3">
+                {visibleLiveCoachSignals.map((signal, i) => (
                   <div
                     key={`${signal.text}-${i}`}
                     className={`rounded-xl border px-3 py-2 text-sm font-medium ${
@@ -3240,9 +3355,11 @@ function SeasonDashboard({
   }).sort((a,b)=>b.goals-a.goals || b.score-a.score);
 
   const MiniTrend=({title,keyName,suffix="%"}:{title:string;keyName:"score"|"quality"|"rebound"|"oppScore";suffix?:string})=>{
-    const vals=perMatch.map((m:any)=>Number(m[keyName]||0)); const w=520,h=150,l=24,r=16,t=15,b=35,max=Math.max(...vals,1),min=Math.min(...vals,0),span=Math.max(1,max-min);
-    const x=(i:number)=>vals.length<=1?w/2:l+i/(vals.length-1)*(w-l-r); const y=(v:number)=>h-b-(v-min)/span*(h-t-b); const pts=vals.map((v,i)=>`${x(i)},${y(v)}`).join(" ");
-    return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{vals.length?`Laatste: ${vals[vals.length-1].toFixed(1)}${suffix}`:"Geen wedstrijden"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[150px]"><line x1={l} y1={h-b} x2={w-r} y2={h-b} stroke="#e5e7eb"/><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="3"/>{vals.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="4" fill="currentColor"/><text x={x(i)} y={h-13} textAnchor="middle" fontSize="10" fill="#6b7280">{perMatch[i].label}</text></g>)}</svg></div>;
+    const vals=perMatch.map((m:any)=>Number(m[keyName]||0)); const w=520,h=165,l=52,r=16,t=15,b=35;
+    const isPercent=suffix==="%"; const rawMax=Math.max(...vals,0); const axisMax=isPercent?100:Math.max(1,Math.ceil(rawMax/5)*5); const axisMin=0; const span=Math.max(1,axisMax-axisMin);
+    const x=(i:number)=>vals.length<=1?(l+w-r)/2:l+i/(Math.max(vals.length-1,1))*(w-l-r); const y=(v:number)=>h-b-(v-axisMin)/span*(h-t-b); const pts=vals.map((v,i)=>`${x(i)},${y(v)}`).join(" ");
+    const ticks=Array.from({length:6},(_,i)=>axisMin+(axisMax-axisMin)*(i/5));
+    return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{vals.length?`Laatste: ${vals[vals.length-1].toFixed(1)}${suffix}`:"Geen wedstrijden"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[165px]">{ticks.map((tick,i)=><g key={`yt-${i}`}><line x1={l} y1={y(tick)} x2={w-r} y2={y(tick)} stroke="#e5e7eb"/><text x={l-8} y={y(tick)+4} textAnchor="end" fontSize="10" fill="#6b7280">{isPercent?`${tick.toFixed(0)}%`:tick.toFixed(tick%1===0?0:1)}</text></g>)}<line x1={l} y1={t} x2={l} y2={h-b} stroke="#d1d5db"/><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="3"/>{vals.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="4" fill="currentColor"/><text x={x(i)} y={h-13} textAnchor="middle" fontSize="10" fill="#6b7280">{perMatch[i].label}</text></g>)}</svg></div>;
   };
 
   return <div className="space-y-5">
@@ -3400,11 +3517,17 @@ function InsightsTab({
       };
     });
     const Trend = ({title, values, labels, suffix=""}:{title:string;values:number[];labels?:string[];suffix?:string}) => {
-      const w=560,h=180,left=26,right=18,top=16,bottom=44,max=Math.max(...values,1),min=Math.min(...values,0),span=Math.max(max-min,1);
-      const x=(i:number)=>values.length===1?w/2:left+i/(values.length-1)*(w-left-right);
-      const y=(v:number)=>h-bottom-(v-min)/span*(h-top-bottom);
+      const w=560,h=190,left=54,right=18,top=16,bottom=44;
+      const isPercent=suffix==="%";
+      const rawMax=Math.max(...values,0);
+      const axisMax=isPercent ? 100 : Math.max(1, Math.ceil(rawMax / 5) * 5);
+      const axisMin=0;
+      const span=Math.max(axisMax-axisMin,1);
+      const x=(i:number)=>values.length===1?(left+w-right)/2:left+i/(Math.max(values.length-1,1))*(w-left-right);
+      const y=(v:number)=>h-bottom-(v-axisMin)/span*(h-top-bottom);
       const pts=values.map((v,i)=>`${x(i)},${y(v)}`).join(" ");
-      return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{values.length?`Laatste: ${values[values.length-1].toFixed(1)}${suffix}`:"Geen data"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[180px]"><line x1={left} y1={h-bottom} x2={w-right} y2={h-bottom} stroke="#e5e7eb"/><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>{values.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="4" fill="currentColor"/><text x={x(i)} y={h-20} textAnchor="middle" fontSize="10" fill="#6b7280">{labels?.[i] ?? `W${i+1}`}</text></g>)}</svg></div>
+      const ticks=Array.from({length:6},(_,i)=>axisMin+(axisMax-axisMin)*(i/5));
+      return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{values.length?`Laatste: ${values[values.length-1].toFixed(isPercent?1:values[values.length-1] % 1 === 0 ? 0 : 1)}${suffix}`:"Geen data"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[190px]">{ticks.map((tick,i)=><g key={`yt-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-8} y={y(tick)+4} textAnchor="end" fontSize="10" fill="#6b7280">{isPercent?`${tick.toFixed(0)}%`:tick.toFixed(tick%1===0?0:1)}</text></g>)}<line x1={left} y1={top} x2={left} y2={h-bottom} stroke="#d1d5db"/><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>{values.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="4" fill="currentColor"/><text x={x(i)} y={h-20} textAnchor="middle" fontSize="10" fill="#6b7280">{labels?.[i] ?? `W${i+1}`}</text></g>)}</svg></div>
     };
     const average = (values:number[]) => values.length ? values.reduce((sum,v)=>sum+v,0)/values.length : 0;
     const pct = (part:number,total:number) => total > 0 ? (part / total) * 100 : 0;
