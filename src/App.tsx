@@ -2055,18 +2055,46 @@ const startNieuweDatabase = () => {
 
   setDbSheets(emptyDatabase);
   setDatabaseSetupOpen(false);
+  // Een nieuwe database is direct klaar voor het instellen van de eerste wedstrijd.
+  setTab("vakken");
 };
+
+const hasCurrentMatchData =
+  state.klokLoopt ||
+  state.tijdSeconden > 0 ||
+  state.scoreThuis > 0 ||
+  state.scoreUit > 0 ||
+  state.log.length > 0 ||
+  state.fieldEvents.length > 0 ||
+  state.attacks.length > 0 ||
+  Boolean(state.opponentName.trim()) ||
+  Boolean(state.homeAway);
 
 const requestNieuweWedstrijd = () => {
   if (!databaseReady || !dbSheets) {
     setDatabaseSetupOpen(true);
     return;
   }
-  clearWedstrijd();
+
+  // Alleen waarschuwen wanneer er daadwerkelijk gegevens van een huidige
+  // wedstrijd verloren kunnen gaan. Na een reset kan de gebruiker dus
+  // direct door naar Wedstrijdinstellingen.
+  if (hasCurrentMatchData) {
+    const confirmed = confirm(
+      "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren."
+    );
+    if (!confirmed) return;
+  }
+
+  clearWedstrijd(undefined, false);
+  setTab("vakken");
 };
 
-const clearWedstrijd = (warningText = "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren.") => {
-  if (!confirm(warningText)) {
+const clearWedstrijd = (
+  warningText = "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren.",
+  askConfirmation = true
+) => {
+  if (askConfirmation && !confirm(warningText)) {
     return;
   }
 
