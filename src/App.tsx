@@ -587,20 +587,38 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const teamFileInputRef = useRef<HTMLInputElement | null>(null);
   const [dbSheets, setDbSheets] = useState<DatabaseSheets>(null);
   const [databaseReady, setDatabaseReady] = useState(false);
+  const [databaseSetupOpen, setDatabaseSetupOpen] = useState(false);
   
   const dbFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Seizoensdatabase uit IndexedDB herstellen en daarna automatisch blijven opslaan.
+  // Seizoensdatabase uit IndexedDB herstellen. Als er niets staat, laat de app
+  // bewust kiezen tussen een back-up herstellen en een nieuwe database starten.
   useEffect(() => {
     let mounted = true;
     loadDatabaseFromBrowser()
       .then((saved) => {
-        if (mounted && saved) setDbSheets(saved);
+        if (!mounted) return;
+        if (saved) {
+          setDbSheets(saved);
+          setDatabaseSetupOpen(false);
+        } else {
+          setDatabaseSetupOpen(true);
+        }
       })
-      .catch((err) => console.warn("Kon browserdatabase niet laden", err))
+      .catch((err) => {
+        console.warn("Kon browserdatabase niet laden", err);
+        if (mounted) setDatabaseSetupOpen(true);
+      })
       .finally(() => { if (mounted) setDatabaseReady(true); });
     return () => { mounted = false; };
   }, []);
+
+  // Ook later in de sessie bewaken: zonder database mag niet ongemerkt
+  // een nieuwe wedstrijd worden gestart. Een bewust nieuwe, lege database
+  // is wél een geldig DatabaseSheetsData-object en triggert dit dus niet.
+  useEffect(() => {
+    if (databaseReady && !dbSheets) setDatabaseSetupOpen(true);
+  }, [databaseReady, dbSheets]);
 
   useEffect(() => {
     if (!databaseReady || !dbSheets) return;
@@ -1339,6 +1357,7 @@ const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
       })();
 
       setDbSheets(imported);
+      setDatabaseSetupOpen(false);
 
       if (hasFullBackup) {
         setState((prev) => ({
@@ -1833,6 +1852,7 @@ const resetAlles = () => {
   if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch {}
   setDbSheets(null);
+  setDatabaseSetupOpen(true);
   clearDatabaseFromBrowser().catch((err) => console.warn("Kon browserdatabase niet wissen", err));
   setState({ 
     ...DEFAULT_STATE,
@@ -1873,6 +1893,65 @@ const eindeWedstrijd = () => {
       currentAttackId: null,
     };
   });
+};
+
+const startNieuweDatabase = () => {
+  if (!confirm(
+    "Nieuwe seizoensdatabase starten? Er wordt een lege wedstrijdhistorie aangemaakt. Je huidige spelers, vakindeling en instellingen blijven in de app staan."
+  )) return;
+
+  const vak1Ids = state.vak1Aanvallend ? state.aanval : state.verdediging;
+  const vak2Ids = state.vak1Aanvallend ? state.verdediging : state.aanval;
+  const spelerById = new Map(state.spelers.map((p) => [p.id, p]));
+  const emptyDatabase: DatabaseSheetsData = {
+    events: [],
+    attacks: [],
+    wissels: [],
+    matches: [],
+    spelers: state.spelers.map((p) => ({
+      speler_id: p.id, naam: p.naam, geslacht: p.geslacht, status: p.status,
+      actief: p.actief ? "ja" : "nee", foto: p.foto ?? "",
+    })),
+    team: [{ team_naam: "Korbis", actief_seizoen: state.season, aantal_spelers: state.spelers.length }],
+    vakindeling: [
+      ...vak1Ids.map((id, index) => ({
+        vak_id: 1, positie: index + 1, speler_id: id ?? "",
+        speler_naam: id ? spelerById.get(id)?.naam ?? "" : "",
+      })),
+      ...vak2Ids.map((id, index) => ({
+        vak_id: 2, positie: index + 1, speler_id: id ?? "",
+        speler_naam: id ? spelerById.get(id)?.naam ?? "" : "",
+      })),
+    ],
+    instellingen: [{
+      half_duur_minuten: state.halfMinuten,
+      auto_vakwissel_na_2: state.autoVakWisselNa2 ? "ja" : "nee",
+      aanval_links: state.aanvalLinks ? "ja" : "nee",
+      vak1_aanvallend: state.vak1Aanvallend ? "ja" : "nee",
+      actief_seizoen: state.season,
+      seizoen_opties_json: JSON.stringify(state.seasonOptions),
+      standaard_wedstrijdtype: state.matchType,
+    }],
+    databaseInfo: [{
+      database_versie: DATABASE_VERSION,
+      app_versie: APP_DATABASE_LABEL,
+      export_datum: new Date().toISOString(),
+      actief_seizoen: state.season,
+      aantal_wedstrijden: 0,
+      laatste_wedstrijd_datum: "",
+    }],
+  };
+
+  setDbSheets(emptyDatabase);
+  setDatabaseSetupOpen(false);
+};
+
+const requestNieuweWedstrijd = () => {
+  if (!databaseReady || !dbSheets) {
+    setDatabaseSetupOpen(true);
+    return;
+  }
+  clearWedstrijd();
 };
 
 const clearWedstrijd = (warningText = "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren.") => {
@@ -1971,7 +2050,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             >
               Laad Excel database
             </Button>
-            <Button variant="danger" className="w-full whitespace-nowrap" onClick={() => clearWedstrijd()}>
+            <Button variant="danger" className="w-full whitespace-nowrap" onClick={requestNieuweWedstrijd}>
               Nieuwe wedstrijd
             </Button>
             <Button variant="danger" className="w-full whitespace-nowrap" onClick={resetAlles}>
@@ -1983,7 +2062,9 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           <span className="font-semibold text-gray-700">Database: {state.season}</span>
           <span>{databaseMatches.length} wedstrijd{databaseMatches.length === 1 ? "" : "en"} opgeslagen</span>
           {latestDatabaseMatch && <span>Laatste: {formatImportedDate(latestDatabaseMatch.datum)}{latestDatabaseMatch.tegenstander ? ` · ${latestDatabaseMatch.tegenstander}` : ""}</span>}
-          <span className="text-gray-400">{databaseReady ? "Browserdatabase actief" : "Browserdatabase laden…"}</span>
+          <span className={databaseReady && dbSheets ? "text-emerald-700" : "text-amber-700"}>
+            {!databaseReady ? "Browserdatabase laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
+          </span>
         </div>
       </header>
 
@@ -2197,6 +2278,47 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             setStealPopup(null);
           }}
         />
+      )}
+
+      {databaseSetupOpen && databaseReady && (
+        <div className="fixed inset-0 z-[100] bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl border border-gray-200 p-6">
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 shrink-0 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold">!</div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Geen lokale seizoensdatabase gevonden</h2>
+                <p className="mt-2 text-sm text-gray-600 leading-6">
+                  De browser heeft op dit moment geen opgeslagen wedstrijdendatabase. Laad je laatste Excel-back-up om verder te gaan met een bestaand seizoen, of start bewust een nieuwe database voor de eerste wedstrijd van een nieuw seizoen.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-xl bg-gray-50 border border-gray-200 p-4 text-sm text-gray-600">
+              <div className="font-semibold text-gray-800">Huidige app-instellingen</div>
+              <div className="mt-1">Seizoen: {state.season} · {state.spelers.length} spelers in de spelerslijst</div>
+              <div className="mt-1 text-xs text-gray-500">Een nieuwe database wist je spelers of vakindeling niet; alleen de wedstrijdhistorie begint leeg.</div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={() => dbFileInputRef.current?.click()}
+              >
+                Backup laden
+              </Button>
+              <Button
+                className="w-full"
+                onClick={startNieuweDatabase}
+              >
+                Nieuwe database starten
+              </Button>
+            </div>
+            <p className="mt-4 text-xs text-gray-500 text-center">
+              Deze melding verdwijnt pas nadat een back-up is geladen of bewust een nieuwe database is gestart.
+            </p>
+          </div>
+        </div>
       )}
 
       {/* 👇 Verborgen file input voor team-import */}
@@ -5256,11 +5378,11 @@ function InsightsTab({
   });
 
   const modeButtons = (
-    <div className="inline-flex rounded-xl border bg-white p-1 gap-1">
+    <div className="inline-flex w-full rounded-xl border bg-white p-1 gap-1">
       <button
         type="button"
         onClick={() => setAnalysisMode("speler")}
-        className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+        className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
           analysisMode === "speler"
             ? "bg-blue-600 text-white"
             : "text-gray-600 hover:bg-gray-50"
@@ -5271,7 +5393,7 @@ function InsightsTab({
       <button
         type="button"
         onClick={() => setAnalysisMode("team")}
-        className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+        className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
           analysisMode === "team"
             ? "bg-blue-600 text-white"
             : "text-gray-600 hover:bg-gray-50"
@@ -5282,18 +5404,66 @@ function InsightsTab({
     </div>
   );
 
+  const livePlayerControl = (
+    <label className="flex flex-col gap-1 min-w-0">
+      <span className="text-xs font-semibold text-gray-500">Speler</span>
+      <select
+        className="w-full border rounded-xl px-3 py-2 bg-white min-w-0 disabled:bg-gray-50 disabled:text-gray-400"
+        value={analysisMode === "speler" ? selectedPlayerId : ""}
+        onChange={(e) => setSelectedPlayerId(e.target.value)}
+        disabled={analysisMode !== "speler"}
+      >
+        {analysisMode !== "speler" && <option value="">Niet van toepassing</option>}
+        {state.spelers.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.naam}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  const livePeriodControl = (
+    <label className="flex flex-col gap-1 min-w-0">
+      <span className="text-xs font-semibold text-gray-500">Periode</span>
+      <select
+        className="w-full border rounded-xl px-3 py-2 bg-gray-50 text-gray-700"
+        value="wedstrijd"
+        disabled
+      >
+        <option value="wedstrijd">Deze wedstrijd</option>
+      </select>
+    </label>
+  );
+
+  const liveInsightsHeader = (
+    <div className="space-y-4">
+      <div className="border-b pb-3">
+        <h2 className="text-2xl font-bold">
+          {analysisMode === "speler" ? "Insights per speler" : "Team Insights"}
+        </h2>
+        <p className="text-sm text-gray-500 mt-1">
+          {analysisMode === "speler"
+            ? "Persoonlijke analyse op basis van de geregistreerde acties in deze wedstrijd."
+            : `Coachingsgerichte analyse van Korbis tegen ${opponentName || "de tegenstander"}.`}
+        </p>
+      </div>
+      <div className="grid gap-3 grid-cols-1 md:grid-cols-[minmax(280px,1.8fr)_250px_minmax(190px,1fr)_165px] items-end">
+        <div className="min-w-0">{matchSelector}</div>
+        <div className="min-w-0">
+          <div className="text-xs font-semibold text-gray-500 mb-1">Analyse</div>
+          {modeButtons}
+        </div>
+        {livePlayerControl}
+        {livePeriodControl}
+      </div>
+    </div>
+  );
+
   if (analysisMode === "team") {
     return (
       <div className="space-y-6">
-        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold">Team Insights</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Coachingsgerichte analyse van Korbis tegen {opponentName || "de tegenstander"}.
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3 sm:items-end">{matchSelector}{modeButtons}</div>
-        </div>
+        {liveInsightsHeader}
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="border rounded-2xl p-4 bg-white">
@@ -5705,9 +5875,8 @@ function InsightsTab({
   if (state.spelers.length === 0) {
     return (
       <div className="space-y-4">
-        <div className="flex justify-end">{modeButtons}</div>
+        {liveInsightsHeader}
         <div className="border rounded-2xl p-6 bg-white">
-          <h2 className="text-xl font-bold mb-2">Insights per speler</h2>
           <p className="text-sm text-gray-500">
             Voeg eerst spelers toe om persoonlijke inzichten te kunnen tonen.
           </p>
@@ -5718,44 +5887,7 @@ function InsightsTab({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold">Insights per speler</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Persoonlijke analyse op basis van de geregistreerde acties in deze wedstrijd.
-          </p>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-          {matchSelector}
-          {modeButtons}
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-semibold text-gray-500">Speler</span>
-            <select
-              className="border rounded-xl px-3 py-2 bg-white min-w-52"
-              value={selectedPlayerId}
-              onChange={(e) => setSelectedPlayerId(e.target.value)}
-            >
-              {state.spelers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.naam}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-semibold text-gray-500">Periode</span>
-            <select
-              className="border rounded-xl px-3 py-2 bg-gray-50 text-gray-700"
-              value="wedstrijd"
-              disabled
-            >
-              <option value="wedstrijd">Deze wedstrijd</option>
-            </select>
-          </label>
-        </div>
-      </div>
+      {liveInsightsHeader}
 
       <div className="border rounded-2xl p-4 bg-gradient-to-br from-blue-50 to-white">
         <div className="flex items-center gap-3">
