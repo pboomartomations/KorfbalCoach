@@ -647,7 +647,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "seizoen">("spelers");
+  useState<"spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "voorbereiding" | "seizoen">("spelers");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -2242,6 +2242,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     vakken: "Wedstrijdinstellingen",
     wedstrijd: "Wedstrijdregistratie",
     verslag: "Wedstrijdverslag",
+    voorbereiding: "Wedstrijdvoorbereiding",
     insights: "Insights & analyse",
     combinaties: "Vakcombinaties",
     seizoen: "Seizoensdashboard",
@@ -2302,6 +2303,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                 <button onClick={requestNieuweWedstrijd} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
                 <SideNavButton id="wedstrijd" label="Huidige / live wedstrijd" icon="match" />
                 <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
+                <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
               </div>
             </section>
 
@@ -2377,6 +2379,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                       <button onClick={() => { setMobileMenuOpen(false); requestNieuweWedstrijd(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
                       <SideNavButton id="wedstrijd" label="Huidige / live wedstrijd" icon="match" />
                       <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
+                      <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
                     </div>
                   </section>
                   <section className="border-t border-slate-200 pt-4">
@@ -2513,6 +2516,15 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           state={state}
           spelersMap={spelersMap}
           onBackToMatch={() => setTab("wedstrijd")}
+        />
+      )}
+
+      {tab === "voorbereiding" && (
+        <MatchPreparationDashboard
+          state={state}
+          dbSheets={dbSheets}
+          onOpenSettings={() => setTab("vakken")}
+          onOpenMatch={() => setTab("wedstrijd")}
         />
       )}
 
@@ -4722,6 +4734,78 @@ function SeasonDashboard({
 }
 
 
+function MatchPreparationDashboard({
+  state,
+  dbSheets,
+  onOpenSettings,
+  onOpenMatch,
+}: {
+  state: AppState;
+  dbSheets: DatabaseSheetsData | null;
+  onOpenSettings: () => void;
+  onOpenMatch: () => void;
+}) {
+  const opponent = state.opponentName.trim();
+  const matches = dbSheets?.matches ?? [];
+  const events = dbSheets?.events ?? [];
+  const attacks = dbSheets?.attacks ?? [];
+  const periods = ((dbSheets as any)?.vakperiodes ?? []) as any[];
+  const norm = (v:any) => String(v ?? "").trim().toLowerCase();
+  const own = (e:any) => ["korbis","thuis"].includes(norm(e.team));
+  const result = (e:any) => norm(e.uitkomst ?? e.resultaat);
+  const isAttempt = (e:any) => ["schot","doorloop","vrijebal","strafworp"].includes(norm(e.actie));
+  const history = opponent ? matches.filter((m:any)=>norm(m.tegenstander)===norm(opponent)).sort((a:any,b:any)=>String(formatImportedDate(b.datum)).localeCompare(String(formatImportedDate(a.datum)))) : [];
+  const ids = new Set(history.map((m:any)=>String(m.wedstrijd_id ?? "")));
+  const histEvents = events.filter((e:any)=>ids.has(String(e.wedstrijd_id ?? "")));
+  const ownAttempts = histEvents.filter((e:any)=>own(e)&&isAttempt(e));
+  const ownGoals = ownAttempts.filter((e:any)=>result(e)==="raak").length;
+  const ownKorf = ownAttempts.filter((e:any)=>result(e)==="korf").length;
+  const oppAttempts = histEvents.filter((e:any)=>!own(e)&&isAttempt(e));
+  const oppGoals = oppAttempts.filter((e:any)=>result(e)==="raak").length;
+  const wins = history.filter((m:any)=>Number(m.score_korbis)>Number(m.score_tegenstander)).length;
+  const draws = history.filter((m:any)=>Number(m.score_korbis)===Number(m.score_tegenstander)).length;
+  const losses = history.length-wins-draws;
+  const avgFor = history.length ? history.reduce((a:number,m:any)=>a+Number(m.score_korbis||0),0)/history.length : 0;
+  const avgAgainst = history.length ? history.reduce((a:number,m:any)=>a+Number(m.score_tegenstander||0),0)/history.length : 0;
+  const rebound = histEvents.filter((e:any)=>own(e)&&norm(e.reden)==="rebound").length;
+  const noRebound = histEvents.filter((e:any)=>own(e)&&norm(e.reden)==="geen rebound").length;
+  const reboundPct = rebound+noRebound ? rebound/(rebound+noRebound)*100 : null;
+  const histAttacks = attacks.filter((a:any)=>ids.has(String(a.wedstrijd_id ?? ""))&&own(a));
+  const attemptsPerAttack = histAttacks.length ? ownAttempts.length/histAttacks.length : null;
+  const playerMap = new Map<string,{name:string;goals:number;attempts:number;rebounds:number}>();
+  histEvents.filter((e:any)=>own(e)&&e.spelerNaam).forEach((e:any)=>{const n=String(e.spelerNaam);const x=playerMap.get(n)??{name:n,goals:0,attempts:0,rebounds:0};if(isAttempt(e)){x.attempts++;if(result(e)==="raak")x.goals++;}if(norm(e.reden)==="rebound")x.rebounds++;playerMap.set(n,x);});
+  const players=Array.from(playerMap.values()).sort((a,b)=>(b.goals*3+b.rebounds)-(a.goals*3+a.rebounds)).slice(0,4);
+  const comboMap=new Map<string,{names:string;minutes:number;attacks:number;goals:number}>();
+  periods.filter((v:any)=>ids.has(String(v.wedstrijd_id??""))).forEach((v:any)=>{const k=String(v.combinatie_key??v.combinatie_spelers??"");if(!k)return;const x=comboMap.get(k)??{names:String(v.combinatie_spelers??k),minutes:0,attacks:0,goals:0};x.minutes+=Number(v.duur_seconden??0)/60;comboMap.set(k,x);});
+  histAttacks.forEach((a:any)=>{const k=String(a.combinatie_key??a.combinatie_spelers??"");const x=comboMap.get(k);if(x)x.attacks++;});
+  histEvents.filter((e:any)=>own(e)&&result(e)==="raak").forEach((e:any)=>{const k=String(e.combinatie_key??e.combinatie_spelers??"");const x=comboMap.get(k);if(x)x.goals++;});
+  const combos=Array.from(comboMap.values()).sort((a,b)=>(b.attacks?b.goals/b.attacks:0)-(a.attacks?a.goals/a.attacks:0)).slice(0,4);
+  const signals:{tone:"green"|"orange"|"red"|"blue";text:string}[]=[];
+  if(history.length){
+    if(wins>losses) signals.push({tone:"green",text:`Positieve historie: ${wins} winst, ${draws} gelijk en ${losses} verlies.`});
+    else if(losses>wins) signals.push({tone:"orange",text:`Lastige tegenstander: ${losses} van de ${history.length} eerdere wedstrijden verloren.`});
+    if(ownAttempts.length) signals.push({tone:ownGoals/ownAttempts>=0.30?"green":"orange",text:`KorbIS scoorde ${((ownGoals/ownAttempts)*100).toFixed(1)}% van de geregistreerde kansen tegen ${opponent}.`});
+    if(oppAttempts.length && oppGoals/oppAttempts>=0.30) signals.push({tone:"red",text:`Verdedigend aandachtspunt: tegenstander scoorde ${((oppGoals/oppAttempts)*100).toFixed(1)}% van de kansen.`});
+    if(reboundPct!==null) signals.push({tone:reboundPct>=55?"green":"orange",text:`Aanvallende rebound tegen deze tegenstander: ${reboundPct.toFixed(0)}%.`});
+  }
+  return <div className="space-y-5">
+    <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm">
+      <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Preparation</div>
+      <h2 className="mt-1 text-2xl font-bold">Wedstrijdvoorbereiding</h2>
+      <p className="mt-1 text-sm text-gray-500">Historie, patronen en bruikbare aandachtspunten voor de komende wedstrijd.</p>
+    </div>
+    <div className="rounded-2xl border bg-white p-5">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><div className="text-xs font-bold uppercase tracking-wide text-slate-500">Komende wedstrijd</div><div className="mt-1 text-2xl font-black">{opponent ? `${state.homeAway==="uit"?opponent:"Korbis"} – ${state.homeAway==="uit"?"Korbis":opponent}` : "Tegenstander nog niet gekozen"}</div><div className="mt-1 text-sm text-slate-500">{state.season} · {state.matchType} · {state.homeAway ? (state.homeAway==="thuis"?"Thuis":"Uit") : "Locatie nog kiezen"}</div></div><div className="flex gap-2"><button onClick={onOpenSettings} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold text-slate-700">Instellingen</button><button onClick={onOpenMatch} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Naar wedstrijd</button></div></div>
+    </div>
+    {!opponent ? <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">Vul bij Wedstrijdinstellingen eerst een tegenstander in. Daarna bouwt KorbIQ deze voorbereiding automatisch op.</div> : !history.length ? <div className="rounded-2xl border bg-white p-6"><h3 className="text-lg font-bold">Eerste ontmoeting in de database</h3><p className="mt-1 text-sm text-slate-500">Er is nog geen historische vergelijking met {opponent}. De huidige vakindeling en wedstrijdregistratie vormen na afloop automatisch de basis voor een volgende voorbeschouwing.</p></div> : <>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{[["Eerdere duels",history.length],["W / G / V",`${wins} / ${draws} / ${losses}`],["Gem. voor",avgFor.toFixed(1)],["Gem. tegen",avgAgainst.toFixed(1)],["Kansen / aanval",attemptsPerAttack!==null?attemptsPerAttack.toFixed(2):"—"]].map(([l,v])=><div key={String(l)} className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{l}</div><div className="mt-1 text-2xl font-black">{v}</div></div>)}</div>
+      <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Coachsignalen</h3><p className="text-sm text-slate-500">Wat springt eruit uit eerdere ontmoetingen?</p><div className="mt-4 space-y-2">{signals.map((x,i)=><div key={i} className="flex gap-2 rounded-xl bg-slate-50 p-3 text-sm"><SignalDot tone={x.tone}/><span>{x.text}</span></div>)}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Kerncijfers</h3><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-blue-50 p-3"><div className="text-xs text-blue-700">Kansen raak</div><b className="text-xl">{ownAttempts.length?`${(ownGoals/ownAttempts*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-violet-50 p-3"><div className="text-xs text-violet-700">Korfgericht</div><b className="text-xl">{ownAttempts.length?`${((ownGoals+ownKorf)/ownAttempts.length*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-emerald-50 p-3"><div className="text-xs text-emerald-700">Aanv. rebound</div><b className="text-xl">{reboundPct!==null?`${reboundPct.toFixed(0)}%`:"—"}</b></div><div className="rounded-xl bg-red-50 p-3"><div className="text-xs text-red-700">Tegenstander raak</div><b className="text-xl">{oppAttempts.length?`${(oppGoals/oppAttempts.length*100).toFixed(1)}%`:"—"}</b></div></div></div></div>
+      <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vakcombinaties tegen {opponent}</h3><p className="text-sm text-slate-500">Historisch aanvallend rendement van combinaties die tegen deze ploeg gespeeld hebben.</p><div className="mt-4 space-y-2">{combos.length?combos.map((c,i)=><div key={i} className="rounded-xl border bg-slate-50 p-3"><div className="font-bold">{c.names}</div><div className="mt-1 text-xs text-slate-500">{Math.round(c.minutes)} min · {c.attacks} aanvallen · {c.goals} goals · {c.attacks?(c.goals/c.attacks*10).toFixed(1):"—"} goals / 10 aanv.</div></div>):<div className="text-sm text-slate-500">Nog geen vakcombinatiedata uit deze ontmoetingen.</div>}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Spelers tegen {opponent}</h3><p className="text-sm text-slate-500">Spelers die in eerdere ontmoetingen het meest zichtbaar waren in de registratie.</p><div className="mt-4 space-y-2">{players.length?players.map(p=><div key={p.name} className="flex items-center justify-between rounded-xl bg-slate-50 p-3"><div><div className="font-bold">{p.name}</div><div className="text-xs text-slate-500">{p.goals} goals · {p.attempts} kansen · {p.rebounds} rebounds</div></div><div className="font-black">{p.attempts?`${(p.goals/p.attempts*100).toFixed(0)}%`:"—"}</div></div>):<div className="text-sm text-slate-500">Nog onvoldoende individuele eventdata.</div>}</div></div></div>
+      <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs text-blue-800">De voorbereiding is een historische analyse. KorbIQ geeft hiermee signalen en context, geen automatisch opstellings- of wisseladvies.</div>
+    </>}
+  </div>;
+}
+
 function SpelerprofielenDashboard({
   spelers,
   dbSheets,
@@ -4817,9 +4901,16 @@ function SpelerprofielenDashboard({
   if (turnovers) strengths.push({tone:turnovers <= Math.max(1,playedMatches) ? "orange" : "red",title:"Balverlies",text:`${turnovers} geregistreerde momenten van balverlies.`});
 
   return <div className="space-y-5">
-    <div className="rounded-3xl bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-sm">
-      <div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-100">KorbIQ Player</div>
-      <div className="mt-1 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><h2 className="text-3xl font-black">Spelerprofiel</h2><p className="mt-1 text-blue-100">Ontwikkeling, rendement en samenwerking over meerdere wedstrijden.</p></div><div className="flex flex-wrap gap-2"><select value={selectedId} onChange={e=>setSelectedId(e.target.value)} className="min-w-[190px] rounded-xl border-0 bg-white px-3 py-2 text-sm font-bold text-slate-800">{spelers.map(p=><option key={p.id} value={p.id}>{p.naam}</option>)}</select><select value={seasonFilter} onChange={e=>setSeasonFilter(e.target.value)} className="rounded-xl border-0 bg-white px-3 py-2 text-sm font-semibold text-slate-800"><option value="__all__">Alle seizoenen</option>{seasons.map(x=><option key={x} value={x}>{x}</option>)}</select></div></div>
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm">
+        <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Insights</div>
+        <h2 className="mt-1 text-2xl font-bold">Spelerprofiel</h2>
+        <p className="mt-1 text-sm text-gray-500">Ontwikkeling, rendement en samenwerking over meerdere wedstrijden.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:max-w-2xl">
+        <label><div className="mb-1 text-xs font-semibold text-gray-500">Speler</div><select value={selectedId} onChange={e=>setSelectedId(e.target.value)} className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-semibold text-slate-800">{spelers.map(p=><option key={p.id} value={p.id}>{p.naam}</option>)}</select></label>
+        <label><div className="mb-1 text-xs font-semibold text-gray-500">Seizoen</div><select value={seasonFilter} onChange={e=>setSeasonFilter(e.target.value)} className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-semibold text-slate-800"><option value="__all__">Alle seizoenen</option>{seasons.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
+      </div>
     </div>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
       {[['Wedstrijden',playedMatches],['Minuten',Math.round(totalMinutes)],['Goals',goals],['Kansen',attempts.length],['Raak',attempts.length?`${scorePct.toFixed(1)}%`:'—'],['Korfgericht',attempts.length?`${qualityPct.toFixed(1)}%`:'—']].map(([l,v])=><div key={String(l)} className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{l}</div><div className="mt-1 text-2xl font-black text-slate-900">{v}</div></div>)}
