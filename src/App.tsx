@@ -97,6 +97,7 @@ type Player = {
   naam: string;
   geslacht: Geslacht;
   status: PlayerStatus;
+  actief: boolean;
   foto?: string;
 };
 
@@ -263,7 +264,7 @@ type AppState = {
   fieldEvents: FieldEvent[];  
   markerGroup: number;
   opponentName: string;
-  homeAway: "thuis" | "uit";
+  homeAway: "" | "thuis" | "uit";
   season: string;
   seasonOptions: string[];
   matchType: MatchType;
@@ -295,7 +296,7 @@ const DEFAULT_STATE: AppState = {
   fieldEvents: [], 
   markerGroup: 0,
   opponentName: "",   
-  homeAway: "thuis",
+  homeAway: "",
   season: "Veld najaar 2026",
   seasonOptions: ["Veld najaar 2026", "Zaal 2026/2027", "Veld voorjaar 2027"],
   matchType: "Competitie",
@@ -428,6 +429,7 @@ function sanitizeState(raw: any): AppState {
       ? s.spelers.map((p: any) => ({
           ...p,
           status: p?.status === "Gast" ? "Gast" : "Basisspeler",
+          actief: p?.actief !== false,
         })) as Player[]
       : [],
     aanval: toArr4(s.aanval),
@@ -499,7 +501,7 @@ function sanitizeState(raw: any): AppState {
       homeAway:
         s.homeAway === "uit" || s.homeAway === "thuis"
           ? s.homeAway
-          : DEFAULT_STATE.homeAway,
+          : "",
       season:
         typeof s.season === "string" && s.season.trim()
           ? s.season.trim()
@@ -542,6 +544,9 @@ export default function App() {
 
   const [tab, setTab] =
   useState<"spelers" | "vakken" | "wedstrijd" | "insights" | "seizoen">("spelers");
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [tab]);
   //const [popup, setPopup] = useState<null | { vak: VakSide; soort: "Gemis" | "Kans" }>(null);
   const [possPopup, setPossPopup] = useState<null | { team: "thuis" | "uit" }>(null);
   const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
@@ -667,7 +672,7 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
     [state.aanval, state.verdediging]
   );
 
-  const bank = state.spelers.filter((p) => !toegewezenIds.has(p.id));
+  const bank = state.spelers.filter((p) => p.actief && !toegewezenIds.has(p.id));
 
   //////////////////////////////////////////////////////////////////////////////
   // Actions -------------------------------------------------------------------
@@ -679,7 +684,7 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
     status: PlayerStatus,
     foto?: string
   ) => {
-    const p: Player = { id: uid("sp"), naam, geslacht, status, foto };
+    const p: Player = { id: uid("sp"), naam, geslacht, status, actief: true, foto };
     setState((s) => ({ ...s, spelers: [...s.spelers, p] }));
   };
 
@@ -687,6 +692,15 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
     setState((s) => ({
       ...s,
       spelers: s.spelers.map((p) => (p.id === id ? { ...p, status } : p)),
+    }));
+  };
+
+  const updateSpelerActief = (id: string, actief: boolean) => {
+    setState((s) => ({
+      ...s,
+      spelers: s.spelers.map((p) => (p.id === id ? { ...p, actief } : p)),
+      aanval: actief ? s.aanval : s.aanval.map((x) => (x === id ? null : x)),
+      verdediging: actief ? s.verdediging : s.verdediging.map((x) => (x === id ? null : x)),
     }));
   };
 
@@ -1186,6 +1200,7 @@ const handleImportTeamFile = (
       const spelers = raw.spelers.map((p: any) => ({
         ...p,
         status: p?.status === "Gast" ? "Gast" : "Basisspeler",
+        actief: p?.actief !== false,
       })) as Player[];
 
       setState((s) => ({
@@ -1261,6 +1276,11 @@ const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
             naam: String(p.naam ?? p.spelerNaam ?? ""),
             geslacht: p.geslacht === "Heer" ? "Heer" : "Dame",
             status: p.status === "Gast" ? "Gast" : "Basisspeler",
+            actief: !(
+              p.actief === false ||
+              Number(p.actief) === 0 ||
+              ["nee", "inactief", "false"].includes(String(p.actief ?? "").trim().toLowerCase())
+            ),
             foto: typeof p.foto === "string" && p.foto ? p.foto : undefined,
           })).filter((p) => Boolean(p.id && p.naam))
         : [];
@@ -1277,8 +1297,9 @@ const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
         return id ? String(id) : null;
       });
 
-      const restoredVak1 = toVak(vak1Rows);
-      const restoredVak2 = toVak(vak2Rows);
+      const activeImportedIds = new Set(importedPlayers.filter((p) => p.actief).map((p) => p.id));
+      const restoredVak1 = toVak(vak1Rows).map((id) => id && activeImportedIds.has(id) ? id : null);
+      const restoredVak2 = toVak(vak2Rows).map((id) => id && activeImportedIds.has(id) ? id : null);
       const restoredVak1Aanvallend =
         settings.vak1_aanvallend === false || String(settings.vak1_aanvallend).toLowerCase() === "nee"
           ? false
@@ -1378,7 +1399,7 @@ const exportToExcel = () => {
   // 🔹 Gemeenschappelijke velden voor naamgeving
   const thuisTeamNaam = "Korbis";
   const uitTeamNaam = state.opponentName || "Tegenstander";
-  const locatieLabel = state.homeAway === "thuis" ? "Thuis" : "Uit";
+  const locatieLabel = state.homeAway === "thuis" ? "Thuis" : state.homeAway === "uit" ? "Uit" : "";
 
   const wedstrijdNaam =
     state.homeAway === "thuis"
@@ -1698,6 +1719,7 @@ const exportToExcel = () => {
     naam: p.naam,
     geslacht: p.geslacht,
     status: p.status,
+    actief: p.actief ? "ja" : "nee",
     foto: p.foto ?? "",
   }));
 
@@ -1862,6 +1884,8 @@ const clearWedstrijd = () => {
     activeVak: "aanvallend",
     vak1Aanvallend: true,
 
+    opponentName: "",
+    homeAway: "",
     matchEnded: false,
   }));
 };
@@ -1969,6 +1993,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>String(a
           addSpeler={addSpeler}
           delSpeler={delSpeler}
           updateSpelerStatus={updateSpelerStatus}
+          updateSpelerActief={updateSpelerActief}
           exportTeam={exportTeam}
           triggerImportTeam={triggerImportTeam}
         />
@@ -2186,6 +2211,7 @@ function SpelersTab({
   addSpeler,
   delSpeler,
   updateSpelerStatus,
+  updateSpelerActief,
   exportTeam,
   triggerImportTeam,
 }: {
@@ -2194,6 +2220,7 @@ function SpelersTab({
   addSpeler: (naam: string, geslacht: Geslacht, status: PlayerStatus, foto?: string) => void;
   delSpeler: (id: string) => void;
   updateSpelerStatus: (id: string, status: PlayerStatus) => void;
+  updateSpelerActief: (id: string, actief: boolean) => void;
   exportTeam: () => void;
   triggerImportTeam: () => void;
 }) {
@@ -2286,7 +2313,7 @@ function SpelersTab({
           {spelers.map((p) => (
             <div
               key={p.id}
-              className="flex items-center justify-between gap-3 border rounded-xl p-2"
+              className={`flex items-center justify-between gap-3 border rounded-xl p-2 ${p.actief ? "bg-white" : "bg-gray-100 opacity-70"}`}
             >
               <div className="flex items-center gap-3">
                 <Avatar url={p.foto} naam={p.naam} />
@@ -2301,6 +2328,14 @@ function SpelersTab({
                     <option value="Basisspeler">Basisspeler</option>
                     <option value="Gast">Invaller / Gast</option>
                   </select>
+                  <label className="mt-2 flex items-center gap-2 text-xs font-medium">
+                    <input
+                      type="checkbox"
+                      checked={p.actief}
+                      onChange={(e) => updateSpelerActief(p.id, e.target.checked)}
+                    />
+                    Actief en beschikbaar voor wedstrijden
+                  </label>
                 </div>
               </div>
               <button
@@ -2365,8 +2400,8 @@ function VakindelingTab({
   setHalfMinuten: (value: number) => void;
   aanvalLinks: boolean;
   setAanvalLinks: (value: boolean) => void;
-  homeAway: "thuis" | "uit";
-  setHomeAway: (value: "thuis" | "uit") => void;
+  homeAway: "" | "thuis" | "uit";
+  setHomeAway: (value: "" | "thuis" | "uit") => void;
   season: string;
   seasonOptions: string[];
   setSeason: (value: string) => void;
@@ -2375,29 +2410,102 @@ function VakindelingTab({
   setMatchType: (value: MatchType) => void;
 }) {
   const [newSeason, setNewSeason] = useState("");
-  const beschikbare = spelers.filter((s) => !toegewezen.has(s.id));
+  const beschikbare = spelers.filter((s) => s.actief && !toegewezen.has(s.id));
 
   // JSX VakindelingTab
-  return (
-    <div className="grid md:grid-cols-2 gap-4">
-      <VakBox
-        titel={`${vak1Aanvallend ? "Vak 1" : "Vak 2"} (aanvallend)`}
-        vak="aanvallend"
-        posities={aanval}
-        setVakPos={setVakPos}
-        spelers={spelers}
-        toegewezen={toegewezen}
-      />
-      <VakBox
-        titel={`${vak1Aanvallend ? "Vak 2" : "Vak 1"} (verdedigend)`}
-        vak="verdedigend"
-        posities={verdediging}
-        setVakPos={setVakPos}
-        spelers={spelers}
-        toegewezen={toegewezen}
-      />
+  const opstellingCompleet = [...aanval, ...verdediging].every(Boolean);
+  const wedstrijdgegevensCompleet = Boolean(opponentName.trim()) && Boolean(homeAway);
 
-      <div className="md:col-span-2 flex flex-col gap-4 mt-2">
+  return (
+    <div className="space-y-4">
+      {/* Gegevens die voor iedere wedstrijd opnieuw gecontroleerd moeten worden */}
+      <div className={`border-2 rounded-2xl p-4 ${wedstrijdgegevensCompleet ? "border-blue-200 bg-blue-50" : "border-amber-400 bg-amber-50"}`}>
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h2 className="text-lg font-bold">Huidige wedstrijd</h2>
+            <p className="text-sm text-gray-600">
+              Vul deze gegevens voor iedere wedstrijd in voordat je start.
+            </p>
+          </div>
+          <div className={`text-xs font-bold px-2 py-1 rounded-full ${wedstrijdgegevensCompleet ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+            {wedstrijdgegevensCompleet ? "Compleet" : "Nog invullen"}
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-semibold mb-1">
+              Naam tegenstander <span className="text-red-600">*</span>
+            </label>
+            <input
+              className={`border rounded-lg px-3 py-2 text-sm w-full ${opponentName.trim() ? "" : "border-amber-400 bg-white"}`}
+              placeholder="Bijv. TOP, PKC..."
+              value={opponentName}
+              onChange={(e) => setOpponentName(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <div className="text-sm font-semibold mb-2">
+              Locatie wedstrijd <span className="text-red-600">*</span>
+            </div>
+            <div className="flex gap-4">
+              <label className={`flex items-center gap-2 text-sm border rounded-xl px-3 py-2 bg-white ${homeAway === "thuis" ? "border-blue-500 ring-1 ring-blue-200" : ""}`}>
+                <input
+                  type="radio"
+                  className="h-4 w-4"
+                  checked={homeAway === "thuis"}
+                  onChange={() => setHomeAway("thuis")}
+                />
+                Thuis
+              </label>
+              <label className={`flex items-center gap-2 text-sm border rounded-xl px-3 py-2 bg-white ${homeAway === "uit" ? "border-blue-500 ring-1 ring-blue-200" : ""}`}>
+                <input
+                  type="radio"
+                  className="h-4 w-4"
+                  checked={homeAway === "uit"}
+                  onChange={() => setHomeAway("uit")}
+                />
+                Uit
+              </label>
+            </div>
+            {!homeAway && <div className="text-xs text-amber-700 mt-1">Kies Thuis of Uit.</div>}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div>
+            <h2 className="text-lg font-bold">Vakindeling</h2>
+            <p className="text-sm text-gray-600">Alle acht posities moeten bezet zijn om de wedstrijd te kunnen starten.</p>
+          </div>
+          <div className={`text-xs font-bold px-2 py-1 rounded-full ${opstellingCompleet ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+            {opstellingCompleet ? "Compleet" : "Nog spelers kiezen"}
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <VakBox
+            titel={`${vak1Aanvallend ? "Vak 1" : "Vak 2"} (aanvallend)`}
+            vak="aanvallend"
+            posities={aanval}
+            setVakPos={setVakPos}
+            spelers={spelers}
+            toegewezen={toegewezen}
+          />
+          <VakBox
+            titel={`${vak1Aanvallend ? "Vak 2" : "Vak 1"} (verdedigend)`}
+            vak="verdedigend"
+            posities={verdediging}
+            setVakPos={setVakPos}
+            spelers={spelers}
+            toegewezen={toegewezen}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div className="text-sm text-gray-600">
             Bank: {beschikbare.map((s) => s.naam).join(", ") || "—"}
@@ -2465,110 +2573,76 @@ function VakindelingTab({
             <span className="text-sm">minuten</span>
           </div>
 
-          <div>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setAanvalLinks(!aanvalLinks)}
-            >
-              Aanval {aanvalLinks ? "links" : "rechts"} starten
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setAanvalLinks(!aanvalLinks)}
+          >
+            Aanval {aanvalLinks ? "links" : "rechts"} starten
+          </Button>
         </div>
 
-        {/* Seizoen + wedstrijdtype */}
-        <div className="grid md:grid-cols-2 gap-3 border rounded-2xl p-3 bg-gray-50">
-          <div>
-            <label className="block text-sm font-medium mb-1">Seizoen:</label>
-            <select
-              className="border rounded-lg px-2 py-2 text-sm w-full"
-              value={season}
-              onChange={(e) => setSeason(e.target.value)}
-            >
-              {seasonOptions.map((item) => (
-                <option key={item} value={item}>{item}</option>
-              ))}
-            </select>
-            <div className="flex gap-2 mt-2">
-              <input
-                className="border rounded-lg px-2 py-1.5 text-sm flex-1 min-w-0"
-                placeholder="Bijv. Zaal 2027/2028"
-                value={newSeason}
-                onChange={(e) => setNewSeason(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && newSeason.trim()) {
-                    e.preventDefault();
+        {/* Minder vaak te wijzigen instellingen */}
+        <div className="border rounded-2xl p-4 bg-gray-50">
+          <div className="mb-3">
+            <h3 className="font-bold">Seizoeninstellingen</h3>
+            <p className="text-xs text-gray-500">
+              Deze instellingen wijzigen meestal niet iedere wedstrijd en worden onthouden.
+            </p>
+          </div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium mb-1">Seizoen:</label>
+              <select
+                className="border rounded-lg px-2 py-2 text-sm w-full"
+                value={season}
+                onChange={(e) => setSeason(e.target.value)}
+              >
+                {seasonOptions.map((item) => (
+                  <option key={item} value={item}>{item}</option>
+                ))}
+              </select>
+              <div className="flex gap-2 mt-2">
+                <input
+                  className="border rounded-lg px-2 py-1.5 text-sm flex-1 min-w-0"
+                  placeholder="Bijv. Zaal 2027/2028"
+                  value={newSeason}
+                  onChange={(e) => setNewSeason(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newSeason.trim()) {
+                      e.preventDefault();
+                      addSeason(newSeason);
+                      setNewSeason("");
+                    }
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!newSeason.trim()}
+                  onClick={() => {
                     addSeason(newSeason);
                     setNewSeason("");
-                  }
-                }}
-              />
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!newSeason.trim()}
-                onClick={() => {
-                  addSeason(newSeason);
-                  setNewSeason("");
-                }}
+                  }}
+                >
+                  Nieuw seizoen
+                </Button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Wedstrijdtype:</label>
+              <select
+                className="border rounded-lg px-2 py-2 text-sm w-full"
+                value={matchType}
+                onChange={(e) => setMatchType(e.target.value as MatchType)}
               >
-                Nieuw seizoen
-              </Button>
-            </div>
-            <div className="text-xs text-gray-500 mt-1">
-              Het gekozen seizoen wordt bij deze en volgende wedstrijden onthouden.
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">Wedstrijdtype:</label>
-            <select
-              className="border rounded-lg px-2 py-2 text-sm w-full"
-              value={matchType}
-              onChange={(e) => setMatchType(e.target.value as MatchType)}
-            >
-              <option value="Competitie">Competitie</option>
-              <option value="Oefenwedstrijd">Oefenwedstrijd</option>
-              <option value="Toernooi">Toernooi</option>
-            </select>
-            <div className="text-xs text-gray-500 mt-1">
-              Hiermee kunnen oefen- en toernooiwedstrijden later apart van de competitie worden geanalyseerd.
+                <option value="Competitie">Competitie</option>
+                <option value="Oefenwedstrijd">Oefenwedstrijd</option>
+                <option value="Toernooi">Toernooi</option>
+              </select>
             </div>
           </div>
-        </div>
-
-        {/* Tegenstander naam */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-          <label className="text-sm font-medium">Naam tegenstander:</label>
-          <input
-            className="border rounded-lg px-2 py-1 text-sm w-full sm:max-w-xs"
-            placeholder="Bijv. TOP, PKC..."
-            value={opponentName}
-            onChange={(e) => setOpponentName(e.target.value)}
-          />
-        </div>
-
-        {/* Uit / Thuis */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mt-2">
-          <span className="text-sm font-medium">Locatie wedstrijd:</span>
-          <label className="flex items-center gap-1 text-sm">
-            <input
-              type="radio"
-              className="h-4 w-4"
-              checked={homeAway === "thuis"}
-              onChange={() => setHomeAway("thuis")}
-            />
-            Thuis
-          </label>
-          <label className="flex items-center gap-1 text-sm">
-            <input
-              type="radio"
-              className="h-4 w-4"
-              checked={homeAway === "uit"}
-              onChange={() => setHomeAway("uit")}
-            />
-            Uit
-          </label>
         </div>
       </div>
     </div>
@@ -2620,7 +2694,7 @@ function VakBox({
         {posities.map((spelerId, i) => {
           const currentId = spelerId || undefined;
           const opties = spelers.filter(
-            (s) => !toegewezen.has(s.id) || s.id === currentId
+            (s) => s.actief && (!toegewezen.has(s.id) || s.id === currentId)
           );
           return (
             <div key={i} className="flex items-center gap-2">
@@ -2720,7 +2794,9 @@ function WedstrijdTab({
   const fixtureLabel =
   state.homeAway === "thuis"
     ? `Korbis - ${opponentName || "Tegenstander"}`
-    : `${opponentName || "Tegenstander"} - Korbis`;
+    : state.homeAway === "uit"
+    ? `${opponentName || "Tegenstander"} - Korbis`
+    : `Korbis - ${opponentName || "Tegenstander"}`;
 
   // Fase 5: compacte live coachinformatie. We kijken bewust vooral naar
   // recente aanvallen, zodat een signaal tijdens de wedstrijd bruikbaar is.
@@ -3041,6 +3117,25 @@ const attackUitPct =
     ? "Start wedstrijd"
     : "Hervat wedstrijd";
 
+  const startValidationErrors = (() => {
+    const errors: string[] = [];
+    if (!state.opponentName.trim()) errors.push("Vul de naam van de tegenstander in.");
+    if (!state.homeAway) errors.push("Kies de locatie: Thuis of Uit.");
+    const legePosities = [...state.aanval, ...state.verdediging].filter((id) => !id).length;
+    if (legePosities > 0) {
+      errors.push(`De vakindeling is nog niet compleet: ${legePosities} positie${legePosities === 1 ? "" : "s"} staat nog op Kies speler.`);
+    }
+    return errors;
+  })();
+
+  const startWedstrijdMetControle = () => {
+    if (startValidationErrors.length > 0) {
+      alert(`Wedstrijd kan nog niet starten:\n\n${startValidationErrors.map((x) => `• ${x}`).join("\n")}\n\nVul dit aan bij Wedstrijdinstellingen.`);
+      return;
+    }
+    toggleKlok(true);
+  };
+
   const startTweedeHelft = () => {
     setState((s) => {
       const halfMinuten = Number.isFinite(s.halfMinuten)
@@ -3079,6 +3174,15 @@ const attackUitPct =
                 {overlayText}
               </div>
 
+              {wedstrijdNietGestart && startValidationErrors.length > 0 && (
+                <div className="mb-4 text-left rounded-xl border border-amber-300 bg-amber-50 p-3">
+                  <div className="font-bold text-amber-900 mb-1">Nog invullen voor de start:</div>
+                  <ul className="list-disc pl-5 text-sm text-amber-900">
+                    {startValidationErrors.map((error) => <li key={error}>{error}</li>)}
+                  </ul>
+                </div>
+              )}
+
               {!wedstrijdAfgelopen && (
                 <Button
                   variant="primary"
@@ -3086,6 +3190,8 @@ const attackUitPct =
                   onClick={() =>
                     eersteHelftAfgelopen
                       ? startTweedeHelft()
+                      : wedstrijdNietGestart
+                      ? startWedstrijdMetControle()
                       : toggleKlok(true)
                   }
                 >
@@ -3818,8 +3924,13 @@ function InsightsTab({
     const names = Array.from(new Set(events.filter((e:any) => isKorbis(e) && e.spelerNaam).map((e:any) => String(e.spelerNaam)))).sort((a,b)=>a.localeCompare(b));
     const players = names.map(name => { const pe=events.filter((e:any)=>isKorbis(e)&&String(e.spelerNaam)===name); const pa=pe.filter(isAttempt); const pg=pa.filter((e:any)=>e.uitkomst==="Raak").length; const pk=pa.filter((e:any)=>e.uitkomst==="Korf").length; return {name, attempts:pa.length, goals:pg, score:pa.length?pg/pa.length*100:0, quality:pa.length?(pg+pk)/pa.length*100:0, rebounds:pe.filter((e:any)=>e.actie==="Rebound"&&e.reden==="Rebound").length}; });
     const sortedDatabaseMatches = [...selectedMatches].sort((a:any,b:any) => {
-      const ad = Date.parse(String(a.datum ?? ""));
-      const bd = Date.parse(String(b.datum ?? ""));
+      const dateSortValue = (value:any) => {
+        if (typeof value === "number" && Number.isFinite(value)) return (value - 25569) * 86400 * 1000;
+        const parsed = Date.parse(String(value ?? ""));
+        return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+      };
+      const ad = dateSortValue(a.datum);
+      const bd = dateSortValue(b.datum);
       if (Number.isFinite(ad) && Number.isFinite(bd)) return ad - bd;
       return String(a.wedstrijd_id ?? "").localeCompare(String(b.wedstrijd_id ?? ""));
     });
@@ -3830,10 +3941,37 @@ function InsightsTab({
       if (parts.length === 3 && parts.every(Number.isFinite)) return parts[0] * 3600 + parts[1] * 60 + parts[2];
       return num(value);
     };
+    const formatDatabaseDate = (value:any) => {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        // Excel bewaart datums vaak als serienummer: dag 1 = 01-01-1900.
+        // De correctie van 25569 houdt rekening met Excel's 1900-datumsysteem.
+        const d = new Date(Math.round((value - 25569) * 86400 * 1000));
+        if (!Number.isNaN(d.getTime())) {
+          return `${String(d.getUTCDate()).padStart(2,"0")}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${d.getUTCFullYear()}`;
+        }
+      }
+      const raw = String(value ?? "").trim();
+      if (!raw) return "";
+      const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+      const nl = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (nl) return `${nl[1].padStart(2,"0")}-${nl[2].padStart(2,"0")}-${nl[3]}`;
+      return raw.slice(0,10);
+    };
+    const databaseDateForSort = (value:any) => {
+      if (typeof value === "number" && Number.isFinite(value)) return (value - 25569) * 86400 * 1000;
+      const raw = String(value ?? "").trim();
+      const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return Date.UTC(Number(iso[1]), Number(iso[2])-1, Number(iso[3]));
+      const nl = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (nl) return Date.UTC(Number(nl[3]), Number(nl[2])-1, Number(nl[1]));
+      const parsed = Date.parse(raw);
+      return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+    };
     const formatAxisDate = (value:any, index:number) => {
-      const raw = String(value ?? "").slice(0,10);
-      const d = new Date(`${raw}T12:00:00`);
-      if (Number.isNaN(d.getTime())) return `W${index + 1}`;
+      const time = databaseDateForSort(value);
+      if (!Number.isFinite(time)) return `W${index + 1}`;
+      const d = new Date(time);
       const temp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
       const day = temp.getUTCDay() || 7;
       temp.setUTCDate(temp.getUTCDate() + 4 - day);
@@ -3855,7 +3993,7 @@ function InsightsTab({
       const avgAttackDuration=matchAttacks.length ? matchAttacks.reduce((sum:number,a:any)=>sum+toSeconds(a.duur),0)/matchAttacks.length : 0;
       return {
         id:String(m.wedstrijd_id),
-        label:String(m.datum??"").slice(0,10)||String(m.wedstrijd_naam??""),
+        label:formatDatabaseDate(m.datum)||String(m.wedstrijd_naam??""),
         axisLabel:formatAxisDate(m.datum, matchIndex),
         score:ma.length?mg/ma.length*100:0,
         quality:ma.length?(mg+mk)/ma.length*100:0,
@@ -4054,7 +4192,7 @@ function InsightsTab({
 
       return {
         id: matchId,
-        label: String(m.datum ?? "").slice(0, 10) || String(m.wedstrijd_naam ?? ""),
+        label: formatDatabaseDate(m.datum) || String(m.wedstrijd_naam ?? ""),
         opponent: String(m.tegenstander ?? ""),
         matchNumber: matchIndex + 1,
         axisLabel: formatAxisDate(m.datum, matchIndex),
