@@ -2385,6 +2385,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           setMatchType={(value) =>
             setState((s) => ({ ...s, matchType: value }))
           }
+          dbSheets={dbSheets}
         />
       )}
 
@@ -2764,6 +2765,7 @@ function VakindelingTab({
   addSeason,
   matchType,
   setMatchType,
+  dbSheets,
 }: {
   spelers: Player[];
   toegewezen: Set<string>;
@@ -2793,6 +2795,7 @@ function VakindelingTab({
   addSeason: (value: string) => void;
   matchType: MatchType;
   setMatchType: (value: MatchType) => void;
+  dbSheets: DatabaseSheetsData | null;
 }) {
   const [newSeason, setNewSeason] = useState("");
   const beschikbare = spelers.filter((s) => s.actief && !toegewezen.has(s.id));
@@ -2800,6 +2803,39 @@ function VakindelingTab({
   // JSX VakindelingTab
   const opstellingCompleet = [...aanval, ...verdediging].every(Boolean);
   const wedstrijdgegevensCompleet = Boolean(opponentName.trim()) && Boolean(homeAway);
+
+  const opponentHistory = useMemo(() => {
+    const clean = opponentName.trim().toLocaleLowerCase("nl-NL");
+    if (!clean || !dbSheets) return [];
+    return (dbSheets.matches ?? [])
+      .filter((m: any) => String(m.tegenstander ?? "").trim().toLocaleLowerCase("nl-NL") === clean)
+      .slice()
+      .sort((a: any, b: any) => {
+        const av = typeof a.datum === "number" ? a.datum : Date.parse(String(a.datum ?? ""));
+        const bv = typeof b.datum === "number" ? b.datum : Date.parse(String(b.datum ?? ""));
+        return (Number.isFinite(bv) ? bv : 0) - (Number.isFinite(av) ? av : 0);
+      });
+  }, [dbSheets, opponentName]);
+
+  const opponentPreview = useMemo(() => {
+    if (opponentHistory.length === 0 || !dbSheets) return null;
+    const ids = new Set(opponentHistory.map((m: any) => String(m.wedstrijd_id ?? "")));
+    const relatedEvents = (dbSheets.events ?? []).filter((e: any) => ids.has(String(e.wedstrijd_id ?? "")));
+    const relatedAttacks = (dbSheets.attacks ?? []).filter((a: any) => ids.has(String(a.wedstrijd_id ?? "")));
+    const wins = opponentHistory.filter((m: any) => Number(m.score_korbis) > Number(m.score_tegenstander)).length;
+    const draws = opponentHistory.filter((m: any) => Number(m.score_korbis) === Number(m.score_tegenstander)).length;
+    const losses = opponentHistory.length - wins - draws;
+    const avgFor = opponentHistory.reduce((n: number, m: any) => n + Number(m.score_korbis || 0), 0) / opponentHistory.length;
+    const avgAgainst = opponentHistory.reduce((n: number, m: any) => n + Number(m.score_tegenstander || 0), 0) / opponentHistory.length;
+    const korbisAttempts = relatedEvents.filter((e: any) => String(e.team ?? "") === "thuis" && Boolean(e.actie) && Boolean(e.resultaat));
+    const korbisGoals = korbisAttempts.filter((e: any) => String(e.resultaat ?? "").toLowerCase() === "raak").length;
+    const reboundsWon = relatedEvents.filter((e: any) => e.soort === "Rebound" && e.reden === "Rebound").length;
+    const reboundsLost = relatedEvents.filter((e: any) => e.soort === "Rebound" && e.reden === "Geen Rebound").length;
+    const attackCount = relatedAttacks.filter((a: any) => String(a.team ?? "") === "thuis").length;
+    const shotPct = korbisAttempts.length ? (korbisGoals / korbisAttempts.length) * 100 : null;
+    const reboundPct = reboundsWon + reboundsLost ? (reboundsWon / (reboundsWon + reboundsLost)) * 100 : null;
+    return { wins, draws, losses, avgFor, avgAgainst, shotPct, reboundPct, attackCount };
+  }, [dbSheets, opponentHistory]);
 
   return (
     <div className="space-y-4">
@@ -2858,6 +2894,45 @@ function VakindelingTab({
           </div>
         </div>
       </div>
+
+      {opponentName.trim() && (
+        <div className={`rounded-2xl border p-4 ${opponentHistory.length ? "border-blue-200 bg-gradient-to-r from-blue-50 via-white to-cyan-50" : "border-slate-200 bg-white"}`}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Voorbeschouwing</div>
+              <h3 className="mt-1 text-lg font-bold">Historie tegen {opponentName.trim()}</h3>
+              <p className="text-sm text-slate-500">Automatisch opgebouwd uit eerdere wedstrijden in je database.</p>
+            </div>
+            <div className={`self-start rounded-full px-3 py-1 text-xs font-bold ${opponentHistory.length ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-600"}`}>
+              {opponentHistory.length ? `${opponentHistory.length} eerdere wedstrijd${opponentHistory.length === 1 ? "" : "en"}` : "Eerste ontmoeting in database"}
+            </div>
+          </div>
+
+          {opponentPreview ? (
+            <>
+              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><div className="text-xs font-semibold text-emerald-700">Resultaten</div><div className="mt-1 text-xl font-extrabold text-slate-900">{opponentPreview.wins}W · {opponentPreview.draws}G · {opponentPreview.losses}V</div></div>
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-3"><div className="text-xs font-semibold text-blue-700">Gem. score Korbis</div><div className="mt-1 text-xl font-extrabold">{opponentPreview.avgFor.toFixed(1)}</div></div>
+                <div className="rounded-xl border border-red-100 bg-red-50 p-3"><div className="text-xs font-semibold text-red-700">Gem. tegen</div><div className="mt-1 text-xl font-extrabold">{opponentPreview.avgAgainst.toFixed(1)}</div></div>
+                <div className="rounded-xl border border-violet-100 bg-violet-50 p-3"><div className="text-xs font-semibold text-violet-700">Laatste ontmoeting</div><div className="mt-1 text-xl font-extrabold">{opponentHistory[0].score_korbis ?? "?"}-{opponentHistory[0].score_tegenstander ?? "?"}</div><div className="text-[11px] text-slate-500">{formatImportedDate(opponentHistory[0].datum)}</div></div>
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-emerald-100 bg-white/90 p-3">
+                  <div className="flex items-center gap-2 text-sm font-bold"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500"/>Sterk punt uit historie</div>
+                  <div className="mt-1 text-sm text-slate-600">{opponentPreview.avgFor > opponentPreview.avgAgainst ? `Korbis scoorde gemiddeld ${(opponentPreview.avgFor-opponentPreview.avgAgainst).toFixed(1)} doelpunt meer dan ${opponentName.trim()}.` : opponentPreview.reboundPct !== null && opponentPreview.reboundPct >= 50 ? `Aanvallende rebound was tegen deze tegenstander met ${opponentPreview.reboundPct.toFixed(0)}% minimaal op niveau.` : "Gebruik de eerdere ontmoetingen vooral als referentie; er springt nog geen duidelijk positief patroon uit."}</div>
+                </div>
+                <div className="rounded-xl border border-amber-100 bg-white/90 p-3">
+                  <div className="flex items-center gap-2 text-sm font-bold"><span className="h-2.5 w-2.5 rounded-full bg-amber-500"/>Aandacht voor deze wedstrijd</div>
+                  <div className="mt-1 text-sm text-slate-600">{opponentPreview.avgAgainst > opponentPreview.avgFor ? `${opponentName.trim()} scoorde historisch gemiddeld ${(opponentPreview.avgAgainst-opponentPreview.avgFor).toFixed(1)} doelpunt meer; verdedigende controle verdient extra aandacht.` : opponentPreview.shotPct !== null && opponentPreview.shotPct < 20 ? `De historische afronding tegen deze tegenstander ligt op ${opponentPreview.shotPct.toFixed(0)}%; kanskwaliteit is een logisch aandachtspunt.` : "Geen duidelijke rode vlag uit de eerdere ontmoetingen. Vergelijk tijdens de wedstrijd vooral met het historische wedstrijdbeeld."}</div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">Nog geen eerdere wedstrijd tegen deze tegenstander gevonden. Na deze wedstrijd kan KorbIQ hier automatisch historie en vergelijkingen tonen.</div>
+          )}
+        </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between gap-3 mb-2">
