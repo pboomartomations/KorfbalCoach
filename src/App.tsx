@@ -2279,6 +2279,28 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     </button>
   );
 
+  const CurrentMatchNavCard = ({ mobile = false }: { mobile?: boolean }) => {
+    const hasFixture = Boolean(state.opponentName.trim());
+    const isLive = hasFixture && !state.matchEnded;
+    const fixture = hasFixture
+      ? (state.homeAway === "uit" ? `${state.opponentName} – Korbis` : `Korbis – ${state.opponentName}`)
+      : "Nog geen wedstrijd ingesteld";
+    return (
+      <button
+        type="button"
+        onClick={() => { setTab("wedstrijd"); if (mobile) setMobileMenuOpen(false); }}
+        className={`w-full rounded-2xl border p-3 text-left transition shadow-sm ${tab === "wedstrijd" ? "border-blue-300 bg-blue-600 text-white" : "border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50 text-slate-900 hover:border-blue-300 hover:shadow"}`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className={`text-[11px] font-extrabold uppercase tracking-[0.12em] ${tab === "wedstrijd" ? "text-blue-100" : "text-blue-700"}`}>{isLive ? "● LIVE · Huidige wedstrijd" : "Huidige wedstrijd"}</div>
+          <NavGlyph type="match" />
+        </div>
+        <div className="mt-1 truncate text-sm font-black">{fixture}</div>
+        {hasFixture && <div className={`mt-1 text-xs font-semibold ${tab === "wedstrijd" ? "text-blue-100" : "text-slate-600"}`}>{state.scoreThuis} – {state.scoreUit} · {formatTime(state.tijdSeconden)}</div>}
+      </button>
+    );
+  };
+
   return (
     <div className="korbiq-app min-h-screen bg-[#f6f8fc] text-slate-900">
       <style>{`
@@ -2294,14 +2316,14 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
 
       <div className="flex min-h-screen w-full items-start">
         <aside className="korbiq-desktop-sidebar sticky top-0 h-screen w-[250px] shrink-0 border-r border-slate-200/90 bg-white px-4 py-5 shadow-[2px_0_16px_rgba(15,23,42,0.025)]">
-          <div className="px-2 pb-6"><KorbIQLogo /></div>
+          <div className="px-2 pb-4"><KorbIQLogo /></div>
+          <div className="mb-5"><CurrentMatchNavCard /></div>
 
           <nav className="space-y-5">
             <section>
               <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Wedstrijd</div>
               <div className="space-y-1">
                 <button onClick={requestNieuweWedstrijd} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
-                <SideNavButton id="wedstrijd" label="Huidige / live wedstrijd" icon="match" />
                 <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
                 <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
               </div>
@@ -2373,11 +2395,11 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             {mobileMenuOpen && (
               <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
                 <div className="mx-auto max-w-xl space-y-4">
+                  <CurrentMatchNavCard mobile />
                   <section>
                     <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Wedstrijd</div>
                     <div className="space-y-1">
                       <button onClick={() => { setMobileMenuOpen(false); requestNieuweWedstrijd(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
-                      <SideNavButton id="wedstrijd" label="Huidige / live wedstrijd" icon="match" />
                       <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
                       <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
                     </div>
@@ -4758,6 +4780,96 @@ function SpelerprofielenDashboard({
   const teamKorf = teamAttempts.filter((e:any)=>result(e)==="korf").length;
   const teamScore = teamAttempts.length ? teamGoals/teamAttempts.length*100 : 0;
   const teamQuality = teamAttempts.length ? (teamGoals+teamKorf)/teamAttempts.length*100 : 0;
+
+  // Fase 17: eerlijke teambenchmarks en rankings. Basisspelers worden onderling vergeleken;
+  // bij te weinig basisspelers vallen we terug op alle actieve spelers. Volume-statistieken zijn per 60 minuten.
+  const rankingPlayers = (() => {
+    const base = spelers.filter((p) => p.actief && p.status === "Basisspeler");
+    return base.length >= 2 ? base : spelers.filter((p) => p.actief);
+  })();
+  const playerStats = rankingPlayers.map((p) => {
+    const pe = events.filter((e:any) => matchIds.has(String(e.wedstrijd_id ?? "")) && own(e) && (String(e.spelerId ?? "") === p.id || String(e.spelerNaam ?? "") === p.naam));
+    const pa = pe.filter(isAttempt);
+    const pg = pa.filter((e:any) => result(e) === "raak").length;
+    const pk = pa.filter((e:any) => result(e) === "korf").length;
+    const shot = pa.filter((e:any) => String(e.actie ?? "").trim().toLowerCase() === "schot");
+    const shotGoals = shot.filter((e:any) => result(e) === "raak").length;
+    const run = pa.filter((e:any) => String(e.actie ?? "").trim().toLowerCase() === "doorloop");
+    const runGoals = run.filter((e:any) => result(e) === "raak").length;
+    const reb = pe.filter((e:any) => String(e.actie ?? "").toLowerCase() === "rebound" && String(e.reden ?? "").toLowerCase() === "rebound").length;
+    const def = pe.filter((e:any) => ["verdedigd","bal onderschept","pass onderschept"].includes(String(e.reden ?? "").trim().toLowerCase())).length;
+    const tov = pe.filter((e:any) => ["bal uit","pass onderschept"].includes(String(e.reden ?? "").trim().toLowerCase())).length;
+    let minutes = 0;
+    selectedMatches.forEach((m:any) => {
+      let parsed:any[] = [];
+      try { parsed = JSON.parse(String(m.speeltijd_spelers_json ?? "[]")); } catch { parsed = []; }
+      const row = parsed.find((x:any) => String(x.spelerId ?? x.id ?? "") === p.id || String(x.spelerNaam ?? x.naam ?? "") === p.naam);
+      const sec = Number(row?.seconden ?? row?.seconds ?? 0);
+      if (Number.isFinite(sec) && sec > 0) minutes += sec / 60;
+    });
+    if (!minutes && vakperiodes.length) vakperiodes.filter((v:any) => matchIds.has(String(v.wedstrijd_id ?? "")) && String(v.combinatie_speler_ids ?? "").includes(p.id)).forEach((v:any) => { minutes += (Number(v.duur_seconden ?? 0) || 0) / 60; });
+    const per60 = (n:number) => minutes > 0 ? n / minutes * 60 : 0;
+    return {
+      id:p.id, name:p.naam, minutes, attempts:pa.length, goals:pg, rebounds:reb, defense:def, turnovers:tov,
+      goals60:per60(pg), attempts60:per60(pa.length), rebounds60:per60(reb), defense60:per60(def), turnovers60:per60(tov),
+      scorePct:pa.length ? pg/pa.length*100 : 0, qualityPct:pa.length ? (pg+pk)/pa.length*100 : 0,
+      shotScore:shot.length ? shotGoals/shot.length*100 : 0, shotVolume:per60(shot.length),
+      runScore:run.length ? runGoals/run.length*100 : 0, runVolume:per60(run.length),
+    };
+  });
+  const eligibleStats = playerStats.filter((p) => p.minutes >= 60);
+  const rankedPool = eligibleStats.length >= 2 ? eligibleStats : playerStats.filter((p) => p.minutes > 0);
+  const avg = (key:keyof typeof playerStats[number]) => rankedPool.length ? rankedPool.reduce((sum,p) => sum + Number(p[key] ?? 0), 0) / rankedPool.length : 0;
+  const rankOf = (key:keyof typeof playerStats[number], inverse=false) => {
+    const sorted=[...rankedPool].sort((a,b)=>inverse ? Number(a[key])-Number(b[key]) : Number(b[key])-Number(a[key]));
+    const pos=sorted.findIndex((p)=>p.id===selectedId); return pos>=0 ? pos+1 : null;
+  };
+  const percentileScore = (key:keyof typeof playerStats[number], inverse=false) => {
+    const rank=rankOf(key,inverse); if (!rank || rankedPool.length<=1) return rank ? 100 : 0;
+    return 100 * (rankedPool.length-rank) / (rankedPool.length-1);
+  };
+  const scoringComposite = percentileScore("goals60")*.45 + percentileScore("scorePct")*.35 + percentileScore("attempts60")*.20;
+  const shotComposite = percentileScore("shotScore")*.65 + percentileScore("shotVolume")*.35;
+  const runComposite = percentileScore("runScore")*.65 + percentileScore("runVolume")*.35;
+  const reboundComposite = percentileScore("rebounds60");
+  const defenseComposite = percentileScore("defense60");
+  const attackComposite = percentileScore("qualityPct")*.40 + percentileScore("attempts60")*.25 + percentileScore("goals60")*.25 + percentileScore("turnovers60",true)*.10;
+  const overallComposite = scoringComposite*.25 + shotComposite*.12 + runComposite*.10 + reboundComposite*.18 + defenseComposite*.18 + attackComposite*.17;
+  const compositeRank = (getter:(p:typeof playerStats[number])=>number) => {
+    const scored=rankedPool.map((p)=>({id:p.id,score:getter(p)})).sort((a,b)=>b.score-a.score);
+    const pos=scored.findIndex((x)=>x.id===selectedId); return pos>=0 ? pos+1 : null;
+  };
+  const compositeFor = (p:typeof playerStats[number], kind:"scoring"|"shot"|"run"|"attack"|"overall") => {
+    const rankScore=(key:keyof typeof playerStats[number], inverse=false) => {
+      const sorted=[...rankedPool].sort((a,b)=>inverse ? Number(a[key])-Number(b[key]) : Number(b[key])-Number(a[key]));
+      const r=sorted.findIndex(x=>x.id===p.id)+1; return r>0 && sorted.length>1 ? 100*(sorted.length-r)/(sorted.length-1) : r===1?100:0;
+    };
+    const scoring=rankScore("goals60")*.45+rankScore("scorePct")*.35+rankScore("attempts60")*.20;
+    const shotC=rankScore("shotScore")*.65+rankScore("shotVolume")*.35;
+    const runC=rankScore("runScore")*.65+rankScore("runVolume")*.35;
+    const attackC=rankScore("qualityPct")*.40+rankScore("attempts60")*.25+rankScore("goals60")*.25+rankScore("turnovers60",true)*.10;
+    if(kind==="scoring")return scoring; if(kind==="shot")return shotC; if(kind==="run")return runC; if(kind==="attack")return attackC;
+    return scoring*.25+shotC*.12+runC*.10+rankScore("rebounds60")*.18+rankScore("defense60")*.18+attackC*.17;
+  };
+  const rankings = [
+    {label:"Overall", icon:"🏆", rank:compositeRank(p=>compositeFor(p,"overall")), score:overallComposite},
+    {label:"Scorend", icon:"🎯", rank:compositeRank(p=>compositeFor(p,"scoring")), score:scoringComposite},
+    {label:"Schot", icon:"🏹", rank:compositeRank(p=>compositeFor(p,"shot")), score:shotComposite},
+    {label:"Doorloop", icon:"⚡", rank:compositeRank(p=>compositeFor(p,"run")), score:runComposite},
+    {label:"Rebound", icon:"🧲", rank:rankOf("rebounds60"), score:reboundComposite},
+    {label:"Verdedigend", icon:"🛡️", rank:rankOf("defense60"), score:defenseComposite},
+    {label:"Aanvallend", icon:"💎", rank:compositeRank(p=>compositeFor(p,"attack")), score:attackComposite},
+    {label:"Balvastheid", icon:"🔒", rank:rankOf("turnovers60",true), score:percentileScore("turnovers60",true)},
+  ];
+  const selectedStat = playerStats.find((p)=>p.id===selectedId);
+  const benchmarkCards = [
+    {label:"Goals / 60", value:selectedStat?.goals60 ?? 0, team:avg("goals60"), suffix:""},
+    {label:"Kansen / 60", value:selectedStat?.attempts60 ?? 0, team:avg("attempts60"), suffix:""},
+    {label:"Raak", value:selectedStat?.scorePct ?? 0, team:avg("scorePct"), suffix:"%"},
+    {label:"Korfgericht", value:selectedStat?.qualityPct ?? 0, team:avg("qualityPct"), suffix:"%"},
+    {label:"Rebound / 60", value:selectedStat?.rebounds60 ?? 0, team:avg("rebounds60"), suffix:""},
+    {label:"Verdedigend / 60", value:selectedStat?.defense60 ?? 0, team:avg("defense60"), suffix:""},
+  ];
   const metricSignal = (value:number, benchmark:number, threshold:number) => value >= benchmark + threshold ? "green" : value <= benchmark - threshold ? "red" : "orange";
   const signalClass = (tone:"green"|"orange"|"red") => tone === "green" ? "bg-emerald-50 text-emerald-800 border-emerald-200" : tone === "red" ? "bg-red-50 text-red-800 border-red-200" : "bg-amber-50 text-amber-800 border-amber-200";
 
@@ -4800,7 +4912,17 @@ function SpelerprofielenDashboard({
       </div>
     </div>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-      {[['Wedstrijden',playedMatches],['Minuten',Math.round(totalMinutes)],['Goals',goals],['Kansen',attempts.length],['Raak',attempts.length?`${scorePct.toFixed(1)}%`:'—'],['Korfgericht',attempts.length?`${qualityPct.toFixed(1)}%`:'—']].map(([l,v])=><div key={String(l)} className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{l}</div><div className="mt-1 text-2xl font-black text-slate-900">{v}</div></div>)}
+      {benchmarkCards.map((m)=><div key={m.label} className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{m.label}</div><div className="mt-1 text-2xl font-black text-slate-900">{m.value.toFixed(1)}{m.suffix}</div><div className="mt-1 text-xs text-slate-500">Teamgem.: <span className="font-bold text-slate-700">{m.team.toFixed(1)}{m.suffix}</span></div></div>)}
+    </div>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">Wedstrijden</div><div className="mt-1 text-2xl font-black">{playedMatches}</div></div>
+      <div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">Minuten</div><div className="mt-1 text-2xl font-black">{Math.round(totalMinutes)}</div></div>
+      <div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">Totaal goals</div><div className="mt-1 text-2xl font-black">{goals}</div></div>
+      <div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">Totaal kansen</div><div className="mt-1 text-2xl font-black">{attempts.length}</div></div>
+    </div>
+    <div className="rounded-2xl border bg-white p-5">
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-bold">Teamranking</h3><p className="text-sm text-slate-500">Vergelijking met {rankedPool.length} basisspelers met voldoende data. Volume is omgerekend per 60 minuten.</p></div><div className="text-xs font-semibold text-slate-500">Minimaal 60 minuten voor de standaardranking</div></div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{rankings.map(r=><div key={r.label} className={`rounded-xl border p-3 ${r.rank===1?'border-amber-200 bg-amber-50':r.rank && r.rank<=3?'border-blue-200 bg-blue-50':'bg-slate-50'}`}><div className="flex items-center justify-between gap-2"><div className="font-bold text-slate-800">{r.icon} {r.label}</div><div className="text-lg font-black text-slate-900">{r.rank ? `#${r.rank} / ${rankedPool.length}` : '—'}</div></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600" style={{width:`${Math.max(0,Math.min(100,r.score))}%`}} /></div></div>)}</div>
     </div>
     <div className="grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
       <div className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between gap-3"><div><h3 className="text-lg font-bold">Profielsignalen</h3><p className="text-sm text-slate-500">Vergelijking met Korbis in dezelfde geselecteerde wedstrijden.</p></div><div className={`text-right text-sm font-bold ${reliability.cls}`}><div>{reliability.dots}</div><div>{reliability.label} · {Math.round(totalMinutes)} min</div></div></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{strengths.length?strengths.map((x,i)=><div key={i} className={`rounded-xl border p-3 ${signalClass(x.tone)}`}><div className="font-bold">{x.tone==='green'?'●':x.tone==='red'?'●':'●'} {x.title}</div><div className="mt-1 text-sm">{x.text}</div></div>):<div className="text-sm text-slate-500">Nog onvoldoende acties voor inhoudelijke signalen.</div>}</div></div>
