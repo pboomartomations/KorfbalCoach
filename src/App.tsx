@@ -663,6 +663,101 @@ export default function App() {
       root.style.minHeight = "100vh";
     }
   }, []);
+
+  // Fase 17.1: alle tabellen in KorbIQ zijn sorteerbaar via de kolomkop.
+  // 1e klik = oplopend, 2e = aflopend, 3e = oorspronkelijke volgorde.
+  useEffect(() => {
+    type SortDirection = "asc" | "desc" | "original";
+    const tableState = new WeakMap<HTMLTableElement, { column: number; direction: SortDirection }>();
+    const originalOrder = new WeakMap<HTMLTableRowElement, number>();
+
+    const valueForSort = (raw: string) => {
+      const text = raw.replace(/[▲▼↕]/g, "").trim();
+      if (!text || text === "—" || text === "-") return { empty: true, kind: 3, value: "" };
+
+      const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (iso) return { empty: false, kind: 0, value: Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])) };
+      const nl = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (nl) return { empty: false, kind: 0, value: Date.UTC(Number(nl[3]), Number(nl[2]) - 1, Number(nl[1])) };
+
+      const rank = text.match(/^#?\s*(\d+)\s*\/\s*\d+/);
+      if (rank) return { empty: false, kind: 1, value: Number(rank[1]) };
+
+      const cleaned = text
+        .replace(/%/g, "")
+        .replace(/\s*(min|sec|s|x)$/i, "")
+        .replace(/\./g, "")
+        .replace(",", ".");
+      if (/^[+-]?\d+(?:\.\d+)?$/.test(cleaned)) {
+        return { empty: false, kind: 1, value: Number(cleaned) };
+      }
+      return { empty: false, kind: 2, value: text.toLocaleLowerCase("nl-NL") };
+    };
+
+    const decorateTable = (table: HTMLTableElement) => {
+      const headerRow = table.tHead?.rows?.[0];
+      if (!headerRow) return;
+      Array.from(headerRow.cells).forEach((cell) => {
+        const th = cell as HTMLTableCellElement;
+        if (th.colSpan > 1) return;
+        th.style.cursor = "pointer";
+        th.style.userSelect = "none";
+        th.title = "Klik om deze kolom te sorteren";
+        th.setAttribute("aria-sort", "none");
+        if (!th.dataset.sortLabel) th.dataset.sortLabel = (th.textContent ?? "").trim();
+      });
+    };
+
+    const decorateAll = () => document.querySelectorAll<HTMLTableElement>("table").forEach(decorateTable);
+    decorateAll();
+    const observer = new MutationObserver(decorateAll);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    const onClick = (event: MouseEvent) => {
+      const th = (event.target as HTMLElement | null)?.closest("th") as HTMLTableCellElement | null;
+      if (!th || th.colSpan > 1) return;
+      const table = th.closest("table") as HTMLTableElement | null;
+      const tbody = table?.tBodies?.[0];
+      const headerRow = table?.tHead?.rows?.[0];
+      if (!table || !tbody || !headerRow || !headerRow.contains(th)) return;
+
+      const column = Array.from(headerRow.cells).indexOf(th);
+      if (column < 0) return;
+      const previous = tableState.get(table);
+      const direction: SortDirection = previous?.column === column
+        ? previous.direction === "asc" ? "desc" : previous.direction === "desc" ? "original" : "asc"
+        : "asc";
+      tableState.set(table, { column, direction });
+
+      const rows = Array.from(tbody.rows);
+      rows.forEach((row, index) => { if (!originalOrder.has(row)) originalOrder.set(row, index); });
+      rows.sort((a, b) => {
+        if (direction === "original") return (originalOrder.get(a) ?? 0) - (originalOrder.get(b) ?? 0);
+        const av = valueForSort(a.cells[column]?.textContent ?? "");
+        const bv = valueForSort(b.cells[column]?.textContent ?? "");
+        if (av.empty !== bv.empty) return av.empty ? 1 : -1;
+        let cmp = 0;
+        if (av.kind === bv.kind && typeof av.value === "number" && typeof bv.value === "number") cmp = av.value - bv.value;
+        else cmp = String(av.value).localeCompare(String(bv.value), "nl-NL", { numeric: true, sensitivity: "base" });
+        return direction === "desc" ? -cmp : cmp;
+      });
+      rows.forEach((row) => tbody.appendChild(row));
+
+      Array.from(headerRow.cells).forEach((cell) => {
+        const header = cell as HTMLTableCellElement;
+        const label = header.dataset.sortLabel ?? (header.textContent ?? "").replace(/[▲▼↕]/g, "").trim();
+        header.dataset.sortLabel = label;
+        header.textContent = label + (header === th && direction !== "original" ? (direction === "asc" ? " ▲" : " ▼") : "");
+        header.setAttribute("aria-sort", header === th && direction !== "original" ? (direction === "asc" ? "ascending" : "descending") : "none");
+      });
+    };
+
+    document.addEventListener("click", onClick);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("click", onClick);
+    };
+  }, []);
   //const [popup, setPopup] = useState<null | { vak: VakSide; soort: "Gemis" | "Kans" }>(null);
   const [possPopup, setPossPopup] = useState<null | { team: "thuis" | "uit" }>(null);
   const [shotPopup, setShotPopup] = useState<null | { type: "Schot" | "Rebound" }>(null);
