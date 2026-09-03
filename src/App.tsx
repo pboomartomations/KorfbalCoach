@@ -602,6 +602,128 @@ function KorbIQLogo({ compact = false }: { compact?: boolean }) {
   );
 }
 
+
+type MetricDetailSeries = {
+  labels: string[];
+  values: number[];
+  comparisonValues?: number[];
+  comparisonLabel?: string;
+  suffix?: string;
+};
+
+function MetricInsightCard({
+  label,
+  value,
+  sub,
+  metric,
+  benchmark,
+  inverse = false,
+  series,
+  className = "",
+}: {
+  label: string;
+  value: React.ReactNode;
+  sub?: React.ReactNode;
+  metric?: number;
+  benchmark?: number;
+  inverse?: boolean;
+  series?: MetricDetailSeries;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearTimers = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    openTimer.current = null;
+    closeTimer.current = null;
+  };
+  useEffect(() => () => clearTimers(), []);
+  const scheduleOpen = () => {
+    if (!series?.values.length) return;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    openTimer.current = setTimeout(() => setOpen(true), 500);
+  };
+  const scheduleClose = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 180);
+  };
+  const keepOpen = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    setOpen(true);
+  };
+  const values = (series?.values ?? []).map(Number).filter(Number.isFinite);
+  const avg = values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : 0;
+  const recent = values.slice(-Math.min(3, values.length));
+  const previous = values.length >= 6 ? values.slice(-6, -3) : values.slice(0, Math.max(0, values.length - recent.length));
+  const recentAvg = recent.length ? recent.reduce((sum, v) => sum + v, 0) / recent.length : 0;
+  const previousAvg = previous.length ? previous.reduce((sum, v) => sum + v, 0) / previous.length : recentAvg;
+  const delta = recentAvg - previousAvg;
+  const trendGood = inverse ? delta < 0 : delta > 0;
+  const trendLabel = Math.abs(delta) < 0.05 ? "→ stabiel" : `${trendGood ? "↑" : "↓"} ${Math.abs(delta).toFixed(1)}${series?.suffix ?? ""}`;
+  const tone = metric == null || benchmark == null || !Number.isFinite(metric) || !Number.isFinite(benchmark)
+    ? "text-gray-900"
+    : Math.abs(metric - benchmark) < 0.05
+      ? "text-gray-900"
+      : (inverse ? metric < benchmark : metric > benchmark) ? "text-emerald-600" : "text-red-600";
+
+  const w = 380, h = 210, left = 44, right = 14, top = 16, bottom = 68;
+  const all = [...values, ...((series?.comparisonValues ?? []).filter(Number.isFinite))];
+  const maxValue = Math.max(...all, 0);
+  const minValue = Math.min(...all, 0);
+  const yMin = Math.min(0, Math.floor(minValue));
+  const yMax = Math.max(1, Math.ceil(maxValue * 1.15));
+  const span = Math.max(1, yMax - yMin);
+  const x = (i: number) => values.length <= 1 ? (left + w - right) / 2 : left + i / (values.length - 1) * (w - left - right);
+  const y = (v: number) => h - bottom - (v - yMin) / span * (h - top - bottom);
+  const points = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const comparison = series?.comparisonValues?.length === values.length ? series.comparisonValues : undefined;
+  const comparisonPoints = comparison?.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const ticks = Array.from({ length: 5 }, (_, i) => yMin + (yMax - yMin) * i / 4);
+
+  return <div
+    className={`relative border rounded-2xl p-4 bg-white shadow-sm ${series?.values.length ? "cursor-help" : ""} ${className}`}
+    onMouseEnter={scheduleOpen}
+    onMouseLeave={scheduleClose}
+    onClick={() => series?.values.length && setOpen((v) => !v)}
+    tabIndex={series?.values.length ? 0 : undefined}
+    onFocus={scheduleOpen}
+    onBlur={scheduleClose}
+  >
+    <div className="flex items-start justify-between gap-2">
+      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</div>
+      {series?.values.length ? <span className="text-[11px] font-bold text-blue-500 opacity-70" aria-label="Meer informatie">ⓘ</span> : null}
+    </div>
+    <div className={`text-3xl font-extrabold mt-1 ${tone}`}>{value}</div>
+    {sub ? <div className="text-xs text-gray-500 mt-1">{sub}</div> : null}
+    {open && series?.values.length ? <div
+      className="absolute left-0 top-[calc(100%+8px)] z-[80] w-[390px] max-w-[88vw] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
+      onMouseEnter={keepOpen}
+      onMouseLeave={scheduleClose}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div><div className="font-black text-slate-900">{label} · per wedstrijd</div><div className="text-xs text-slate-500">Onderliggende data voor de geselecteerde periode</div></div>
+        <button type="button" className="rounded-lg px-2 py-1 text-sm text-slate-400 hover:bg-slate-100" onClick={() => setOpen(false)}>×</button>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-xl bg-slate-50 px-2 py-2"><div className="text-[10px] font-bold uppercase text-slate-400">Gem.</div><div className="font-black">{avg.toFixed(avg % 1 === 0 ? 0 : 1)}{series.suffix ?? ""}</div></div>
+        <div className="rounded-xl bg-slate-50 px-2 py-2"><div className="text-[10px] font-bold uppercase text-slate-400">Laatste</div><div className="font-black">{values[values.length - 1].toFixed(values[values.length - 1] % 1 === 0 ? 0 : 1)}{series.suffix ?? ""}</div></div>
+        <div className={`rounded-xl px-2 py-2 ${Math.abs(delta) < 0.05 ? "bg-slate-50 text-slate-700" : trendGood ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-800"}`}><div className="text-[10px] font-bold uppercase opacity-60">Trend</div><div className="font-black">{trendLabel}</div></div>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="mt-2 h-[210px] w-full overflow-visible">
+        {ticks.map((tick, i) => <g key={`tick-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-7} y={y(tick)+3} textAnchor="end" fontSize="9" fill="#94a3b8">{tick.toFixed(tick % 1 === 0 ? 0 : 1)}{series.suffix ?? ""}</text></g>)}
+        {comparisonPoints ? <polyline points={comparisonPoints} fill="none" stroke="#2563eb" strokeWidth="1.8" strokeDasharray="5 4"/> : null}
+        <polyline points={points} fill="none" stroke="#64748b" strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round"/>
+        {values.map((v, i) => <g key={`p-${i}`}><circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke="#475569" strokeWidth="2"><title>{`${series.labels[i] ?? `W${i+1}`}: ${v.toFixed(v % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}${comparison?.[i] != null ? ` · ${series.comparisonLabel ?? "Vergelijking"}: ${comparison[i].toFixed(comparison[i] % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}` : ""}`}</title></circle><text x={x(i)} y={h-bottom+18} transform={`rotate(90 ${x(i)} ${h-bottom+18})`} textAnchor="start" fontSize="8.5" fill="#64748b">{series.labels[i] ?? `W${i+1}`}</text></g>)}
+      </svg>
+      {comparison ? <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500"><span className="inline-block w-5 border-t-2 border-dashed border-blue-600"/><span>{series.comparisonLabel ?? "Vergelijking"}</span></div> : null}
+      <div className="mt-2 text-[11px] text-slate-400">Desktop: 0,5 sec hover · mobiel: tik op het kaartje · hover op een punt voor de exacte wedstrijdwaarde.</div>
+    </div> : null}
+  </div>;
+}
+
 function SignalDot({ tone }: { tone: "green" | "orange" | "red" | "blue" }) {
   const cls = tone === "green" ? "bg-emerald-500" : tone === "orange" ? "bg-orange-500" : tone === "red" ? "bg-red-500" : "bg-blue-500";
   return <span className={`mt-[0.42rem] h-2.5 w-2.5 shrink-0 rounded-full ${cls} shadow-[0_0_0_3px_rgba(255,255,255,.75)]`} aria-hidden="true" />;
@@ -5454,7 +5576,7 @@ function InsightsTab({
       temp.setUTCDate(temp.getUTCDate() + 4 - day);
       const yearStart = new Date(Date.UTC(temp.getUTCFullYear(),0,1));
       const week = Math.ceil((((temp.getTime()-yearStart.getTime())/86400000)+1)/7);
-      return `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")} · wk ${week}`;
+      return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")} W${week}`;
     };
     const trend = sortedDatabaseMatches.map((m:any, matchIndex:number) => {
       const me=(dbSheets?.events??[]).filter((e:any)=>String(e.wedstrijd_id)===String(m.wedstrijd_id));
@@ -5497,7 +5619,7 @@ function InsightsTab({
       };
     });
     const Trend = ({title, values, labels, suffix="", comparisonValues, comparisonLabel="Teamgemiddelde", inverseComparison=false}:{title:string;values:number[];labels?:string[];suffix?:string;comparisonValues?:number[];comparisonLabel?:string;inverseComparison?:boolean}) => {
-      const w=560,h=190,left=54,right=18,top=16,bottom=44;
+      const w=560,h=225,left=54,right=18,top=16,bottom=78;
       const isPercent=suffix==="%";
       const allValues=[...values,...(comparisonValues ?? [])];
       const rawMax=Math.max(...allValues,0);
@@ -5516,7 +5638,7 @@ function InsightsTab({
         if (benchmark == null || !Number.isFinite(benchmark)) return v>=avg;
         return inverseComparison ? v<=benchmark : v>=benchmark;
       };
-      return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{values.length?`Laatste: ${values[values.length-1].toFixed(isPercent?1:values[values.length-1] % 1 === 0 ? 0 : 1)}${suffix}${latestComparison!=null?` · ${comparisonLabel}: ${latestComparison.toFixed(isPercent?1:latestComparison % 1 === 0 ? 0 : 1)}${suffix}`:` · Gemiddeld: ${avg.toFixed(isPercent?1:avg % 1 === 0 ? 0 : 1)}${suffix}`}`:"Geen data"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[190px]">{ticks.map((tick,i)=><g key={`yt-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-8} y={y(tick)+4} textAnchor="end" fontSize="10" fill="#6b7280">{isPercent?`${tick.toFixed(0)}%`:tick.toFixed(tick%1===0?0:1)}</text></g>)}{comparisonValues&&comparisonValues.length===values.length&&<polyline points={comparisonPts} fill="none" stroke="#2563eb" strokeWidth="2" strokeDasharray="6 5" strokeLinejoin="round" strokeLinecap="round"/>}{!comparisonValues&&values.length>0&&<line x1={left} y1={y(avg)} x2={w-right} y2={y(avg)} stroke="#94a3b8" strokeDasharray="5 5"/>}<line x1={left} y1={top} x2={left} y2={h-bottom} stroke="#d1d5db"/><polyline points={pts} fill="none" stroke="#64748b" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>{values.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="5" fill={pointIsGood(v,i)?"#16a34a":"#dc2626"} stroke="white" strokeWidth="1.5"/><text x={x(i)} y={h-20} textAnchor="middle" fontSize="10" fill="#6b7280">{labels?.[i] ?? `W${i+1}`}</text></g>)}</svg>{comparisonValues&&<div className="mt-1 flex items-center gap-2 text-xs text-gray-500"><span className="inline-block w-6 border-t-2 border-dashed border-blue-600"></span><span>{comparisonLabel}</span></div>}</div>
+      return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{values.length?`Laatste: ${values[values.length-1].toFixed(isPercent?1:values[values.length-1] % 1 === 0 ? 0 : 1)}${suffix}${latestComparison!=null?` · ${comparisonLabel}: ${latestComparison.toFixed(isPercent?1:latestComparison % 1 === 0 ? 0 : 1)}${suffix}`:` · Gemiddeld: ${avg.toFixed(isPercent?1:avg % 1 === 0 ? 0 : 1)}${suffix}`}`:"Geen data"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[225px]">{ticks.map((tick,i)=><g key={`yt-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-8} y={y(tick)+4} textAnchor="end" fontSize="10" fill="#6b7280">{isPercent?`${tick.toFixed(0)}%`:tick.toFixed(tick%1===0?0:1)}</text></g>)}{comparisonValues&&comparisonValues.length===values.length&&<polyline points={comparisonPts} fill="none" stroke="#2563eb" strokeWidth="2" strokeDasharray="6 5" strokeLinejoin="round" strokeLinecap="round"/>}{!comparisonValues&&values.length>0&&<line x1={left} y1={y(avg)} x2={w-right} y2={y(avg)} stroke="#94a3b8" strokeDasharray="5 5"/>}<line x1={left} y1={top} x2={left} y2={h-bottom} stroke="#d1d5db"/><polyline points={pts} fill="none" stroke="#64748b" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>{values.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="5" fill={pointIsGood(v,i)?"#16a34a":"#dc2626"} stroke="white" strokeWidth="1.5"/><text x={x(i)} y={h-bottom+10} textAnchor="end" fontSize="9" fill="#6b7280" transform={`rotate(-90 ${x(i)} ${h-bottom+10})`}>{labels?.[i] ?? `W${i+1}`}</text></g>)}</svg>{comparisonValues&&<div className="mt-1 flex items-center gap-2 text-xs text-gray-500"><span className="inline-block w-6 border-t-2 border-dashed border-blue-600"></span><span>{comparisonLabel}</span></div>}</div>
     };
     const average = (values:number[]) => values.length ? values.reduce((sum,v)=>sum+v,0)/values.length : 0;
     const metricTone = (value:number, avg:number, inverse=false) => {
@@ -5660,6 +5782,10 @@ function InsightsTab({
       const playerRebounds = playerEvents.filter(
         (e: any) => e.actie === "Rebound" && e.reden === "Rebound"
       ).length;
+      const defensiveActions = playerEvents.filter((e:any) => {
+        const vak = String(e.vak ?? "").toLowerCase();
+        return vak.includes("verdedig") && (String(e.uitkomst ?? "") === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept");
+      }).length;
       const teamAttempts = matchEvents.filter((e:any) => isKorbis(e) && isAttempt(e));
       const teamGoals = teamAttempts.filter((e:any) => e.uitkomst === "Raak").length;
       const teamKorf = teamAttempts.filter((e:any) => e.uitkomst === "Korf").length;
@@ -5681,6 +5807,7 @@ function InsightsTab({
         scorePct: attempts.length > 0 ? (goals / attempts.length) * 100 : 0,
         qualityPct: attempts.length > 0 ? ((goals + korfCount) / attempts.length) * 100 : 0,
         rebounds: playerRebounds,
+        defensiveActions,
         playedSeconds: (() => {
           const row = parsePlaytime(m).find((r:any) => String(r.spelerNaam ?? "") === selectedHistoryPlayer);
           return row ? num(row.seconden) : 0;
@@ -5835,14 +5962,27 @@ function InsightsTab({
               { label:"Rebounds", value:selectedPlayerAllRebounds.toString(), benchmark:teamAvgReboundsPerPlayer, metric:selectedPlayerAllRebounds, sub:`Teamgem.: ${teamAvgReboundsPerPlayer.toFixed(1)}` },
               { label:"Verdedigend", value:selectedPlayerDefensiveActions.toString(), benchmark:teamAvgDefensiveActionsPerPlayer, metric:selectedPlayerDefensiveActions, sub:`Teamgem.: ${teamAvgDefensiveActionsPerPlayer.toFixed(1)} acties` },
             ].map((card) => {
-              const same=Math.abs(card.metric-card.benchmark)<0.05;
-              const tone=same?"text-gray-900":card.metric>card.benchmark?"text-emerald-600":"text-red-600";
-              return <div key={card.label} className="border rounded-2xl p-4 bg-white shadow-sm"><div className="text-xs font-semibold uppercase tracking-wide text-gray-500">{card.label}</div><div className={`text-3xl font-extrabold mt-1 ${tone}`}>{card.value}</div><div className="text-xs text-gray-500 mt-1">{card.sub}</div></div>;
+              const series = card.label === "Acties"
+                ? { labels: playerPeriodTrend.map((m) => m.axisLabel), values: playerPeriodTrend.map((m) => m.attempts), comparisonValues: playerPeriodTrend.map((m) => m.teamAttemptsAvg), comparisonLabel: "Teamgem. per speler" }
+                : card.label === "Doelpunten"
+                  ? { labels: playerPeriodTrend.map((m) => m.axisLabel), values: playerPeriodTrend.map((m) => m.goals) }
+                  : card.label === "Schotkwaliteit"
+                    ? { labels: playerPeriodTrend.map((m) => m.axisLabel), values: playerPeriodTrend.map((m) => m.qualityPct), comparisonValues: playerPeriodTrend.map((m) => m.teamQualityPct), comparisonLabel: "Team", suffix: "%" }
+                    : card.label === "Rebounds"
+                      ? { labels: playerPeriodTrend.map((m) => m.axisLabel), values: playerPeriodTrend.map((m) => m.rebounds), comparisonValues: playerPeriodTrend.map((m) => m.teamReboundsAvg), comparisonLabel: "Teamgem. per speler" }
+                      : { labels: playerPeriodTrend.map((m) => m.axisLabel), values: playerPeriodTrend.map((m) => m.defensiveActions) };
+              return <MetricInsightCard key={card.label} label={card.label} value={card.value} metric={card.metric} benchmark={card.benchmark} sub={card.sub} series={series}/>;
             })}
           </div>
         </>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">{[["Wedstrijden",selectedMatches.length],["Kansen raak",own.length?`${scorePct.toFixed(1)}%`:"—"],["Korfgerichtheid",own.length?`${qualityPct.toFixed(1)}%`:"—"],["Aanvallende rebounds gewonnen",rebounds+noRebounds?`${reboundPct.toFixed(0)}%`:"—"],["Kansen tegenstander raak",opp.length?`${oppPct.toFixed(1)}%`:"—"]].map(([l,v])=><div key={String(l)} className="border rounded-2xl p-4 bg-white"><div className="text-xs font-semibold text-gray-500">{l}</div><div className="text-3xl font-extrabold mt-1">{v}</div></div>)}</div>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">{[
+          {label:"Wedstrijden",value:selectedMatches.length,series:undefined,inverse:false},
+          {label:"Kansen raak",value:own.length?`${scorePct.toFixed(1)}%`:"—",series:{labels:trend.map(m=>m.axisLabel),values:trend.map(m=>m.score),suffix:"%"},inverse:false},
+          {label:"Korfgerichtheid",value:own.length?`${qualityPct.toFixed(1)}%`:"—",series:{labels:trend.map(m=>m.axisLabel),values:trend.map(m=>m.quality),suffix:"%"},inverse:false},
+          {label:"Aanvallende rebounds gewonnen",value:rebounds+noRebounds?`${reboundPct.toFixed(0)}%`:"—",series:{labels:trend.map(m=>m.axisLabel),values:trend.map(m=>m.reboundPct),suffix:"%"},inverse:false},
+          {label:"Kansen tegenstander raak",value:opp.length?`${oppPct.toFixed(1)}%`:"—",series:{labels:trend.map(m=>m.axisLabel),values:trend.map(m=>m.oppScore),suffix:"%"},inverse:true},
+        ].map((card)=><MetricInsightCard key={card.label} label={card.label} value={card.value} series={card.series} inverse={card.inverse}/>)}</div>
       )}
       {all && analysisMode === "team" && <><div className="border rounded-2xl p-5 bg-white">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2 mb-4"><div><div className="text-lg font-bold">Laatste 3 vs. de 3 daarvoor</div><div className="text-sm text-gray-500">Percentages worden gewogen op het aantal kansen.</div></div><div className="text-xs font-semibold text-gray-500">{trend.length >= 6 ? "Volledige vergelijking" : `${trend.length}/6 wedstrijden beschikbaar`}</div></div>
