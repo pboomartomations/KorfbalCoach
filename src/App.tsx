@@ -771,7 +771,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "voorbereiding" | "seizoen">("dashboard");
+  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "doelen" | "voorbereiding" | "seizoen">("dashboard");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -2471,6 +2471,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     profielen: "Spelerprofielen",
     opstelling: "Opstellingsassistent",
     wisseladvies: "Speeltijd & wisseladvies",
+    doelen: "Wedstrijddoelen",
   };
 
   const shareMatch = () => {
@@ -2567,6 +2568,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
               <div className="space-y-1">
                 <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
                 <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
+                <SideNavButton id="doelen" label="Wedstrijddoelen" icon="insights" />
               </div>
             </section>
 
@@ -2648,6 +2650,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                     <div className="space-y-1">
                       <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
                 <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
+                      <SideNavButton id="doelen" label="Wedstrijddoelen" icon="insights" />
                     </div>
                   </section>
                   <section className="border-t border-slate-200 pt-4">
@@ -2826,6 +2829,10 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
 
       {tab === "wisseladvies" && (
         <SpeeltijdWisseladviesDashboard state={state} dbSheets={dbSheets} />
+      )}
+
+      {tab === "doelen" && (
+        <WedstrijddoelenDashboard state={state} />
       )}
 
       {tab === "seizoen" && (
@@ -4785,7 +4792,7 @@ function CoachDashboard({
 }: {
   state: AppState;
   dbSheets: DatabaseSheetsData | null;
-  onNavigate: (tab: "dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "voorbereiding" | "seizoen") => void;
+  onNavigate: (tab: "dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "doelen" | "voorbereiding" | "seizoen") => void;
 }) {
   const pct = (a: number, b: number) => b ? (a / b) * 100 : 0;
   const matches = dbSheets?.matches ?? [];
@@ -5153,6 +5160,48 @@ function OpstellingsassistentDashboard({ state, dbSheets }: { state: AppState; d
 }
 
 
+function WedstrijddoelenDashboard({ state }: { state: AppState }) {
+  type GoalTargets = { goals: number; scorePct: number; rebounds: number; turnovers: number; attemptsPerAttack: number; defendedPct: number };
+  const key = `korbiq_match_goals_${state.season}_${state.opponentName || "zonder-tegenstander"}_${state.homeAway || "thuis"}`;
+  const [targets, setTargets] = useState<GoalTargets>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return { goals: 20, scorePct: 20, rebounds: 12, turnovers: 10, attemptsPerAttack: 2.2, defendedPct: 15, ...JSON.parse(raw) };
+    } catch {}
+    return { goals: 20, scorePct: 20, rebounds: 12, turnovers: 10, attemptsPerAttack: 2.2, defendedPct: 15 };
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(targets)); } catch {}
+  }, [key, targets]);
+  const eventTeam = (e: LogEvent): AttackTeam | undefined => e.team ?? (e.vak === "aanvallend" ? "thuis" : e.vak === "verdedigend" ? "uit" : undefined);
+  const ownEvents = state.log.filter(e => eventTeam(e) === "thuis");
+  const attempts = ownEvents.filter(e => ["Schot","Doorloop","Vrijebal","Strafworp"].includes(String(e.actie ?? "")));
+  const goals = attempts.filter(e => e.resultaat === "Raak").length;
+  const rebounds = ownEvents.filter(e => e.reden === "Rebound").length;
+  const turnovers = ownEvents.filter(e => e.reden === "Bal uit" || e.reden === "Pass Onderschept").length;
+  const defended = attempts.filter(e => e.resultaat === "Verdedigd").length;
+  const ownAttacks = state.attacks.filter(a => a.team === "thuis").length;
+  const scorePct = attempts.length ? goals / attempts.length * 100 : 0;
+  const attemptsPerAttack = ownAttacks ? attempts.length / ownAttacks : 0;
+  const defendedPct = attempts.length ? defended / attempts.length * 100 : 0;
+  const update = (name: keyof GoalTargets, value: number) => setTargets(t => ({ ...t, [name]: Number.isFinite(value) ? value : 0 }));
+  const cards = [
+    { key:"goals" as const, label:"Doelpunten", value:goals, target:targets.goals, suffix:"", higher:true },
+    { key:"scorePct" as const, label:"Raakpercentage", value:scorePct, target:targets.scorePct, suffix:"%", higher:true },
+    { key:"rebounds" as const, label:"Rebounds", value:rebounds, target:targets.rebounds, suffix:"", higher:true },
+    { key:"turnovers" as const, label:"Balverlies", value:turnovers, target:targets.turnovers, suffix:"", higher:false },
+    { key:"attemptsPerAttack" as const, label:"Kansen / aanval", value:attemptsPerAttack, target:targets.attemptsPerAttack, suffix:"", higher:true },
+    { key:"defendedPct" as const, label:"Verdedigd", value:defendedPct, target:targets.defendedPct, suffix:"%", higher:false },
+  ];
+  const met = cards.filter(c => c.higher ? c.value >= c.target : c.value <= c.target).length;
+  return <div className="space-y-5">
+    <div className="rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-50 via-white to-blue-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-violet-700">KorbIQ Match Targets</div><h2 className="mt-1 text-2xl font-black">Wedstrijddoelen</h2><p className="mt-1 max-w-4xl text-sm text-slate-600">Stel vooraf concrete wedstrijddoelen in en volg tijdens de wedstrijd live hoe Korbis ervoor staat. De doelen worden per seizoen en tegenstander lokaal onthouden.</p></div>
+    <div className="grid gap-4 md:grid-cols-3"><MetricInsightCard label="Doelen op koers" value={`${met} / ${cards.length}`} sub={state.tijdSeconden ? `na ${Math.floor(state.tijdSeconden/60)} minuten` : "wedstrijd nog niet gestart"}/><MetricInsightCard label="Score" value={`${state.scoreThuis} – ${state.scoreUit}`} sub={state.opponentName || "Nog geen tegenstander"}/><MetricInsightCard label="Aanvallen" value={String(ownAttacks)} sub={`${attempts.length} geregistreerde kansen`}/></div>
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{cards.map(c=>{const ok=c.higher?c.value>=c.target:c.value<=c.target;const progress=c.higher?Math.min(100,c.target?c.value/c.target*100:100):Math.min(100,c.value<=c.target?100:(c.target/Math.max(c.value,1))*100);return <div key={c.key} className={`rounded-2xl border p-5 ${ok?"border-emerald-200 bg-emerald-50/50":"border-slate-200 bg-white"}`}><div className="flex items-start justify-between gap-3"><div><div className="text-xs font-extrabold uppercase tracking-wide text-slate-500">{c.label}</div><div className="mt-1 text-3xl font-black text-slate-900">{c.value.toFixed(c.key==="scorePct"||c.key==="attemptsPerAttack"||c.key==="defendedPct"?1:0)}{c.suffix}</div></div><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${ok?"bg-emerald-100 text-emerald-700":"bg-amber-100 text-amber-700"}`}>{ok?"Op koers":"Aandacht"}</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${ok?"bg-emerald-500":"bg-blue-500"}`} style={{width:`${Math.max(4,progress)}%`}} /></div><label className="mt-4 flex items-center justify-between gap-3 text-sm"><span className="text-slate-500">Doel {c.higher?"minimaal":"maximaal"}</span><span className="flex items-center gap-1"><input type="number" step={c.key==="scorePct"||c.key==="attemptsPerAttack"||c.key==="defendedPct"?"0.1":"1"} value={c.target} onChange={e=>update(c.key,Number(e.target.value))} className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right font-bold" />{c.suffix}</span></label></div>})}</div>
+    <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900"><b>Coachgebruik:</b> doelen zijn richtinggevend. Een groen doel betekent dat de huidige waarde aan de ingestelde grens voldoet; bij maximumdoelen zoals balverlies kan dit tijdens de wedstrijd weer veranderen.</div>
+  </div>;
+}
+
 function SpeeltijdWisseladviesDashboard({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
   const active = state.spelers.filter((p) => p.actief);
   const fieldIds = new Set([...state.aanval, ...state.verdediging].filter((id): id is string => Boolean(id)));
@@ -5176,31 +5225,25 @@ function SpeeltijdWisseladviesDashboard({ state, dbSheets }: { state: AppState; 
     return {attempts:attempts.length,goals,reb,def,loss,score,impact:goals*3+score*.12+reb*.7+def*.8-loss*.9};
   };
   const rows=active.map(p=>({p,onField:fieldIds.has(p.id),minutes:currentMinutes(p.id),...historical(p)}));
-  const fieldRows=rows.filter(r=>r.onField); const benchRows=rows.filter(r=>!r.onField);
+  const baseRows=rows.filter(r=>r.p.status==="Basisspeler");
+  const guestRows=rows.filter(r=>r.p.status==="Gast");
+  const fieldRows=baseRows.filter(r=>r.onField); const benchRows=baseRows.filter(r=>!r.onField);
   const avgField=fieldRows.length?fieldRows.reduce((n,r)=>n+r.minutes,0)/fieldRows.length:0;
   const loadTone=(m:number)=>m>=avgField+5?"hoog":m<=Math.max(0,avgField-8)?"laag":"normaal";
-  const candidates=fieldRows.map(r=>{
-    const load=Math.max(0,r.minutes-avgField);
-    const performancePenalty=Math.max(0,40-r.impact)*.08;
-    return {...r,adviceScore:load*1.4+performancePenalty};
-  }).sort((a,b)=>b.adviceScore-a.adviceScore);
+  const candidates=fieldRows.map(r=>{const load=Math.max(0,r.minutes-avgField);const performancePenalty=Math.max(0,40-r.impact)*.08;return {...r,adviceScore:load*1.4+performancePenalty};}).sort((a,b)=>b.adviceScore-a.adviceScore);
   const incoming=[...benchRows].sort((a,b)=>b.impact-a.impact || a.minutes-b.minutes);
   const out=candidates[0], incomingPlayer=incoming[0];
   const enoughCurrent=state.tijdSeconden>0 && fieldRows.length>0;
-  const advice = enoughCurrent && out && incomingPlayer
-    ? `${out.p.naam} heeft met ${out.minutes.toFixed(0)} minuten relatief veel speeltijd. ${incomingPlayer.p.naam} is op basis van seizoensbijdrage en huidige speeltijd de logischste wisseloptie.`
-    : "Zodra de wedstrijd loopt en er spelers op het veld en op de bank staan, geeft KorbIQ hier een wisselsuggestie.";
+  const advice = enoughCurrent && out && incomingPlayer ? `${out.p.naam} heeft met ${out.minutes.toFixed(0)} minuten relatief veel speeltijd binnen de basisspelers. ${incomingPlayer.p.naam} is op basis van seizoensbijdrage en huidige speeltijd de logischste wisseloptie.` : "Zodra de wedstrijd loopt en er basisspelers op het veld en op de bank staan, geeft KorbIQ hier een wisselsuggestie.";
   const sortedMatches=[...seasonMatches].sort((a:any,b:any)=>String(a.datum??"").localeCompare(String(b.datum??"")));
-  const minuteSeries=(p:Player):MetricDetailSeries=>{
-    const vals=sortedMatches.map((m:any)=>{ try { const data=JSON.parse(String(m.speeltijd_spelers_json??"[]")); const row=Array.isArray(data)?data.find((x:any)=>String(x.spelerId??"")===p.id || String(x.spelerNaam??"")===p.naam):null; return Number(row?.seconden??0)/60; } catch { return 0; }});
-    return {labels:sortedMatches.map((m:any,i:number)=>String(m.datum??"").slice(5,10)||`W${i+1}`),detailLabels:sortedMatches.map((m:any,i:number)=>`${String(m.datum??"").slice(0,10)||`Wedstrijd ${i+1}`} · ${String(m.tegenstander??"-")}`),values:vals,suffix:" min"};
-  };
+  const minuteSeries=(p:Player):MetricDetailSeries=>{const vals=sortedMatches.map((m:any)=>{ try { const data=JSON.parse(String(m.speeltijd_spelers_json??"[]")); const row=Array.isArray(data)?data.find((x:any)=>String(x.spelerId??"")===p.id || String(x.spelerNaam??"")===p.naam):null; return Number(row?.seconden??0)/60; } catch { return 0; }});return {labels:sortedMatches.map((m:any,i:number)=>String(m.datum??"").slice(5,10)||`W${i+1}`),detailLabels:sortedMatches.map((m:any,i:number)=>`${String(m.datum??"").slice(0,10)||`Wedstrijd ${i+1}`} · ${String(m.tegenstander??"-")}`),values:vals,suffix:" min"};};
   return <div className="space-y-5">
-    <div className="rounded-3xl border border-cyan-100 bg-gradient-to-r from-cyan-50 via-white to-blue-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-cyan-700">KorbIQ Rotation Intelligence</div><h2 className="mt-1 text-2xl font-black">Speeltijd & wisseladvies</h2><p className="mt-1 max-w-4xl text-sm text-slate-600">Combineert actuele speeltijd met historische bijdrage. Het advies ondersteunt de coach; wedstrijdbeeld, blessures, tactiek en persoonlijke afspraken blijven leidend.</p></div>
-    <div className="grid gap-4 md:grid-cols-3"><MetricInsightCard label="Wedstrijdminuut" value={`${Math.floor(state.tijdSeconden/60)}'`} sub={state.klokLoopt?"Wedstrijd loopt":"Klok staat stil"}/><MetricInsightCard label="Gem. speeltijd veld" value={`${avgField.toFixed(0)} min`} sub={`${fieldRows.length} spelers op het veld`}/><MetricInsightCard label="Grootste belasting" value={fieldRows.length?`${Math.max(...fieldRows.map(r=>r.minutes)).toFixed(0)} min`:`0 min`} sub={fieldRows.sort((a,b)=>b.minutes-a.minutes)[0]?.p.naam ?? "Nog geen data"}/></div>
+    <div className="rounded-3xl border border-cyan-100 bg-gradient-to-r from-cyan-50 via-white to-blue-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-cyan-700">KorbIQ Rotation Intelligence</div><h2 className="mt-1 text-2xl font-black">Speeltijd & wisseladvies</h2><p className="mt-1 max-w-4xl text-sm text-slate-600">Het automatische wisseladvies vergelijkt uitsluitend basisspelers. Gastspelers worden wel zichtbaar bijgehouden, maar tellen niet mee in speeltijdgemiddelden, belasting of automatische wisselsuggesties.</p></div>
+    <div className="grid gap-4 md:grid-cols-3"><MetricInsightCard label="Wedstrijdminuut" value={`${Math.floor(state.tijdSeconden/60)}'`} sub={state.klokLoopt?"Wedstrijd loopt":"Klok staat stil"}/><MetricInsightCard label="Gem. speeltijd basis op veld" value={`${avgField.toFixed(0)} min`} sub={`${fieldRows.length} basisspelers op het veld`}/><MetricInsightCard label="Grootste basisbelasting" value={fieldRows.length?`${Math.max(...fieldRows.map(r=>r.minutes)).toFixed(0)} min`:`0 min`} sub={[...fieldRows].sort((a,b)=>b.minutes-a.minutes)[0]?.p.naam ?? "Nog geen data"}/></div>
     <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5"><div className="text-xs font-extrabold uppercase tracking-wide text-blue-700">Actueel coachadvies</div><div className="mt-2 text-lg font-black text-slate-900">{advice}</div>{enoughCurrent&&out&&incomingPlayer?<div className="mt-4 flex flex-wrap gap-2"><span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-orange-700 ring-1 ring-orange-200">Uit: {out.p.naam}</span><span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-emerald-700 ring-1 ring-emerald-200">In: {incomingPlayer.p.naam}</span></div>:null}</div>
-    <div className="rounded-2xl border bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-lg font-black">Speeltijdverdeling</h3><p className="text-sm text-slate-500">Hover 0,5 sec op een spelerkaart voor speeltijd per wedstrijd, inclusief datum en tegenstander.</p></div><div className="text-xs text-slate-400">Hoog = duidelijk boven het actuele veldgemiddelde</div></div><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{rows.sort((a,b)=>Number(b.onField)-Number(a.onField)||b.minutes-a.minutes).map(r=><MetricInsightCard key={r.p.id} label={`${r.onField?"● Veld":"○ Bank"} · ${r.p.naam}`} value={`${r.minutes.toFixed(0)} min`} sub={<><span className={loadTone(r.minutes)==="hoog"?"font-bold text-orange-700":loadTone(r.minutes)==="laag"?"font-bold text-blue-700":"text-slate-500"}>{loadTone(r.minutes)} belast</span> · seizoenimpact {r.impact.toFixed(0)}</>} series={minuteSeries(r.p)} className={r.onField?"border-emerald-100 bg-emerald-50/40":"bg-slate-50"}/>)}</div></div>
-    <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Wisselvolgorde</h3><p className="text-sm text-slate-500">Signaal op basis van relatieve actuele speeltijd en historische bijdrage; geen automatische beslissing.</p><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-2">Speler</th><th className="p-2">Status</th><th className="p-2 text-right">Minuten</th><th className="p-2 text-right">Seizoen impact</th><th className="p-2">Signaal</th></tr></thead><tbody>{rows.map(r=><tr key={r.p.id} className="border-b border-slate-100"><td className="p-2 font-bold">{r.p.naam}</td><td className="p-2">{r.onField?"Veld":"Bank"}</td><td className="p-2 text-right">{r.minutes.toFixed(0)}</td><td className="p-2 text-right">{r.impact.toFixed(1)}</td><td className="p-2">{r.onField&&loadTone(r.minutes)==="hoog"?<span className="font-bold text-orange-700">Wisselmoment bewaken</span>:!r.onField&&r.impact>0?<span className="font-bold text-emerald-700">Invaloptie</span>:"—"}</td></tr>)}</tbody></table></div></div>
+    <div className="rounded-2xl border bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-lg font-black">Speeltijd basisspelers</h3><p className="text-sm text-slate-500">Alleen deze spelers bepalen de belasting en wisselvolgorde.</p></div></div><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{baseRows.sort((a,b)=>Number(b.onField)-Number(a.onField)||b.minutes-a.minutes).map(r=><MetricInsightCard key={r.p.id} label={`${r.onField?"● Veld":"○ Bank"} · ${r.p.naam}`} value={`${r.minutes.toFixed(0)} min`} sub={<><span className={loadTone(r.minutes)==="hoog"?"font-bold text-orange-700":loadTone(r.minutes)==="laag"?"font-bold text-blue-700":"text-slate-500"}>{loadTone(r.minutes)} belast</span> · seizoenimpact {r.impact.toFixed(0)}</>} series={minuteSeries(r.p)} className={r.onField?"border-emerald-100 bg-emerald-50/40":"bg-slate-50"}/>)}</div></div>
+    {guestRows.length>0&&<div className="rounded-2xl border border-dashed border-violet-200 bg-violet-50/30 p-5"><h3 className="text-lg font-black">Gastspelers</h3><p className="text-sm text-slate-500">Speeltijd wordt geregistreerd, maar gasten beïnvloeden het basisgemiddelde en het automatische wisseladvies niet.</p><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{guestRows.map(r=><MetricInsightCard key={r.p.id} label={`${r.onField?"● Veld":"○ Bank"} · ${r.p.naam}`} value={`${r.minutes.toFixed(0)} min`} sub={<><span className="font-bold text-violet-700">Gast</span> · buiten wisselbalans</>} series={minuteSeries(r.p)} className="border-violet-100 bg-white"/>)}</div></div>}
+    <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Wisselvolgorde basisspelers</h3><p className="text-sm text-slate-500">Gastspelers worden bewust niet als automatische invaloptie of uitwisseladvies gebruikt.</p><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-2">Speler</th><th className="p-2">Status</th><th className="p-2 text-right">Minuten</th><th className="p-2 text-right">Seizoen impact</th><th className="p-2">Signaal</th></tr></thead><tbody>{baseRows.map(r=><tr key={r.p.id} className="border-b border-slate-100"><td className="p-2 font-bold">{r.p.naam}</td><td className="p-2">{r.onField?"Veld":"Bank"}</td><td className="p-2 text-right">{r.minutes.toFixed(0)}</td><td className="p-2 text-right">{r.impact.toFixed(1)}</td><td className="p-2">{r.onField&&loadTone(r.minutes)==="hoog"?<span className="font-bold text-orange-700">Wisselmoment bewaken</span>:!r.onField&&r.impact>0?<span className="font-bold text-emerald-700">Invaloptie</span>:"—"}</td></tr>)}</tbody></table></div></div>
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">KorbIQ gebruikt alleen geregistreerde data. Een wisseladvies houdt nog geen rekening met blessures, vermoeidheid die niet uit speeltijd blijkt, tactische opdrachten, persoonlijke afspraken of het directe wedstrijdbeeld.</div>
   </div>;
 }
