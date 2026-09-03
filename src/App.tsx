@@ -605,6 +605,7 @@ function KorbIQLogo({ compact = false }: { compact?: boolean }) {
 
 type MetricDetailSeries = {
   labels: string[];
+  detailLabels?: string[];
   values: number[];
   comparisonValues?: number[];
   comparisonLabel?: string;
@@ -679,6 +680,7 @@ function MetricInsightCard({
   const y = (v: number) => h - bottom - (v - yMin) / span * (h - top - bottom);
   const points = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
   const comparison = series?.comparisonValues?.length === values.length ? series.comparisonValues : undefined;
+  const detailLabels = series?.detailLabels?.length === values.length ? series.detailLabels : series?.labels;
   const comparisonPoints = comparison?.map((v, i) => `${x(i)},${y(v)}`).join(" ");
   const ticks = Array.from({ length: 5 }, (_, i) => yMin + (yMax - yMin) * i / 4);
 
@@ -716,7 +718,7 @@ function MetricInsightCard({
         {ticks.map((tick, i) => <g key={`tick-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-7} y={y(tick)+3} textAnchor="end" fontSize="9" fill="#94a3b8">{tick.toFixed(tick % 1 === 0 ? 0 : 1)}{series.suffix ?? ""}</text></g>)}
         {comparisonPoints ? <polyline points={comparisonPoints} fill="none" stroke="#2563eb" strokeWidth="1.8" strokeDasharray="5 4"/> : null}
         <polyline points={points} fill="none" stroke="#64748b" strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round"/>
-        {values.map((v, i) => <g key={`p-${i}`}><circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke="#475569" strokeWidth="2"><title>{`${series.labels[i] ?? `W${i+1}`}: ${v.toFixed(v % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}${comparison?.[i] != null ? ` · ${series.comparisonLabel ?? "Vergelijking"}: ${comparison[i].toFixed(comparison[i] % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}` : ""}`}</title></circle><text x={x(i)} y={h-bottom+18} transform={`rotate(90 ${x(i)} ${h-bottom+18})`} textAnchor="start" fontSize="8.5" fill="#64748b">{series.labels[i] ?? `W${i+1}`}</text></g>)}
+        {values.map((v, i) => <g key={`p-${i}`}><circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke="#475569" strokeWidth="2"><title>{`${detailLabels?.[i] ?? series.labels[i] ?? `W${i+1}`}: ${v.toFixed(v % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}${comparison?.[i] != null ? ` · ${series.comparisonLabel ?? "Vergelijking"}: ${comparison[i].toFixed(comparison[i] % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}` : ""}`}</title></circle><text x={x(i)} y={h-bottom+18} transform={`rotate(90 ${x(i)} ${h-bottom+18})`} textAnchor="start" fontSize="8.5" fill="#64748b">{series.labels[i] ?? `W${i+1}`}</text></g>)}
       </svg>
       {comparison ? <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500"><span className="inline-block w-5 border-t-2 border-dashed border-blue-600"/><span>{series.comparisonLabel ?? "Vergelijking"}</span></div> : null}
       <div className="mt-2 text-[11px] text-slate-400">Desktop: 0,5 sec hover · mobiel: tik op het kaartje · hover op een punt voor de exacte wedstrijdwaarde.</div>
@@ -769,7 +771,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen">("dashboard");
+  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "voorbereiding" | "seizoen">("dashboard");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -2468,6 +2470,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     seizoen: "Seizoensdashboard",
     profielen: "Spelerprofielen",
     opstelling: "Opstellingsassistent",
+    wisseladvies: "Speeltijd & wisseladvies",
   };
 
   const shareMatch = () => {
@@ -2563,6 +2566,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
               <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Coaching</div>
               <div className="space-y-1">
                 <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
+                <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
               </div>
             </section>
 
@@ -2643,6 +2647,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                     <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Coaching</div>
                     <div className="space-y-1">
                       <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
+                <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
                     </div>
                   </section>
                   <section className="border-t border-slate-200 pt-4">
@@ -2675,7 +2680,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                   { id: "spelersanalyse", label: "Spelers" },
                   { id: "teamanalyse", label: "Team" },
                   { id: "wedstrijd", label: "Wedstrijd" },
-                  { id: "opstelling", label: "Opstelling" },
+                  { id: "wisseladvies", label: "Wissels" },
                 ] as const).map((t) => <button key={t.id} onClick={() => setTab(t.id)} className={`border-b-2 px-3 py-3 text-sm font-semibold ${tab === t.id ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}>{t.label}</button>)}
               </div>
             </div>
@@ -2817,6 +2822,10 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
 
       {tab === "opstelling" && (
         <OpstellingsassistentDashboard state={state} dbSheets={dbSheets} />
+      )}
+
+      {tab === "wisseladvies" && (
+        <SpeeltijdWisseladviesDashboard state={state} dbSheets={dbSheets} />
       )}
 
       {tab === "seizoen" && (
@@ -4776,7 +4785,7 @@ function CoachDashboard({
 }: {
   state: AppState;
   dbSheets: DatabaseSheetsData | null;
-  onNavigate: (tab: "dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen") => void;
+  onNavigate: (tab: "dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "voorbereiding" | "seizoen") => void;
 }) {
   const pct = (a: number, b: number) => b ? (a / b) * 100 : 0;
   const matches = dbSheets?.matches ?? [];
@@ -4920,10 +4929,11 @@ function SeasonDashboard({
     const ml=me.filter((e:any)=>isKorbis(e)&&e.actie==="Rebound"&&e.reden==="Geen Rebound").length;
     const matchOwnAttacks=attacks.filter((a:any)=>String(a.wedstrijd_id)===id && String(a.team??"").trim().toLowerCase()==="korbis");
     const date=String(m.datum??"").slice(0,10);
-    return {id,date,label:date?date.slice(5):`W${i+1}`,score:pct(mg,ma.length),quality:pct(mg+mk,ma.length),rebound:pct(mr,mr+ml),oppScore:pct(og,oa.length),defended:pct(od,oa.length),chancesPerAttack:matchOwnAttacks.length?ma.length/matchOwnAttacks.length:0,gf:Number(m.score_korbis||0),ga:Number(m.score_tegenstander||0)};
+    return {id,date,label:date?date.slice(5):`W${i+1}`,opponent:String(m.tegenstander ?? "-"),score:pct(mg,ma.length),quality:pct(mg+mk,ma.length),rebound:pct(mr,mr+ml),oppScore:pct(og,oa.length),defended:pct(od,oa.length),chancesPerAttack:matchOwnAttacks.length?ma.length/matchOwnAttacks.length:0,gf:Number(m.score_korbis||0),ga:Number(m.score_tegenstander||0)};
   });
   const seasonSeries = (key:"score"|"quality"|"rebound"|"oppScore"|"defended"|"chancesPerAttack"|"gf"|"ga", suffix="", comparisonKey?:"ga"): MetricDetailSeries => ({
     labels:perMatch.map(x=>x.label),
+    detailLabels:perMatch.map(x=>`${x.date || x.label} · ${x.opponent}`),
     values:perMatch.map(x=>Number(x[key]??0)),
     comparisonValues:comparisonKey?perMatch.map(x=>Number(x[comparisonKey]??0)):undefined,
     comparisonLabel:comparisonKey==="ga"?"Tegenstander":undefined,
@@ -5139,6 +5149,59 @@ function OpstellingsassistentDashboard({ state, dbSheets }: { state: AppState; d
       {advices[0]&&<div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Waarom dit advies?</h3><div className="mt-4 grid gap-3 md:grid-cols-3"><div className="rounded-xl bg-blue-50 p-4"><div className="text-xs font-bold text-blue-700">INDIVIDUELE KWALITEIT</div><div className="mt-1 text-2xl font-black">{advices[0].individual.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Scoren, kansen, rendement, rebound, verdediging en balvastheid.</p></div><div className="rounded-xl bg-emerald-50 p-4"><div className="text-xs font-bold text-emerald-700">BALANS TUSSEN VAKKEN</div><div className="mt-1 text-2xl font-black">{advices[0].balance.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Voorkomt dat alle sterke profielen in één vak terechtkomen.</p></div><div className="rounded-xl bg-violet-50 p-4"><div className="text-xs font-bold text-violet-700">COMBINATIEHISTORIE</div><div className="mt-1 text-2xl font-black">{advices[0].history.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Werkelijk samengespeelde minuten en rendement tellen mee naar betrouwbaarheid.</p></div></div></div>}
       <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Alle berekende opstellingen</h3><p className="text-sm text-slate-500">Klik op de kolomtitels om te sorteren; de bestaande tabelsortering van KorbIQ blijft actief.</p><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-2">#</th><th className="p-2">Vak 1</th><th className="p-2">Vak 2</th><th className="p-2">Score</th><th className="p-2">Balans</th><th className="p-2">Historie</th></tr></thead><tbody>{advices.map((a,i)=><tr key={i} className="border-b border-slate-100"><td className="p-2 font-bold">{i+1}</td><td className="p-2">{a.vak1.map(p=>p.naam).join(" · ")}</td><td className="p-2">{a.vak2.map(p=>p.naam).join(" · ")}</td><td className="p-2 font-black text-violet-700">{a.score.toFixed(1)}</td><td className="p-2">{a.balance.toFixed(0)}</td><td className="p-2">{a.history.toFixed(0)}</td></tr>)}</tbody></table></div></div>
     </>}
+  </div>;
+}
+
+
+function SpeeltijdWisseladviesDashboard({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
+  const active = state.spelers.filter((p) => p.actief);
+  const fieldIds = new Set([...state.aanval, ...state.verdediging].filter((id): id is string => Boolean(id)));
+  const events = dbSheets?.events ?? [];
+  const matches = dbSheets?.matches ?? [];
+  const seasonMatches = matches.filter((m:any)=>String(m.seizoen ?? "")===state.season);
+  const seasonIds = new Set(seasonMatches.map((m:any)=>String(m.wedstrijd_id ?? "")));
+  const own = (e:any) => ["korbis","thuis"].includes(String(e.team ?? "").trim().toLowerCase());
+  const action = (e:any) => String(e.actie ?? "").trim().toLowerCase();
+  const result = (e:any) => String(e.uitkomst ?? e.resultaat ?? "").trim().toLowerCase();
+  const reason = (e:any) => String(e.reden ?? "").trim().toLowerCase();
+  const isAttempt = (e:any) => ["schot","doorloop","vrijebal","strafworp"].includes(action(e));
+  const currentMinutes = (id:string) => Number(state.speelSeconden?.[id] ?? 0) / 60;
+  const historical = (p:Player) => {
+    const pe=events.filter((e:any)=>seasonIds.has(String(e.wedstrijd_id ?? "")) && own(e) && (String(e.spelerId ?? "")===p.id || String(e.spelerNaam ?? "")===p.naam));
+    const attempts=pe.filter(isAttempt); const goals=attempts.filter((e:any)=>result(e)==="raak").length;
+    const reb=pe.filter((e:any)=>action(e)==="rebound"&&reason(e)==="rebound").length;
+    const def=pe.filter((e:any)=>["verdedigd","bal onderschept","pass onderschept"].includes(reason(e))).length;
+    const loss=pe.filter((e:any)=>["bal uit","pass onderschept"].includes(reason(e))).length;
+    const score=attempts.length?goals/attempts.length*100:0;
+    return {attempts:attempts.length,goals,reb,def,loss,score,impact:goals*3+score*.12+reb*.7+def*.8-loss*.9};
+  };
+  const rows=active.map(p=>({p,onField:fieldIds.has(p.id),minutes:currentMinutes(p.id),...historical(p)}));
+  const fieldRows=rows.filter(r=>r.onField); const benchRows=rows.filter(r=>!r.onField);
+  const avgField=fieldRows.length?fieldRows.reduce((n,r)=>n+r.minutes,0)/fieldRows.length:0;
+  const loadTone=(m:number)=>m>=avgField+5?"hoog":m<=Math.max(0,avgField-8)?"laag":"normaal";
+  const candidates=fieldRows.map(r=>{
+    const load=Math.max(0,r.minutes-avgField);
+    const performancePenalty=Math.max(0,40-r.impact)*.08;
+    return {...r,adviceScore:load*1.4+performancePenalty};
+  }).sort((a,b)=>b.adviceScore-a.adviceScore);
+  const incoming=[...benchRows].sort((a,b)=>b.impact-a.impact || a.minutes-b.minutes);
+  const out=candidates[0], incomingPlayer=incoming[0];
+  const enoughCurrent=state.tijdSeconden>0 && fieldRows.length>0;
+  const advice = enoughCurrent && out && incomingPlayer
+    ? `${out.p.naam} heeft met ${out.minutes.toFixed(0)} minuten relatief veel speeltijd. ${incomingPlayer.p.naam} is op basis van seizoensbijdrage en huidige speeltijd de logischste wisseloptie.`
+    : "Zodra de wedstrijd loopt en er spelers op het veld en op de bank staan, geeft KorbIQ hier een wisselsuggestie.";
+  const sortedMatches=[...seasonMatches].sort((a:any,b:any)=>String(a.datum??"").localeCompare(String(b.datum??"")));
+  const minuteSeries=(p:Player):MetricDetailSeries=>{
+    const vals=sortedMatches.map((m:any)=>{ try { const data=JSON.parse(String(m.speeltijd_spelers_json??"[]")); const row=Array.isArray(data)?data.find((x:any)=>String(x.spelerId??"")===p.id || String(x.spelerNaam??"")===p.naam):null; return Number(row?.seconden??0)/60; } catch { return 0; }});
+    return {labels:sortedMatches.map((m:any,i:number)=>String(m.datum??"").slice(5,10)||`W${i+1}`),detailLabels:sortedMatches.map((m:any,i:number)=>`${String(m.datum??"").slice(0,10)||`Wedstrijd ${i+1}`} · ${String(m.tegenstander??"-")}`),values:vals,suffix:" min"};
+  };
+  return <div className="space-y-5">
+    <div className="rounded-3xl border border-cyan-100 bg-gradient-to-r from-cyan-50 via-white to-blue-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-cyan-700">KorbIQ Rotation Intelligence</div><h2 className="mt-1 text-2xl font-black">Speeltijd & wisseladvies</h2><p className="mt-1 max-w-4xl text-sm text-slate-600">Combineert actuele speeltijd met historische bijdrage. Het advies ondersteunt de coach; wedstrijdbeeld, blessures, tactiek en persoonlijke afspraken blijven leidend.</p></div>
+    <div className="grid gap-4 md:grid-cols-3"><MetricInsightCard label="Wedstrijdminuut" value={`${Math.floor(state.tijdSeconden/60)}'`} sub={state.klokLoopt?"Wedstrijd loopt":"Klok staat stil"}/><MetricInsightCard label="Gem. speeltijd veld" value={`${avgField.toFixed(0)} min`} sub={`${fieldRows.length} spelers op het veld`}/><MetricInsightCard label="Grootste belasting" value={fieldRows.length?`${Math.max(...fieldRows.map(r=>r.minutes)).toFixed(0)} min`:`0 min`} sub={fieldRows.sort((a,b)=>b.minutes-a.minutes)[0]?.p.naam ?? "Nog geen data"}/></div>
+    <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5"><div className="text-xs font-extrabold uppercase tracking-wide text-blue-700">Actueel coachadvies</div><div className="mt-2 text-lg font-black text-slate-900">{advice}</div>{enoughCurrent&&out&&incomingPlayer?<div className="mt-4 flex flex-wrap gap-2"><span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-orange-700 ring-1 ring-orange-200">Uit: {out.p.naam}</span><span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-emerald-700 ring-1 ring-emerald-200">In: {incomingPlayer.p.naam}</span></div>:null}</div>
+    <div className="rounded-2xl border bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-lg font-black">Speeltijdverdeling</h3><p className="text-sm text-slate-500">Hover 0,5 sec op een spelerkaart voor speeltijd per wedstrijd, inclusief datum en tegenstander.</p></div><div className="text-xs text-slate-400">Hoog = duidelijk boven het actuele veldgemiddelde</div></div><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{rows.sort((a,b)=>Number(b.onField)-Number(a.onField)||b.minutes-a.minutes).map(r=><MetricInsightCard key={r.p.id} label={`${r.onField?"● Veld":"○ Bank"} · ${r.p.naam}`} value={`${r.minutes.toFixed(0)} min`} sub={<><span className={loadTone(r.minutes)==="hoog"?"font-bold text-orange-700":loadTone(r.minutes)==="laag"?"font-bold text-blue-700":"text-slate-500"}>{loadTone(r.minutes)} belast</span> · seizoenimpact {r.impact.toFixed(0)}</>} series={minuteSeries(r.p)} className={r.onField?"border-emerald-100 bg-emerald-50/40":"bg-slate-50"}/>)}</div></div>
+    <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Wisselvolgorde</h3><p className="text-sm text-slate-500">Signaal op basis van relatieve actuele speeltijd en historische bijdrage; geen automatische beslissing.</p><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-2">Speler</th><th className="p-2">Status</th><th className="p-2 text-right">Minuten</th><th className="p-2 text-right">Seizoen impact</th><th className="p-2">Signaal</th></tr></thead><tbody>{rows.map(r=><tr key={r.p.id} className="border-b border-slate-100"><td className="p-2 font-bold">{r.p.naam}</td><td className="p-2">{r.onField?"Veld":"Bank"}</td><td className="p-2 text-right">{r.minutes.toFixed(0)}</td><td className="p-2 text-right">{r.impact.toFixed(1)}</td><td className="p-2">{r.onField&&loadTone(r.minutes)==="hoog"?<span className="font-bold text-orange-700">Wisselmoment bewaken</span>:!r.onField&&r.impact>0?<span className="font-bold text-emerald-700">Invaloptie</span>:"—"}</td></tr>)}</tbody></table></div></div>
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">KorbIQ gebruikt alleen geregistreerde data. Een wisseladvies houdt nog geen rekening met blessures, vermoeidheid die niet uit speeltijd blijkt, tactische opdrachten, persoonlijke afspraken of het directe wedstrijdbeeld.</div>
   </div>;
 }
 
@@ -5362,6 +5425,7 @@ function SpelerprofielenDashboard({
   const profileLabels = developmentRows.map((x,i)=>x.date ? x.date.slice(0,5) : `W${i+1}`);
   const profileSeries = (key:"goals60"|"attempts60"|"score"|"quality"|"rebounds60"|"defense60"|"turnovers60"|"minutes"|"goals"|"attempts"|"rebounds"|"defense"|"turnovers", suffix="", comparison?:number, comparisonLabel="Teamgem."): MetricDetailSeries => ({
     labels: profileLabels,
+    detailLabels: developmentRows.map((x,i)=>`${x.date || profileLabels[i]} · ${x.opponent}`),
     values: developmentRows.map((x)=>Number(x[key] ?? 0)),
     comparisonValues: comparison == null ? undefined : developmentRows.map(()=>comparison),
     comparisonLabel,
