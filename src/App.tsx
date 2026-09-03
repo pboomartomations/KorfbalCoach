@@ -771,7 +771,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "doelen" | "voorbereiding" | "seizoen">("dashboard");
+  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "doelen" | "portaal" | "voorbereiding" | "seizoen">("dashboard");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -897,6 +897,11 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const [databaseReady, setDatabaseReady] = useState(false);
   const [databaseSetupOpen, setDatabaseSetupOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [portalPlayerId, setPortalPlayerId] = useState<string>(() => localStorage.getItem("korbiq-portal-player") ?? "");
+  useEffect(() => {
+    if (portalPlayerId) localStorage.setItem("korbiq-portal-player", portalPlayerId);
+    else localStorage.removeItem("korbiq-portal-player");
+  }, [portalPlayerId]);
   
   const dbFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -2472,6 +2477,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     opstelling: "Opstellingsassistent",
     wisseladvies: "Speeltijd & wisseladvies",
     doelen: "Wedstrijddoelen",
+    portaal: "Spelersportaal",
   };
 
   const shareMatch = () => {
@@ -2569,6 +2575,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                 <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
                 <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
                 <SideNavButton id="doelen" label="Wedstrijddoelen" icon="insights" />
+                <SideNavButton id="portaal" label="Spelersportaal" icon="players" />
               </div>
             </section>
 
@@ -2832,7 +2839,11 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
       )}
 
       {tab === "doelen" && (
-        <WedstrijddoelenDashboard state={state} />
+        <WedstrijddoelenDashboard state={state} dbSheets={dbSheets} />
+      )}
+
+      {tab === "portaal" && (
+        <SpelersportaalDashboard state={state} dbSheets={dbSheets} selectedPlayerId={portalPlayerId} onSelectPlayer={setPortalPlayerId} />
       )}
 
       {tab === "seizoen" && (
@@ -5044,12 +5055,44 @@ function MatchPreparationDashboard({
   const attemptsPerAttack = histAttacks.length ? ownAttempts.length/histAttacks.length : null;
   const playerMap = new Map<string,{name:string;goals:number;attempts:number;rebounds:number}>();
   histEvents.filter((e:any)=>own(e)&&e.spelerNaam).forEach((e:any)=>{const n=String(e.spelerNaam);const x=playerMap.get(n)??{name:n,goals:0,attempts:0,rebounds:0};if(isAttempt(e)){x.attempts++;if(result(e)==="raak")x.goals++;}if(norm(e.reden)==="rebound")x.rebounds++;playerMap.set(n,x);});
-  const players=Array.from(playerMap.values()).sort((a,b)=>(b.goals*3+b.rebounds)-(a.goals*3+a.rebounds)).slice(0,4);
   const comboMap=new Map<string,{names:string;minutes:number;attacks:number;goals:number}>();
   periods.filter((v:any)=>ids.has(String(v.wedstrijd_id??""))).forEach((v:any)=>{const k=String(v.combinatie_key??v.combinatie_spelers??"");if(!k)return;const x=comboMap.get(k)??{names:String(v.combinatie_spelers??k),minutes:0,attacks:0,goals:0};x.minutes+=Number(v.duur_seconden??0)/60;comboMap.set(k,x);});
   histAttacks.forEach((a:any)=>{const k=String(a.combinatie_key??a.combinatie_spelers??"");const x=comboMap.get(k);if(x)x.attacks++;});
   histEvents.filter((e:any)=>own(e)&&result(e)==="raak").forEach((e:any)=>{const k=String(e.combinatie_key??e.combinatie_spelers??"");const x=comboMap.get(k);if(x)x.goals++;});
-  const combos=Array.from(comboMap.values()).sort((a,b)=>(b.attacks?b.goals/b.attacks:0)-(a.attacks?a.goals/a.attacks:0)).slice(0,4);
+  // Fase 23: Tegenstanderanalyse 2.0 – patronen, trends, match-ups en coachbriefing.
+  const historyChronological = [...history].sort((a:any,b:any)=>String(formatImportedDate(a.datum)).localeCompare(String(formatImportedDate(b.datum))));
+  const opponentTrend = historyChronological.map((m:any,i:number)=>{
+    const id=String(m.wedstrijd_id??"");
+    const me=events.filter((e:any)=>String(e.wedstrijd_id??"")===id);
+    const oa=me.filter((e:any)=>!own(e)&&isAttempt(e));
+    const og=oa.filter((e:any)=>result(e)==="raak").length;
+    return {
+      label:String(formatImportedDate(m.datum)).slice(0,10)||`W${i+1}`,
+      detail:`${String(formatImportedDate(m.datum)).slice(0,10)||`Wedstrijd ${i+1}`} · ${String(m.tegenstander??opponent)}`,
+      goalsAgainst:Number(m.score_tegenstander||0),
+      oppScorePct:oa.length?og/oa.length*100:0,
+      goalsFor:Number(m.score_korbis||0),
+    };
+  });
+  const opponentScoreSeries:MetricDetailSeries={labels:opponentTrend.map(x=>x.label.slice(5)),detailLabels:opponentTrend.map(x=>x.detail),values:opponentTrend.map(x=>x.oppScorePct),suffix:"%"};
+  const goalsAgainstSeries:MetricDetailSeries={labels:opponentTrend.map(x=>x.label.slice(5)),detailLabels:opponentTrend.map(x=>x.detail),values:opponentTrend.map(x=>x.goalsAgainst)};
+  const actionLabels:Record<string,string>={schot:"Afstandsschot",doorloop:"Doorloopbal",vrijebal:"Vrije bal",strafworp:"Strafworp"};
+  const oppByAction=["schot","doorloop","vrijebal","strafworp"].map(key=>{const xs=oppAttempts.filter((e:any)=>norm(e.actie)===key);const g=xs.filter((e:any)=>result(e)==="raak").length;return {key,label:actionLabels[key],attempts:xs.length,goals:g,pct:xs.length?g/xs.length*100:0};}).filter(x=>x.attempts>0).sort((a,b)=>b.pct-a.pct);
+  const minuteOf=(e:any)=>{const direct=Number(e.wedstrijd_minuut);if(Number.isFinite(direct)&&direct>=0)return direct;const t=Number(e.tijd_verstreken);return Number.isFinite(t)?t/60:0;};
+  const phaseRows=[{label:"0–10 min",from:0,to:10},{label:"10–20 min",from:10,to:20},{label:"20–30 min",from:20,to:30},{label:"30+ min",from:30,to:999}].map(ph=>{const xs=oppAttempts.filter((e:any)=>{const m=minuteOf(e);return m>=ph.from&&m<ph.to;});const g=xs.filter((e:any)=>result(e)==="raak").length;return {...ph,attempts:xs.length,goals:g,pct:xs.length?g/xs.length*100:0};}).filter(x=>x.attempts>0);
+  const allHistOwnAttacks=histAttacks.length;
+  const teamGoals10=allHistOwnAttacks?ownGoals/allHistOwnAttacks*10:0;
+  const comboMatchups=Array.from(comboMap.values()).filter(x=>x.attacks>0).map(x=>({...x,goals10:x.goals/x.attacks*10,delta:(x.goals/x.attacks*10)-teamGoals10})).sort((a,b)=>b.delta-a.delta).slice(0,5);
+  const teamPlayerScore=ownAttempts.length?ownGoals/ownAttempts.length*100:0;
+  const playerMatchups=Array.from(playerMap.values()).filter(x=>x.attempts>=2).map(x=>({...x,pct:x.goals/x.attempts*100,delta:(x.goals/x.attempts*100)-teamPlayerScore})).sort((a,b)=>b.delta-a.delta).slice(0,5);
+  const bestOppAction=oppByAction[0]??null;
+  const worstPhase=[...phaseRows].sort((a,b)=>b.pct-a.pct)[0]??null;
+  const briefing:string[]=[];
+  if(bestOppAction) briefing.push(`${opponent} is in de geregistreerde duels het efficiëntst uit ${bestOppAction.label.toLowerCase()}: ${bestOppAction.pct.toFixed(1)}% raak (${bestOppAction.goals}/${bestOppAction.attempts}).`);
+  if(worstPhase) briefing.push(`Meeste verdedigende druk zit in ${worstPhase.label}: ${worstPhase.pct.toFixed(1)}% van hun kansen werd daar raak geschoten.`);
+  if(comboMatchups[0]&&comboMatchups[0].delta>0.25) briefing.push(`${comboMatchups[0].names} ligt tegen ${opponent} ${comboMatchups[0].delta.toFixed(1)} goals per 10 aanvallen boven het eigen teamgemiddelde.`);
+  if(playerMatchups[0]&&playerMatchups[0].delta>3) briefing.push(`${playerMatchups[0].name} schiet tegen deze tegenstander ${playerMatchups[0].delta.toFixed(1)} procentpunt boven het Korbis-gemiddelde in deze duels.`);
+  if(opponentTrend.length>=2){const last=opponentTrend.slice(-2);const first=opponentTrend.slice(0,Math.min(2,opponentTrend.length));const recent=last.reduce((n,x)=>n+x.oppScorePct,0)/last.length;const early=first.reduce((n,x)=>n+x.oppScorePct,0)/first.length;if(recent>=early+4) briefing.push(`Waarschuwing: het schotrendement van ${opponent} ligt in de recente ontmoetingen ${Math.abs(recent-early).toFixed(1)} procentpunt hoger dan eerder.`);else if(recent<=early-4) briefing.push(`Positief: het schotrendement van ${opponent} ligt recent ${Math.abs(recent-early).toFixed(1)} procentpunt lager dan in eerdere duels.`);}
   const seasonMatches = matches.filter((m:any) => String(m.seizoen ?? "") === state.season && String(m.wedstrijdtype ?? "Competitie") === state.matchType);
   const recentSeasonMatches = seasonMatches.slice().sort((a:any,b:any)=>String(formatImportedDate(b.datum)).localeCompare(String(formatImportedDate(a.datum)))).slice(0,5);
   const recentSeasonWins = recentSeasonMatches.filter((m:any)=>Number(m.score_korbis)>Number(m.score_tegenstander)).length;
@@ -5086,8 +5129,11 @@ function MatchPreparationDashboard({
     </div>
     {!opponent ? <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">Vul bij Wedstrijdinstellingen eerst een tegenstander in. De eigen vorm hierboven blijft wel beschikbaar.</div> : !history.length ? <div className="rounded-2xl border bg-white p-6"><h3 className="text-lg font-bold">Eerste ontmoeting in de database</h3><p className="mt-1 text-sm text-slate-500">Er is nog geen historische vergelijking met {opponent}. De huidige vakindeling en wedstrijdregistratie vormen na afloop automatisch de basis voor een volgende voorbeschouwing.</p></div> : <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{[["Eerdere duels",history.length],["W / G / V",`${wins} / ${draws} / ${losses}`],["Gem. voor",avgFor.toFixed(1)],["Gem. tegen",avgAgainst.toFixed(1)],["Kansen / aanval",attemptsPerAttack!==null?attemptsPerAttack.toFixed(2):"—"]].map(([l,v])=><div key={String(l)} className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{l}</div><div className="mt-1 text-2xl font-black">{v}</div></div>)}</div>
-      <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Coachsignalen</h3><p className="text-sm text-slate-500">Wat springt eruit uit eerdere ontmoetingen?</p><div className="mt-4 space-y-2">{signals.map((x,i)=><div key={i} className="flex gap-2 rounded-xl bg-slate-50 p-3 text-sm"><SignalDot tone={x.tone}/><span>{x.text}</span></div>)}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Kerncijfers</h3><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-blue-50 p-3"><div className="text-xs text-blue-700">Kansen raak</div><b className="text-xl">{ownAttempts.length?`${(ownGoals/ownAttempts.length*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-violet-50 p-3"><div className="text-xs text-violet-700">Korfgericht</div><b className="text-xl">{ownAttempts.length?`${((ownGoals+ownKorf)/ownAttempts.length*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-emerald-50 p-3"><div className="text-xs text-emerald-700">Aanv. rebound</div><b className="text-xl">{reboundPct!==null?`${reboundPct.toFixed(0)}%`:"—"}</b></div><div className="rounded-xl bg-red-50 p-3"><div className="text-xs text-red-700">Tegenstander raak</div><b className="text-xl">{oppAttempts.length?`${(oppGoals/oppAttempts.length*100).toFixed(1)}%`:"—"}</b></div></div></div></div>
-      <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vakcombinaties tegen {opponent}</h3><p className="text-sm text-slate-500">Historisch aanvallend rendement van combinaties die tegen deze ploeg gespeeld hebben.</p><div className="mt-4 space-y-2">{combos.length?combos.map((c,i)=><div key={i} className="rounded-xl border bg-slate-50 p-3"><div className="font-bold">{c.names}</div><div className="mt-1 text-xs text-slate-500">{Math.round(c.minutes)} min · {c.attacks} aanvallen · {c.goals} goals · {c.attacks?(c.goals/c.attacks*10).toFixed(1):"—"} goals / 10 aanv.</div></div>):<div className="text-sm text-slate-500">Nog geen vakcombinatiedata uit deze ontmoetingen.</div>}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Spelers tegen {opponent}</h3><p className="text-sm text-slate-500">Spelers die in eerdere ontmoetingen het meest zichtbaar waren in de registratie.</p><div className="mt-4 space-y-2">{players.length?players.map(p=><div key={p.name} className="flex items-center justify-between rounded-xl bg-slate-50 p-3"><div><div className="font-bold">{p.name}</div><div className="text-xs text-slate-500">{p.goals} goals · {p.attempts} kansen · {p.rebounds} rebounds</div></div><div className="font-black">{p.attempts?`${(p.goals/p.attempts*100).toFixed(0)}%`:"—"}</div></div>):<div className="text-sm text-slate-500">Nog onvoldoende individuele eventdata.</div>}</div></div></div>
+      <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Coachsignalen</h3><p className="text-sm text-slate-500">Wat springt eruit uit eerdere ontmoetingen?</p><div className="mt-4 space-y-2">{signals.map((x,i)=><div key={i} className="flex gap-2 rounded-xl bg-slate-50 p-3 text-sm"><SignalDot tone={x.tone}/><span>{x.text}</span></div>)}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Kerncijfers</h3><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><MetricInsightCard label="Kansen raak" value={ownAttempts.length?`${(ownGoals/ownAttempts.length*100).toFixed(1)}%`:"—"}/><MetricInsightCard label="Korfgericht" value={ownAttempts.length?`${((ownGoals+ownKorf)/ownAttempts.length*100).toFixed(1)}%`:"—"}/><MetricInsightCard label="Aanv. rebound" value={reboundPct!==null?`${reboundPct.toFixed(0)}%`:"—"}/><MetricInsightCard label="Tegenstander raak" value={oppAttempts.length?`${(oppGoals/oppAttempts.length*100).toFixed(1)}%`:"—"} series={opponentScoreSeries} inverse/></div></div></div>
+      <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Aanvalspatroon {opponent}</h3><p className="text-sm text-slate-500">Waaruit maakt deze tegenstander tegen Korbis zijn kansen af?</p><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left text-slate-500"><th className="py-2">Actie</th><th className="text-right">Kansen</th><th className="text-right">Goals</th><th className="text-right">Raak</th></tr></thead><tbody>{oppByAction.map(x=><tr key={x.key} className="border-b border-slate-100"><td className="py-2 font-semibold">{x.label}</td><td className="text-right">{x.attempts}</td><td className="text-right">{x.goals}</td><td className="text-right font-black">{x.pct.toFixed(1)}%</td></tr>)}</tbody></table></div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Momenten in de wedstrijd</h3><p className="text-sm text-slate-500">Schotrendement van de tegenstander per wedstrijdfase.</p><div className="mt-4 space-y-2">{phaseRows.map(x=><div key={x.label} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 text-sm"><div><b>{x.label}</b><div className="text-xs text-slate-500">{x.goals}/{x.attempts} raak</div></div><div className="text-lg font-black">{x.pct.toFixed(1)}%</div></div>)}</div></div></div>
+      <div className="grid gap-4 lg:grid-cols-2"><MetricInsightCard label={`Schotrendement ${opponent}`} value={oppAttempts.length?`${(oppGoals/oppAttempts.length*100).toFixed(1)}%`:"—"} sub="Ontwikkeling over eerdere ontmoetingen" series={opponentScoreSeries} inverse/><MetricInsightCard label="Tegendoelpunten" value={avgAgainst.toFixed(1)} sub="Gemiddeld per ontmoeting" series={goalsAgainstSeries} inverse/></div>
+      <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vak-match-ups tegen {opponent}</h3><p className="text-sm text-slate-500">Rendement ten opzichte van het Korbis-gemiddelde in dezelfde onderlinge duels.</p><div className="mt-4 space-y-2">{comboMatchups.length?comboMatchups.map((c,i)=><div key={i} className="rounded-xl border bg-slate-50 p-3"><div className="font-bold">{c.names}</div><div className="mt-1 text-xs text-slate-500">{Math.round(c.minutes)} min · {c.attacks} aanvallen · {c.goals10.toFixed(1)} goals / 10 aanv.</div><div className={`mt-1 text-xs font-bold ${c.delta>=0?"text-emerald-700":"text-orange-700"}`}>{c.delta>=0?"+":""}{c.delta.toFixed(1)} versus teamgemiddelde</div></div>):<div className="text-sm text-slate-500">Nog geen vakcombinatiedata uit deze ontmoetingen.</div>}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Speler-match-ups tegen {opponent}</h3><p className="text-sm text-slate-500">Individueel schotrendement versus het Korbis-gemiddelde in deze duels.</p><div className="mt-4 space-y-2">{playerMatchups.length?playerMatchups.map(p=><div key={p.name} className="flex items-center justify-between rounded-xl bg-slate-50 p-3"><div><div className="font-bold">{p.name}</div><div className="text-xs text-slate-500">{p.goals} goals · {p.attempts} kansen · {p.rebounds} rebounds</div></div><div className="text-right"><div className="font-black">{p.pct.toFixed(1)}%</div><div className={`text-xs font-bold ${p.delta>=0?"text-emerald-700":"text-orange-700"}`}>{p.delta>=0?"+":""}{p.delta.toFixed(1)} pp</div></div></div>):<div className="text-sm text-slate-500">Nog onvoldoende individuele eventdata.</div>}</div></div></div>
+      <div className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white p-5"><div className="text-xs font-extrabold uppercase tracking-[.14em] text-indigo-700">KorbIQ Coach Briefing</div><h3 className="mt-1 text-lg font-black">Wat nemen we mee naar deze wedstrijd?</h3><div className="mt-4 grid gap-2">{briefing.length?briefing.map((x,i)=><div key={i} className="flex gap-3 rounded-xl border border-indigo-100 bg-white p-3 text-sm"><span className="font-black text-indigo-600">{i+1}.</span><span>{x}</span></div>):<div className="text-sm text-slate-500">Nog onvoldoende patroondata voor een automatische briefing.</div>}</div></div>
       <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs text-blue-800">De voorbereiding is een historische analyse. KorbIQ geeft hiermee signalen en context, geen automatisch opstellings- of wisseladvies.</div>
     </>}
   </div>;
@@ -5160,9 +5206,15 @@ function OpstellingsassistentDashboard({ state, dbSheets }: { state: AppState; d
 }
 
 
-function WedstrijddoelenDashboard({ state }: { state: AppState }) {
+function WedstrijddoelenDashboard({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
   type GoalTargets = { goals: number; scorePct: number; rebounds: number; turnovers: number; attemptsPerAttack: number; defendedPct: number };
   const key = `korbiq_match_goals_${state.season}_${state.opponentName || "zonder-tegenstander"}_${state.homeAway || "thuis"}`;
+  const dbMatches=dbSheets?.matches??[]; const dbEvents=dbSheets?.events??[]; const dbAttacks=dbSheets?.attacks??[];
+  const gNorm=(v:any)=>String(v??"").trim().toLowerCase(); const gOwn=(e:any)=>["korbis","thuis"].includes(gNorm(e.team)); const gAttempt=(e:any)=>["schot","doorloop","vrijebal","strafworp"].includes(gNorm(e.actie)); const gResult=(e:any)=>gNorm(e.uitkomst??e.resultaat);
+  const oppHistory=state.opponentName?dbMatches.filter((m:any)=>gNorm(m.tegenstander)===gNorm(state.opponentName)):[];
+  const oppIds=new Set(oppHistory.map((m:any)=>String(m.wedstrijd_id??""))); const histE=dbEvents.filter((e:any)=>oppIds.has(String(e.wedstrijd_id??"")));
+  const histOwnAttempts=histE.filter((e:any)=>gOwn(e)&&gAttempt(e)); const histGoals=histOwnAttempts.filter((e:any)=>gResult(e)==="raak").length; const histRebounds=histE.filter((e:any)=>gOwn(e)&&gNorm(e.reden)==="rebound").length; const histTurnovers=histE.filter((e:any)=>gOwn(e)&&["bal uit","pass onderschept"].includes(gNorm(e.reden))).length; const histDefended=histOwnAttempts.filter((e:any)=>gResult(e)==="verdedigd").length; const histOwnAttacks=dbAttacks.filter((a:any)=>oppIds.has(String(a.wedstrijd_id??""))&&gOwn(a)).length;
+  const suggestion:GoalTargets={goals:oppHistory.length?Math.max(1,Math.round(oppHistory.reduce((n:number,m:any)=>n+Number(m.score_korbis||0),0)/oppHistory.length)):20,scorePct:histOwnAttempts.length?Number((histGoals/histOwnAttempts.length*100+1.5).toFixed(1)):20,rebounds:oppHistory.length?Math.max(1,Math.round(histRebounds/oppHistory.length)):12,turnovers:oppHistory.length?Math.max(1,Math.round(histTurnovers/oppHistory.length)):10,attemptsPerAttack:histOwnAttacks?Number((histOwnAttempts.length/histOwnAttacks).toFixed(2)):2.2,defendedPct:histOwnAttempts.length?Number(Math.max(0,histDefended/histOwnAttempts.length*100-1).toFixed(1)):15};
   const [targets, setTargets] = useState<GoalTargets>(() => {
     try {
       const raw = localStorage.getItem(key);
@@ -5197,9 +5249,28 @@ function WedstrijddoelenDashboard({ state }: { state: AppState }) {
   return <div className="space-y-5">
     <div className="rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-50 via-white to-blue-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-violet-700">KorbIQ Match Targets</div><h2 className="mt-1 text-2xl font-black">Wedstrijddoelen</h2><p className="mt-1 max-w-4xl text-sm text-slate-600">Stel vooraf concrete wedstrijddoelen in en volg tijdens de wedstrijd live hoe Korbis ervoor staat. De doelen worden per seizoen en tegenstander lokaal onthouden.</p></div>
     <div className="grid gap-4 md:grid-cols-3"><MetricInsightCard label="Doelen op koers" value={`${met} / ${cards.length}`} sub={state.tijdSeconden ? `na ${Math.floor(state.tijdSeconden/60)} minuten` : "wedstrijd nog niet gestart"}/><MetricInsightCard label="Score" value={`${state.scoreThuis} – ${state.scoreUit}`} sub={state.opponentName || "Nog geen tegenstander"}/><MetricInsightCard label="Aanvallen" value={String(ownAttacks)} sub={`${attempts.length} geregistreerde kansen`}/></div>
+    {state.opponentName&&oppHistory.length>0&&<div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-5"><div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div><div className="text-xs font-extrabold uppercase tracking-wide text-indigo-700">Tegenstander-specifiek KorbIQ-advies</div><div className="mt-1 font-black">Gebaseerd op {oppHistory.length} eerdere duel{oppHistory.length===1?"":"s"} met {state.opponentName}</div><p className="mt-1 text-sm text-slate-600">Voorstel: {suggestion.goals} goals · {suggestion.scorePct}% raak · {suggestion.rebounds} rebounds · max. {suggestion.turnovers} balverlies · {suggestion.attemptsPerAttack} kansen/aanval · max. {suggestion.defendedPct}% verdedigd.</p></div><button onClick={()=>setTargets(suggestion)} className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white">Gebruik KorbIQ-advies</button></div></div>}
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{cards.map(c=>{const ok=c.higher?c.value>=c.target:c.value<=c.target;const progress=c.higher?Math.min(100,c.target?c.value/c.target*100:100):Math.min(100,c.value<=c.target?100:(c.target/Math.max(c.value,1))*100);return <div key={c.key} className={`rounded-2xl border p-5 ${ok?"border-emerald-200 bg-emerald-50/50":"border-slate-200 bg-white"}`}><div className="flex items-start justify-between gap-3"><div><div className="text-xs font-extrabold uppercase tracking-wide text-slate-500">{c.label}</div><div className="mt-1 text-3xl font-black text-slate-900">{c.value.toFixed(c.key==="scorePct"||c.key==="attemptsPerAttack"||c.key==="defendedPct"?1:0)}{c.suffix}</div></div><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${ok?"bg-emerald-100 text-emerald-700":"bg-amber-100 text-amber-700"}`}>{ok?"Op koers":"Aandacht"}</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${ok?"bg-emerald-500":"bg-blue-500"}`} style={{width:`${Math.max(4,progress)}%`}} /></div><label className="mt-4 flex items-center justify-between gap-3 text-sm"><span className="text-slate-500">Doel {c.higher?"minimaal":"maximaal"}</span><span className="flex items-center gap-1"><input type="number" step={c.key==="scorePct"||c.key==="attemptsPerAttack"||c.key==="defendedPct"?"0.1":"1"} value={c.target} onChange={e=>update(c.key,Number(e.target.value))} className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right font-bold" />{c.suffix}</span></label></div>})}</div>
     <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900"><b>Coachgebruik:</b> doelen zijn richtinggevend. Een groen doel betekent dat de huidige waarde aan de ingestelde grens voldoet; bij maximumdoelen zoals balverlies kan dit tijdens de wedstrijd weer veranderen.</div>
   </div>;
+}
+
+function SpelersportaalDashboard({ state, dbSheets, selectedPlayerId, onSelectPlayer }: { state: AppState; dbSheets: DatabaseSheetsData | null; selectedPlayerId: string; onSelectPlayer: (id:string)=>void }) {
+  const players = state.spelers.filter(p=>p.actief && p.status === "Basisspeler");
+  const player = players.find(p=>p.id===selectedPlayerId) ?? null;
+  const events = dbSheets?.events ?? [];
+  const matches = dbSheets?.matches ?? [];
+  const own=(e:any)=>String(e.team??"").trim().toLowerCase()==="korbis";
+  const isAttempt=(e:any)=>["Schot","Doorloop","Vrijebal","Strafworp"].includes(String(e.actie??""));
+  const pe = player ? events.filter((e:any)=>own(e) && (String(e.spelerId??"")===player.id || String(e.spelerNaam??"")===player.naam)) : [];
+  const attempts=pe.filter(isAttempt);
+  const goals=attempts.filter((e:any)=>String(e.uitkomst??"")==="Raak").length;
+  const rebounds=pe.filter((e:any)=>String(e.reden??"").toLowerCase().includes("rebound")).length;
+  const turnovers=pe.filter((e:any)=>String(e.reden??"").toLowerCase().includes("balverlies")).length;
+  const played = player ? matches.filter((m:any)=>{ try { const d=JSON.parse(String(m.speeltijd_spelers_json??"[]")); return Array.isArray(d)&&d.some((x:any)=>(String(x.spelerId??"")===player.id||String(x.spelerNaam??"")===player.naam)&&Number(x.seconden??0)>0); } catch { return false; }}).length : 0;
+  const minutes = player ? matches.reduce((sum:number,m:any)=>{ try { const d=JSON.parse(String(m.speeltijd_spelers_json??"[]")); const r=Array.isArray(d)?d.find((x:any)=>String(x.spelerId??"")===player.id||String(x.spelerNaam??"")===player.naam):null; return sum+Number(r?.seconden??0)/60; } catch { return sum; }},0) : 0;
+  if (!player) return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-6"><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">KorbIQ Player Portal</div><h2 className="mt-1 text-2xl font-black">Spelersportaal</h2><p className="mt-2 max-w-3xl text-sm text-slate-600">Fase 24 legt de spelersomgeving in de app klaar. Kies hieronder een basisspeler om te bekijken wat die speler na een echte login zou zien.</p></div><div className="rounded-2xl border bg-white p-5"><h3 className="font-black">Portaal bekijken als speler</h3><p className="mt-1 text-sm text-slate-500">Gastspelers krijgen standaard geen eigen spelersaccount.</p><select className="mt-4 w-full max-w-md rounded-xl border p-3" value="" onChange={e=>onSelectPlayer(e.target.value)}><option value="">Kies een speler…</option>{players.map(p=><option key={p.id} value={p.id}>{p.naam}</option>)}</select></div><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><b>Belangrijk:</b> dit is de lokale fase-24 basis. Een echte veilige login en echte toegangsbeperking vereisen een backend/authenticatieservice; localStorage alleen is geen beveiliging.</div></div>;
+  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">Mijn KorbIQ</div><h2 className="mt-1 text-2xl font-black">Welkom, {player.naam}</h2><p className="mt-1 text-sm text-slate-600">Jouw eigen prestaties en ontwikkeling. Teambeheer, andere spelers en coachfuncties horen niet in dit portaal.</p></div><button onClick={()=>onSelectPlayer("")} className="rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-600">Andere speler</button></div></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><MetricInsightCard label="Wedstrijden" value={played}/><MetricInsightCard label="Speelminuten" value={`${Math.round(minutes)} min`}/><MetricInsightCard label="Doelpunten" value={goals}/><MetricInsightCard label="Raak" value={attempts.length?`${(goals/attempts.length*100).toFixed(1)}%`:"—"}/><MetricInsightCard label="Rebounds" value={rebounds} sub={`${turnovers} × balverlies`}/></div><div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Mijn ontwikkeling</h3><p className="mt-1 text-sm text-slate-500">De uitgebreide speleranalyse blijft de bron voor vorm, trends en rankings. In de volgende spelersportaalfase kan dit volledig als persoonlijke tijdlijn worden gepresenteerd.</p><div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm"><b>{attempts.length}</b> geregistreerde kansen · <b>{goals}</b> goals · <b>{rebounds}</b> rebounds.</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Privacy & toegang</h3><p className="mt-1 text-sm text-slate-500">Een speleromgeving hoort alleen gegevens van de ingelogde speler te tonen. Coachfuncties en gegevens van teamgenoten blijven buiten beeld.</p><div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Deze versie simuleert de accountkeuze lokaal en is nog geen beveiligde authenticatie. Voor productie is server-side autorisatie nodig.</div></div></div></div>;
 }
 
 function SpeeltijdWisseladviesDashboard({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
