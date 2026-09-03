@@ -647,7 +647,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"dashboard" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "voorbereiding" | "seizoen">("dashboard");
+  useState<"dashboard" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen">("dashboard");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -2343,6 +2343,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     combinaties: "Vakcombinaties",
     seizoen: "Seizoensdashboard",
     profielen: "Spelerprofielen",
+    opstelling: "Opstellingsassistent",
   };
 
   const shareMatch = () => {
@@ -2432,6 +2433,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                 <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
                 <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
                 <SideNavButton id="profielen" label="Spelerprofielen" icon="players" />
+                <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
                 <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
               </div>
             </section>
@@ -2508,6 +2510,7 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                       <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
                       <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
                       <SideNavButton id="profielen" label="Spelerprofielen" icon="players" />
+                      <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
                       <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
                     </div>
                   </section>
@@ -2671,6 +2674,10 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
 
       {tab === "profielen" && (
         <SpelerprofielenDashboard spelers={state.spelers} dbSheets={dbSheets} />
+      )}
+
+      {tab === "opstelling" && (
+        <OpstellingsassistentDashboard state={state} dbSheets={dbSheets} />
       )}
 
       {tab === "seizoen" && (
@@ -4630,7 +4637,7 @@ function CoachDashboard({
 }: {
   state: AppState;
   dbSheets: DatabaseSheetsData | null;
-  onNavigate: (tab: "dashboard" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "voorbereiding" | "seizoen") => void;
+  onNavigate: (tab: "dashboard" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen") => void;
 }) {
   const pct = (a: number, b: number) => b ? (a / b) * 100 : 0;
   const matches = dbSheets?.matches ?? [];
@@ -4704,7 +4711,7 @@ function CoachDashboard({
       ].map(([label,value,sub,tone])=>{const cls=tone==="green"?"border-emerald-200 bg-emerald-50":tone==="orange"?"border-orange-200 bg-orange-50":"border-blue-200 bg-blue-50";return <div key={String(label)} className={`rounded-2xl border p-4 ${cls}`}><div className="text-xs font-bold text-slate-500">{label}</div><div className="mt-1 text-xl font-black text-slate-900">{value}</div><div className="mt-1 text-xs text-slate-500">{sub}</div></div>})}</div>
       <div className="grid gap-4 lg:grid-cols-[1.35fr_.65fr]">
         <div className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between"><div><h3 className="text-lg font-black">KorbIQ Coach Insights</h3><p className="text-sm text-slate-500">Automatische signalen uit recente vorm en seizoendata.</p></div></div><div className="mt-4 space-y-3">{signals.map((x,i)=>{const cls=x.tone==="green"?"border-emerald-100 bg-emerald-50 text-emerald-950":x.tone==="orange"?"border-orange-100 bg-orange-50 text-orange-950":"border-blue-100 bg-blue-50 text-blue-950";return <div key={i} className={`rounded-xl border p-3 ${cls}`}><div className="flex gap-2"><SignalDot tone={x.tone}/><div><div className="font-bold">{x.title}</div><div className="mt-0.5 text-sm opacity-80">{x.text}</div></div></div></div>})}</div></div>
-        <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Snel naar</h3><div className="mt-3 grid gap-2">{[["voorbereiding","Wedstrijdvoorbereiding"],["profielen","Spelerprofielen & rankings"],["combinaties","Vakcombinaties"],["seizoen","Volledig seizoensdashboard"]].map(([id,label])=><button key={id} onClick={()=>onNavigate(id as "voorbereiding"|"profielen"|"combinaties"|"seizoen")} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-bold hover:border-blue-200 hover:bg-blue-50">{label} →</button>)}</div></div>
+        <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Snel naar</h3><div className="mt-3 grid gap-2">{[["voorbereiding","Wedstrijdvoorbereiding"],["opstelling","Opstellingsassistent"],["profielen","Spelerprofielen & rankings"],["combinaties","Vakcombinaties"],["seizoen","Volledig seizoensdashboard"]].map(([id,label])=><button key={id} onClick={()=>onNavigate(id as "voorbereiding"|"opstelling"|"profielen"|"combinaties"|"seizoen")} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-bold hover:border-blue-200 hover:bg-blue-50">{label} →</button>)}</div></div>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between"><h3 className="text-lg font-black">Spelers in beeld</h3><button onClick={()=>onNavigate("profielen")} className="text-xs font-bold text-blue-700">Alle profielen →</button></div><div className="mt-3 overflow-auto"><table className="w-full text-sm"><thead><tr><th className="py-2 text-left">#</th><th className="text-left">Speler</th><th className="text-right">Goals</th><th className="text-right">% raak</th><th className="text-right">Reb.</th></tr></thead><tbody>{playerRows.slice(0,5).map((p,i)=><tr key={p.name} className="border-t"><td className="py-2 font-black text-blue-700">#{i+1}</td><td className="font-bold">{p.name}</td><td className="text-right">{p.goals}</td><td className="text-right">{p.score.toFixed(1)}%</td><td className="text-right">{p.reb}</td></tr>)}</tbody></table></div></div>
@@ -4910,6 +4917,72 @@ function MatchPreparationDashboard({
       <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Coachsignalen</h3><p className="text-sm text-slate-500">Wat springt eruit uit eerdere ontmoetingen?</p><div className="mt-4 space-y-2">{signals.map((x,i)=><div key={i} className="flex gap-2 rounded-xl bg-slate-50 p-3 text-sm"><SignalDot tone={x.tone}/><span>{x.text}</span></div>)}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Kerncijfers</h3><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-blue-50 p-3"><div className="text-xs text-blue-700">Kansen raak</div><b className="text-xl">{ownAttempts.length?`${(ownGoals/ownAttempts.length*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-violet-50 p-3"><div className="text-xs text-violet-700">Korfgericht</div><b className="text-xl">{ownAttempts.length?`${((ownGoals+ownKorf)/ownAttempts.length*100).toFixed(1)}%`:"—"}</b></div><div className="rounded-xl bg-emerald-50 p-3"><div className="text-xs text-emerald-700">Aanv. rebound</div><b className="text-xl">{reboundPct!==null?`${reboundPct.toFixed(0)}%`:"—"}</b></div><div className="rounded-xl bg-red-50 p-3"><div className="text-xs text-red-700">Tegenstander raak</div><b className="text-xl">{oppAttempts.length?`${(oppGoals/oppAttempts.length*100).toFixed(1)}%`:"—"}</b></div></div></div></div>
       <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vakcombinaties tegen {opponent}</h3><p className="text-sm text-slate-500">Historisch aanvallend rendement van combinaties die tegen deze ploeg gespeeld hebben.</p><div className="mt-4 space-y-2">{combos.length?combos.map((c,i)=><div key={i} className="rounded-xl border bg-slate-50 p-3"><div className="font-bold">{c.names}</div><div className="mt-1 text-xs text-slate-500">{Math.round(c.minutes)} min · {c.attacks} aanvallen · {c.goals} goals · {c.attacks?(c.goals/c.attacks*10).toFixed(1):"—"} goals / 10 aanv.</div></div>):<div className="text-sm text-slate-500">Nog geen vakcombinatiedata uit deze ontmoetingen.</div>}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Spelers tegen {opponent}</h3><p className="text-sm text-slate-500">Spelers die in eerdere ontmoetingen het meest zichtbaar waren in de registratie.</p><div className="mt-4 space-y-2">{players.length?players.map(p=><div key={p.name} className="flex items-center justify-between rounded-xl bg-slate-50 p-3"><div><div className="font-bold">{p.name}</div><div className="text-xs text-slate-500">{p.goals} goals · {p.attempts} kansen · {p.rebounds} rebounds</div></div><div className="font-black">{p.attempts?`${(p.goals/p.attempts*100).toFixed(0)}%`:"—"}</div></div>):<div className="text-sm text-slate-500">Nog onvoldoende individuele eventdata.</div>}</div></div></div>
       <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs text-blue-800">De voorbereiding is een historische analyse. KorbIQ geeft hiermee signalen en context, geen automatisch opstellings- of wisseladvies.</div>
+    </>}
+  </div>;
+}
+
+
+function OpstellingsassistentDashboard({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
+  const events = dbSheets?.events ?? [];
+  const periods = dbSheets?.vakperiodes ?? [];
+  const matches = dbSheets?.matches ?? [];
+  const base = state.spelers.filter(p => p.actief && p.status === "Basisspeler");
+  const currentIds = [...state.aanval, ...state.verdediging].filter((id): id is string => Boolean(id));
+  const currentUnique = Array.from(new Set(currentIds));
+  const currentPlayers = currentUnique.map(id => state.spelers.find(p => p.id === id)).filter((p): p is Player => Boolean(p));
+  const sourcePlayers = currentPlayers.length === 8 ? currentPlayers : base;
+  const men = sourcePlayers.filter(p => p.geslacht === "Heer");
+  const women = sourcePlayers.filter(p => p.geslacht === "Dame");
+  const usable = men.length === 4 && women.length === 4;
+  const matchIds = new Set(matches.map((m:any)=>String(m.wedstrijd_id ?? "")));
+  const own = (e:any) => ["korbis","thuis"].includes(String(e.team ?? "").trim().toLowerCase());
+  const action = (e:any) => String(e.actie ?? "").trim().toLowerCase();
+  const result = (e:any) => String(e.uitkomst ?? e.resultaat ?? "").trim().toLowerCase();
+  const reason = (e:any) => String(e.reden ?? "").trim().toLowerCase();
+  const isAttempt = (e:any) => ["schot","doorloop","vrijebal","strafworp"].includes(action(e));
+  const playerMetric = (p:Player) => {
+    const pe=events.filter((e:any)=>matchIds.has(String(e.wedstrijd_id ?? "")) && own(e) && (String(e.spelerId ?? "")===p.id || String(e.spelerNaam ?? "")===p.naam));
+    const at=pe.filter(isAttempt); const goals=at.filter((e:any)=>result(e)==="raak").length;
+    const reb=pe.filter((e:any)=>action(e)==="rebound" && reason(e)==="rebound").length;
+    const def=pe.filter((e:any)=>["verdedigd","bal onderschept","pass onderschept"].includes(reason(e))).length;
+    const tov=pe.filter((e:any)=>["bal uit","pass onderschept"].includes(reason(e))).length;
+    const score=at.length ? goals/at.length*100 : 0;
+    return {p, goals, attempts:at.length, reb, def, tov, score};
+  };
+  const metrics=sourcePlayers.map(playerMetric);
+  const max=(key:"goals"|"attempts"|"reb"|"def"|"tov")=>Math.max(1,...metrics.map(m=>m[key]));
+  const individualScore=(id:string)=>{const m=metrics.find(x=>x.p.id===id); if(!m)return 0; return (m.goals/max("goals"))*24+(m.attempts/max("attempts"))*12+(m.score/100)*18+(m.reb/max("reb"))*18+(m.def/max("def"))*18+(1-m.tov/max("tov"))*10;};
+  const comboHistory=(ids:string[])=>{
+    const key=[...ids].sort().join("|"); const ps=periods.filter((v:any)=>String(v.combinatie_key ?? "")===key);
+    const seconds=ps.reduce((n:number,v:any)=>n+(Number(v.duur_seconden ?? 0)||0),0);
+    const ev=events.filter((e:any)=>String(e.combinatie_key ?? "")===key && own(e)); const at=ev.filter(isAttempt); const goals=at.filter((e:any)=>result(e)==="raak").length;
+    const reb=ev.filter((e:any)=>action(e)==="rebound"&&reason(e)==="rebound").length; const tov=ev.filter((e:any)=>["bal uit","pass onderschept"].includes(reason(e))).length;
+    const historyScore=at.length ? Math.min(100,(goals/at.length*100)*2.2 + Math.min(25,reb*1.2) - Math.min(20,tov*1.5)) : 50;
+    const reliability=Math.min(1,seconds/3600); return {minutes:seconds/60, attempts:at.length, goals, score:historyScore, reliability};
+  };
+  const pairs=<T,>(arr:T[])=>arr.flatMap((a,i)=>arr.slice(i+1).map(b=>[a,b] as [T,T]));
+  type Advice={vak1:Player[];vak2:Player[];score:number;individual:number;history:number;balance:number;h1:ReturnType<typeof comboHistory>;h2:ReturnType<typeof comboHistory>};
+  const advices:Advice[]=[];
+  if(usable){
+    for(const mp of pairs(men)){ for(const wp of pairs(women)){
+      const v1=[...mp,...wp]; const ids1=new Set(v1.map(p=>p.id)); const v2=sourcePlayers.filter(p=>!ids1.has(p.id));
+      if(v2.length!==4)continue;
+      const canonical=[...v1.map(p=>p.id)].sort().join("|"); const other=[...v2.map(p=>p.id)].sort().join("|"); if(canonical>other)continue;
+      const s1=v1.reduce((n,p)=>n+individualScore(p.id),0)/4; const s2=v2.reduce((n,p)=>n+individualScore(p.id),0)/4;
+      const individual=(s1+s2)/2; const balance=Math.max(0,100-Math.abs(s1-s2)*2.2); const h1=comboHistory(v1.map(p=>p.id)); const h2=comboHistory(v2.map(p=>p.id));
+      const hist=((h1.score*h1.reliability)+(h2.score*h2.reliability)+50*(2-h1.reliability-h2.reliability))/2;
+      const score=individual*.48+balance*.22+hist*.30; advices.push({vak1:v1,vak2:v2,score,individual,history:hist,balance,h1,h2});
+    }}
+  }
+  advices.sort((a,b)=>b.score-a.score);
+  const reliabilityLabel=(minutes:number)=>minutes>=60?"sterke historie":minutes>=30?"redelijke historie":minutes>=15?"beperkte historie":"weinig historie";
+  return <div className="space-y-5">
+    <div className="rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-50 via-white to-blue-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-violet-700">KorbIQ Line-up Intelligence</div><h2 className="mt-1 text-2xl font-black">Opstellingsassistent</h2><p className="mt-1 max-w-4xl text-sm text-slate-600">Vergelijkt mogelijke 2 heer / 2 dame-vakken op individuele prestaties, balans tussen beide vakken en werkelijk gespeelde historische combinaties. Het resultaat is coachadvies, geen automatische selectie.</p></div>
+    <div className="rounded-2xl border bg-white p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-black">Geselecteerde acht</h3><p className="text-sm text-slate-500">{currentPlayers.length===8?"Gebaseerd op de huidige wedstrijdopstelling.":"Gebaseerd op de actieve basisspelers."}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${usable?"bg-emerald-50 text-emerald-700":"bg-amber-50 text-amber-700"}`}>{men.length} heren · {women.length} dames</span></div><div className="mt-3 flex flex-wrap gap-2">{sourcePlayers.map(p=><span key={p.id} className="rounded-full border bg-slate-50 px-3 py-1.5 text-sm font-semibold">{p.naam}</span>)}</div></div>
+    {!usable?<div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900"><b>Nog geen geldige groep van acht.</b><div className="mt-1">De assistent heeft exact 4 actieve heren en 4 actieve dames nodig. Zet acht spelers in de wedstrijdopstelling of zorg dat de actieve basisspelers uit 4 heren en 4 dames bestaan.</div></div>:<>
+      <div className="grid gap-4 md:grid-cols-3">{advices.slice(0,3).map((a,i)=><div key={i} className={`rounded-2xl border p-5 ${i===0?"border-violet-200 bg-violet-50":"bg-white"}`}><div className="flex justify-between"><div className="font-black">{i===0?"🏆 Advies 1":`Alternatief ${i+1}`}</div><div className="text-xl font-black text-violet-700">{a.score.toFixed(0)}</div></div><div className="mt-3 text-xs text-slate-500">KorbIQ score / 100</div><div className="mt-4 space-y-3"><div><div className="text-xs font-bold uppercase text-slate-500">Vak 1</div><div className="font-bold">{a.vak1.map(p=>p.naam).join(" · ")}</div><div className="text-xs text-slate-500">{Math.round(a.h1.minutes)} min samen · {reliabilityLabel(a.h1.minutes)}</div></div><div><div className="text-xs font-bold uppercase text-slate-500">Vak 2</div><div className="font-bold">{a.vak2.map(p=>p.naam).join(" · ")}</div><div className="text-xs text-slate-500">{Math.round(a.h2.minutes)} min samen · {reliabilityLabel(a.h2.minutes)}</div></div></div></div>)}</div>
+      {advices[0]&&<div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Waarom dit advies?</h3><div className="mt-4 grid gap-3 md:grid-cols-3"><div className="rounded-xl bg-blue-50 p-4"><div className="text-xs font-bold text-blue-700">INDIVIDUELE KWALITEIT</div><div className="mt-1 text-2xl font-black">{advices[0].individual.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Scoren, kansen, rendement, rebound, verdediging en balvastheid.</p></div><div className="rounded-xl bg-emerald-50 p-4"><div className="text-xs font-bold text-emerald-700">BALANS TUSSEN VAKKEN</div><div className="mt-1 text-2xl font-black">{advices[0].balance.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Voorkomt dat alle sterke profielen in één vak terechtkomen.</p></div><div className="rounded-xl bg-violet-50 p-4"><div className="text-xs font-bold text-violet-700">COMBINATIEHISTORIE</div><div className="mt-1 text-2xl font-black">{advices[0].history.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Werkelijk samengespeelde minuten en rendement tellen mee naar betrouwbaarheid.</p></div></div></div>}
+      <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Alle berekende opstellingen</h3><p className="text-sm text-slate-500">Klik op de kolomtitels om te sorteren; de bestaande tabelsortering van KorbIQ blijft actief.</p><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-2">#</th><th className="p-2">Vak 1</th><th className="p-2">Vak 2</th><th className="p-2">Score</th><th className="p-2">Balans</th><th className="p-2">Historie</th></tr></thead><tbody>{advices.map((a,i)=><tr key={i} className="border-b border-slate-100"><td className="p-2 font-bold">{i+1}</td><td className="p-2">{a.vak1.map(p=>p.naam).join(" · ")}</td><td className="p-2">{a.vak2.map(p=>p.naam).join(" · ")}</td><td className="p-2 font-black text-violet-700">{a.score.toFixed(1)}</td><td className="p-2">{a.balance.toFixed(0)}</td><td className="p-2">{a.history.toFixed(0)}</td></tr>)}</tbody></table></div></div>
     </>}
   </div>;
 }
