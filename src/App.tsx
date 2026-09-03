@@ -647,7 +647,7 @@ export default function App() {
   });
 
   const [tab, setTab] =
-  useState<"dashboard" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen">("dashboard");
+  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen">("dashboard");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -2334,7 +2334,9 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
   //////////////////////////////////////////////////////////////////////////////
   const sectionTitle: Record<typeof tab, string> = {
     dashboard: "Coach Dashboard",
-    spelers: "Spelers",
+    spelersanalyse: "Spelers",
+    teamanalyse: "Team & Vakken",
+    spelers: "Spelers beheren",
     vakken: "Wedstrijdinstellingen",
     wedstrijd: "Wedstrijdregistratie",
     verslag: "Wedstrijdverslag",
@@ -2427,21 +2429,25 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             </section>
 
             <section className="border-t border-slate-200 pt-5">
-              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Team</div>
+              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Analyse</div>
               <div className="space-y-1">
                 <SideNavButton id="dashboard" label="Coach Dashboard" icon="season" />
-                <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
-                <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
-                <SideNavButton id="profielen" label="Spelerprofielen" icon="players" />
+                <SideNavButton id="spelersanalyse" label="Spelers" icon="players" />
+                <SideNavButton id="teamanalyse" label="Team & Vakken" icon="insights" />
+              </div>
+            </section>
+
+            <section className="border-t border-slate-200 pt-5">
+              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Coaching</div>
+              <div className="space-y-1">
                 <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
-                <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
               </div>
             </section>
 
             <section className="border-t border-slate-200 pt-5">
               <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Beheer</div>
               <div className="space-y-1">
-                <SideNavButton id="spelers" label="Spelers" icon="players" />
+                <SideNavButton id="spelers" label="Spelers beheren" icon="players" />
                 <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
                 <button onClick={exportToExcel} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="export"/><span>Exporteren</span></button>
                 <button onClick={() => dbFileInputRef.current?.click()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="backup"/><span>Backup laden</span></button>
@@ -2504,20 +2510,23 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                     </div>
                   </section>
                   <section className="border-t border-slate-200 pt-4">
-                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Team</div>
+                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Analyse</div>
                     <div className="space-y-1">
                       <SideNavButton id="dashboard" label="Coach Dashboard" icon="season" />
-                      <SideNavButton id="insights" label="Insights & analyse" icon="insights" />
-                      <SideNavButton id="combinaties" label="Vakcombinaties" icon="insights" />
-                      <SideNavButton id="profielen" label="Spelerprofielen" icon="players" />
+                      <SideNavButton id="spelersanalyse" label="Spelers" icon="players" />
+                      <SideNavButton id="teamanalyse" label="Team & Vakken" icon="insights" />
+                    </div>
+                  </section>
+                  <section className="border-t border-slate-200 pt-4">
+                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Coaching</div>
+                    <div className="space-y-1">
                       <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
-                      <SideNavButton id="seizoen" label="Seizoensdashboard" icon="season" />
                     </div>
                   </section>
                   <section className="border-t border-slate-200 pt-4">
                     <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Beheer</div>
                     <div className="space-y-1">
-                      <SideNavButton id="spelers" label="Spelers" icon="players" />
+                      <SideNavButton id="spelers" label="Spelers beheren" icon="players" />
                       <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
                       <button onClick={() => { setMobileMenuOpen(false); exportToExcel(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="export"/><span>Exporteren</span></button>
                       <button onClick={() => { setMobileMenuOpen(false); dbFileInputRef.current?.click(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="backup"/><span>Backup laden</span></button>
@@ -2540,11 +2549,11 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             <div className="overflow-x-auto border-t border-slate-100 lg:hidden">
               <div className="grid min-w-[650px] grid-cols-5 bg-white px-3">
                 {([
-                  { id: "spelers", label: "Spelers" },
-                  { id: "vakken", label: "Instellingen" },
+                  { id: "dashboard", label: "Dashboard" },
+                  { id: "spelersanalyse", label: "Spelers" },
+                  { id: "teamanalyse", label: "Team" },
                   { id: "wedstrijd", label: "Wedstrijd" },
-                  { id: "insights", label: "Insights" },
-                  { id: "seizoen", label: "Seizoen" },
+                  { id: "opstelling", label: "Opstelling" },
                 ] as const).map((t) => <button key={t.id} onClick={() => setTab(t.id)} className={`border-b-2 px-3 py-3 text-sm font-semibold ${tab === t.id ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}>{t.label}</button>)}
               </div>
             </div>
@@ -2657,6 +2666,14 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           dbSheets={dbSheets}
           onNavigate={setTab}
         />
+      )}
+
+      {tab === "spelersanalyse" && (
+        <SpelerAnalyseHub state={state} spelersMap={spelersMap} dbSheets={dbSheets} />
+      )}
+
+      {tab === "teamanalyse" && (
+        <TeamAnalyseHub state={state} spelersMap={spelersMap} dbSheets={dbSheets} />
       )}
 
       {tab === "insights" && (
@@ -4637,7 +4654,7 @@ function CoachDashboard({
 }: {
   state: AppState;
   dbSheets: DatabaseSheetsData | null;
-  onNavigate: (tab: "dashboard" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen") => void;
+  onNavigate: (tab: "dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "voorbereiding" | "seizoen") => void;
 }) {
   const pct = (a: number, b: number) => b ? (a / b) * 100 : 0;
   const matches = dbSheets?.matches ?? [];
@@ -4711,7 +4728,7 @@ function CoachDashboard({
       ].map(([label,value,sub,tone])=>{const cls=tone==="green"?"border-emerald-200 bg-emerald-50":tone==="orange"?"border-orange-200 bg-orange-50":"border-blue-200 bg-blue-50";return <div key={String(label)} className={`rounded-2xl border p-4 ${cls}`}><div className="text-xs font-bold text-slate-500">{label}</div><div className="mt-1 text-xl font-black text-slate-900">{value}</div><div className="mt-1 text-xs text-slate-500">{sub}</div></div>})}</div>
       <div className="grid gap-4 lg:grid-cols-[1.35fr_.65fr]">
         <div className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between"><div><h3 className="text-lg font-black">KorbIQ Coach Insights</h3><p className="text-sm text-slate-500">Automatische signalen uit recente vorm en seizoendata.</p></div></div><div className="mt-4 space-y-3">{signals.map((x,i)=>{const cls=x.tone==="green"?"border-emerald-100 bg-emerald-50 text-emerald-950":x.tone==="orange"?"border-orange-100 bg-orange-50 text-orange-950":"border-blue-100 bg-blue-50 text-blue-950";return <div key={i} className={`rounded-xl border p-3 ${cls}`}><div className="flex gap-2"><SignalDot tone={x.tone}/><div><div className="font-bold">{x.title}</div><div className="mt-0.5 text-sm opacity-80">{x.text}</div></div></div></div>})}</div></div>
-        <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Snel naar</h3><div className="mt-3 grid gap-2">{[["voorbereiding","Wedstrijdvoorbereiding"],["opstelling","Opstellingsassistent"],["profielen","Spelerprofielen & rankings"],["combinaties","Vakcombinaties"],["seizoen","Volledig seizoensdashboard"]].map(([id,label])=><button key={id} onClick={()=>onNavigate(id as "voorbereiding"|"opstelling"|"profielen"|"combinaties"|"seizoen")} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-bold hover:border-blue-200 hover:bg-blue-50">{label} →</button>)}</div></div>
+        <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Snel naar</h3><div className="mt-3 grid gap-2">{[["voorbereiding","Wedstrijdvoorbereiding"],["opstelling","Opstellingsassistent"],["spelersanalyse","Spelers & ontwikkeling"],["teamanalyse","Team, vakken & seizoen"]].map(([id,label])=><button key={id} onClick={()=>onNavigate(id as "voorbereiding"|"opstelling"|"spelersanalyse"|"teamanalyse")} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-bold hover:border-blue-200 hover:bg-blue-50">{label} →</button>)}</div></div>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between"><h3 className="text-lg font-black">Spelers in beeld</h3><button onClick={()=>onNavigate("profielen")} className="text-xs font-bold text-blue-700">Alle profielen →</button></div><div className="mt-3 overflow-auto"><table className="w-full text-sm"><thead><tr><th className="py-2 text-left">#</th><th className="text-left">Speler</th><th className="text-right">Goals</th><th className="text-right">% raak</th><th className="text-right">Reb.</th></tr></thead><tbody>{playerRows.slice(0,5).map((p,i)=><tr key={p.name} className="border-t"><td className="py-2 font-black text-blue-700">#{i+1}</td><td className="font-bold">{p.name}</td><td className="text-right">{p.goals}</td><td className="text-right">{p.score.toFixed(1)}%</td><td className="text-right">{p.reb}</td></tr>)}</tbody></table></div></div>
@@ -5253,21 +5270,40 @@ function SpelerprofielenDashboard({
   </div>;
 }
 
+
+function AnalysisHubTabs<T extends string>({ tabs, active, onChange }: { tabs: readonly { id: T; label: string; hint: string }[]; active: T; onChange: (id: T) => void }) {
+  return <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"><div className="grid gap-2 md:grid-cols-3">{tabs.map((item) => <button key={item.id} type="button" onClick={() => onChange(item.id)} className={`rounded-xl px-4 py-3 text-left transition ${active === item.id ? "bg-blue-600 text-white shadow-sm" : "bg-slate-50 text-slate-700 hover:bg-blue-50"}`}><div className="text-sm font-black">{item.label}</div><div className={`mt-0.5 text-xs ${active === item.id ? "text-blue-100" : "text-slate-500"}`}>{item.hint}</div></button>)}</div></div>;
+}
+
+function SpelerAnalyseHub({ state, spelersMap, dbSheets }: { state: AppState; spelersMap: Map<string, Player>; dbSheets: DatabaseSheetsData | null }) {
+  const [view, setView] = useState<"profiel" | "inzichten">("profiel");
+  const tabs = [{ id: "profiel" as const, label: "Profiel & ontwikkeling", hint: "Rankings, vorm, trends en teamgemiddelden" }, { id: "inzichten" as const, label: "Wedstrijdinzichten", hint: "Gedetailleerde analyse per wedstrijd of periode" }];
+  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Player Intelligence</div><h2 className="mt-1 text-2xl font-black">Spelers</h2><p className="mt-1 max-w-4xl text-sm text-slate-500">Alle individuele inzichten op één plek: profiel, ranking, ontwikkeling én de gedetailleerde wedstrijdanalyse.</p></div><AnalysisHubTabs tabs={tabs} active={view} onChange={setView} />{view === "profiel" ? <SpelerprofielenDashboard spelers={state.spelers} dbSheets={dbSheets} /> : <InsightsTab state={state} spelersMap={spelersMap} opponentName={state.opponentName} dbSheets={dbSheets} forcedMode="speler" />}</div>;
+}
+
+function TeamAnalyseHub({ state, spelersMap, dbSheets }: { state: AppState; spelersMap: Map<string, Player>; dbSheets: DatabaseSheetsData | null }) {
+  const [view, setView] = useState<"team" | "vakken" | "seizoen">("team");
+  const tabs = [{ id: "team" as const, label: "Team Insights", hint: "Aanval, verdediging en wedstrijdanalyse" }, { id: "vakken" as const, label: "Vakken & combinaties", hint: "Viertallen, duo's en betrouwbaarheid" }, { id: "seizoen" as const, label: "Seizoen", hint: "Ontwikkeling en trends door het seizoen" }];
+  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Team Intelligence</div><h2 className="mt-1 text-2xl font-black">Team & Vakken</h2><p className="mt-1 max-w-4xl text-sm text-slate-500">Teamprestaties, vakcombinaties en seizoenstrends zijn samengebracht in één analyseomgeving.</p></div><AnalysisHubTabs tabs={tabs} active={view} onChange={setView} />{view === "team" && <InsightsTab state={state} spelersMap={spelersMap} opponentName={state.opponentName} dbSheets={dbSheets} forcedMode="team" />}{view === "vakken" && <VakcombinatiesDashboard dbSheets={dbSheets} />}{view === "seizoen" && <SeasonDashboard state={state} dbSheets={dbSheets} />}</div>;
+}
+
 function InsightsTab({
   state,
   spelersMap,
   opponentName,
   dbSheets,
+  forcedMode,
 }: {
   state: AppState;
   spelersMap: Map<string, Player>;
   opponentName: string;
   dbSheets: { events: any[]; attacks: any[]; wissels: any[]; matches: any[] } | null;
+  forcedMode?: "speler" | "team";
 }) {
   const ACTIONS = ["Schot", "Doorloop", "Vrijebal", "Strafworp"] as const;
   type ActionKind = (typeof ACTIONS)[number];
 
-  const [analysisMode, setAnalysisMode] = useState<"speler" | "team">("speler");
+  const [analysisMode, setAnalysisMode] = useState<"speler" | "team">(() => forcedMode ?? "speler");
   const [insightMatchId, setInsightMatchId] = useState<string>("__live__");
   const [historyPlayerName, setHistoryPlayerName] = useState<string>("");
   const [historySeason, setHistorySeason] = useState<string>("__all__");
@@ -5289,8 +5325,12 @@ function InsightsTab({
     }
   }, [state.spelers, selectedPlayerId]);
 
+  useEffect(() => {
+    if (forcedMode && analysisMode !== forcedMode) setAnalysisMode(forcedMode);
+  }, [forcedMode, analysisMode]);
+
   const databaseMatches = dbSheets?.matches ?? [];
-  const insightModeButtons = (
+  const insightModeButtons = forcedMode ? null : (
     <div className="inline-flex w-full rounded-xl border bg-white p-1 gap-1">
       <button
         type="button"
