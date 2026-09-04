@@ -1,5 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "./lib/supabaseClient";
+
+const KORBIQ_PRODUCTION_ORIGIN = "https://korfbal-coach.vercel.app";
+const KORBIQ_APP_ORIGIN = ["localhost", "127.0.0.1"].includes(window.location.hostname)
+  ? window.location.origin
+  : KORBIQ_PRODUCTION_ORIGIN;
 
 // --- Herbruikbare Button component -----------------------------------------
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -200,6 +206,10 @@ type DatabaseSheetsData = {
 
 type DatabaseSheets = DatabaseSheetsData | null;
 
+const emptyHistoryDatabase = (): DatabaseSheetsData => ({
+  events: [], attacks: [], wissels: [], matches: [], vakperiodes: [],
+});
+
 const DATABASE_VERSION = 2;
 const APP_DATABASE_LABEL = "fase-6";
 const IDB_NAME = "korfbal-coach-db";
@@ -289,7 +299,17 @@ type AppState = {
   season: string;
   seasonOptions: string[];
   matchType: MatchType;
-  matchEnded: boolean;  
+  matchEnded: boolean;
+  // Fase 26.2: snapshot van het team/seizoen waarvoor de huidige wedstrijd wordt gespeeld.
+  matchTeamSeasonId: string;
+  matchTeamId: string;
+  matchTeamName: string;
+  matchSeasonId: string;
+  matchSeasonName: string;
+  // Fase 28: stabiele opslagidentiteit, zodat opnieuw opslaan dezelfde
+  // wedstrijd vervangt, ook na herladen of op een volgende kalenderdag.
+  matchDate?: string;
+  matchLegacyId?: string;
 };
 
 const DEFAULT_STATE: AppState = {
@@ -322,7 +342,14 @@ const DEFAULT_STATE: AppState = {
   season: "Veld najaar 2026",
   seasonOptions: ["Veld najaar 2026", "Zaal 2026/2027", "Veld voorjaar 2027"],
   matchType: "Competitie",
-  matchEnded: false,    
+  matchEnded: false,
+  matchTeamSeasonId: "",
+  matchTeamId: "",
+  matchTeamName: "",
+  matchSeasonId: "",
+  matchSeasonName: "",
+  matchDate: "",
+  matchLegacyId: "",
 };
 
 const STORAGE_KEY = "korfbal_coach_state_v1";
@@ -401,23 +428,199 @@ function formatTime(secs: number) {
   return `${m}:${s}`;
 }
 
+// Fase 29: vertaal de genormaliseerde PostgreSQL-tabellen terug naar het
+// bestaande analyseformaat. Hierdoor blijven alle huidige dashboards en
+// grafieken dezelfde velden gebruiken terwijl Supabase de primaire bron is.
+function supabaseHistoryToDatabase(bundle: any): DatabaseSheetsData {
+  const sourceMatches = Array.isArray(bundle?.matches) ? bundle.matches : [];
+  const sourceEvents = Array.isArray(bundle?.events) ? bundle.events : [];
+  const sourceAttacks = Array.isArray(bundle?.attacks) ? bundle.attacks : [];
+  const sourceSubstitutions = Array.isArray(bundle?.substitutions) ? bundle.substitutions : [];
+  const sourceVakPeriods = Array.isArray(bundle?.vak_periods) ? bundle.vak_periods : [];
+  const matchById = new Map<string, any>(
+    sourceMatches.map((match: any) => [String(match.id), match] as [string, any])
+  );
+
+  const matchContext = (databaseMatchId: unknown) => {
+    const match: any = matchById.get(String(databaseMatchId)) ?? {};
+    const legacyMatchId = String(match.legacy_match_id ?? "");
+    const teamName = String(match.team_name_snapshot ?? "Korbis");
+    const playerNames = new Map<string, string>();
+    const snapshotPlayers = Array.isArray(match.payload?.state?.spelers)
+      ? match.payload.state.spelers
+      : [];
+    snapshotPlayers.forEach((player: any) => {
+      if (player?.id) playerNames.set(String(player.id), String(player.naam ?? player.id));
+    });
+    const playtimePlayers = Array.isArray(match.player_playtime) ? match.player_playtime : [];
+    playtimePlayers.forEach((player: any) => {
+      const id = player?.player_id ?? player?.spelerId;
+      const name = player?.player_name ?? player?.spelerNaam;
+      if (id && name) playerNames.set(String(id), String(name));
+    });
+    return {
+      match,
+      legacyMatchId,
+      teamName,
+      playerNames,
+      common: {
+        wedstrijd_id: legacyMatchId,
+        wedstrijd_naam: match.match_name ?? "",
+        locatie: match.location ?? "",
+        seizoen: match.season_name_snapshot ?? match.payload?.state?.season ?? "",
+        wedstrijdtype: match.match_type ?? "Competitie",
+        team_season_id: match.team_season_id ?? "",
+        team_id: match.team_id ?? "",
+        team_naam: teamName,
+        team_seizoen_id: match.season_id ?? "",
+        team_seizoen_naam: match.season_name_snapshot ?? "",
+      },
+    };
+  };
+
+  const combinationIds = (value: unknown) => Array.isArray(value)
+    ? value.map(String)
+    : [];
+  const combinationNames = (ids: string[], names: Map<string, string>) =>
+    ids.map((id, index) => names.get(id) ?? (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) ? `Onbekende speler ${index + 1}` : id)).join(" · ");
+  const analysisTeamLabel = (value: unknown, ownTeamName: string) =>
+    String(value ?? "").trim().toLocaleLowerCase("nl-NL") === ownTeamName.trim().toLocaleLowerCase("nl-NL")
+      ? "Korbis"
+      : String(value ?? "");
+
+  const matches = sourceMatches.map((match: any) => {
+    const playtime = (Array.isArray(match.player_playtime) ? match.player_playtime : []).map((row: any) => ({
+      spelerId: row.player_id ?? row.spelerId ?? "",
+      spelerNaam: row.player_name ?? row.spelerNaam ?? "",
+      status: row.status ?? "",
+      seconden: Number(row.seconds ?? row.seconden ?? 0),
+    }));
+    return {
+      wedstrijd_id: match.legacy_match_id ?? "",
+      wedstrijd_naam: match.match_name ?? "",
+      locatie: match.location ?? "",
+      seizoen: match.season_name_snapshot ?? match.payload?.state?.season ?? "",
+      wedstrijdtype: match.match_type ?? "Competitie",
+      team_season_id: match.team_season_id ?? "",
+      team_id: match.team_id ?? "",
+      team_naam: match.team_name_snapshot ?? "",
+      team_seizoen_id: match.season_id ?? "",
+      team_seizoen_naam: match.season_name_snapshot ?? "",
+      datum: match.match_date ?? "",
+      tegenstander: match.opponent_name ?? "",
+      half_duur_minuten: match.half_duration_minutes ?? "",
+      score_korbis: match.score_for ?? 0,
+      score_tegenstander: match.score_against ?? 0,
+      bezit_thuis_seconden: match.possession_for_seconds ?? 0,
+      bezit_uit_seconden: match.possession_against_seconds ?? 0,
+      bezit_thuis_pct: match.possession_for_pct ?? "",
+      bezit_uit_pct: match.possession_against_pct ?? "",
+      aanval_thuis_seconden: match.attack_for_seconds ?? 0,
+      aanval_uit_seconden: match.attack_against_seconds ?? 0,
+      aanval_thuis_pct: match.attack_for_pct ?? "",
+      aanval_uit_pct: match.attack_against_pct ?? "",
+      speeltijd_spelers_json: JSON.stringify(playtime),
+      wedstrijd_afgesloten: match.match_closed ? "ja" : "nee",
+      supabase_match_id: match.id ?? "",
+      gearchiveerd: Boolean(match.archived_at),
+      gearchiveerd_op: match.archived_at ?? "",
+      gearchiveerd_door: match.archived_by ?? "",
+    };
+  });
+
+  const events = sourceEvents.map((event: any) => {
+    const context = matchContext(event.match_id);
+    const ids = combinationIds(event.combination_player_ids);
+    return {
+      ...context.common,
+      id: event.source_event_id ?? event.id ?? "",
+      tijd_verstreken: formatTime(Number(event.elapsed_seconds ?? 0)),
+      klok_resterend: event.remaining_seconds == null ? "" : formatTime(Number(event.remaining_seconds)),
+      wedstrijd_minuut: event.match_minute ?? "",
+      vak: event.vak ?? "",
+      vak_id: event.vak_id ?? "",
+      combinatie_key: event.combination_key ?? "",
+      combinatie_speler_ids: JSON.stringify(ids),
+      combinatie_spelers: combinationNames(ids, context.playerNames),
+      team: analysisTeamLabel(event.team_label, context.teamName),
+      actie: event.action ?? "",
+      uitkomst: event.result ?? "",
+      reden: event.reason ?? "",
+      spelerId: event.player_id ?? "",
+      spelerNaam: event.player_name_snapshot ?? "",
+      score_korbis: event.score_for ?? "",
+      score_tegenstander: event.score_against ?? "",
+      x_pct: event.x_pct ?? "",
+      y_pct: event.y_pct ?? "",
+      aanval_nr: event.attack_number ?? "",
+      aanval_start: event.attack_start_seconds == null ? "" : formatTime(Number(event.attack_start_seconds)),
+      aanval_einde: event.attack_end_seconds == null ? "" : formatTime(Number(event.attack_end_seconds)),
+      aanval_duur: event.attack_duration_seconds == null ? "" : formatTime(Number(event.attack_duration_seconds)),
+    };
+  });
+
+  const attacks = sourceAttacks.map((attack: any) => {
+    const context = matchContext(attack.match_id);
+    const ids = combinationIds(attack.combination_player_ids);
+    return {
+      ...context.common,
+      aanval_nr: attack.attack_number ?? "",
+      team: analysisTeamLabel(attack.team_label, context.teamName),
+      vak: attack.vak === "aanvallend" ? "Aanvallend" : attack.vak === "verdedigend" ? "Verdedigend" : attack.vak ?? "",
+      vak_id: attack.vak_id ?? "",
+      combinatie_key: attack.combination_key ?? "",
+      combinatie_speler_ids: JSON.stringify(ids),
+      combinatie_spelers: combinationNames(ids, context.playerNames),
+      start: formatTime(Number(attack.start_seconds ?? 0)),
+      einde: attack.end_seconds == null ? "" : formatTime(Number(attack.end_seconds)),
+      duur: attack.duration_seconds == null ? "" : formatTime(Number(attack.duration_seconds)),
+      schoten: attack.shots ?? 0,
+      doorloop: attack.run_throughs ?? 0,
+      vrije_ballen: attack.free_balls ?? 0,
+      strafworpen: attack.penalties ?? 0,
+    };
+  });
+
+  const wissels = sourceSubstitutions.map((substitution: any) => {
+    const context = matchContext(substitution.match_id);
+    return {
+      ...context.common,
+      id: substitution.source_event_id ?? substitution.id ?? "",
+      tijd_verstreken: formatTime(Number(substitution.elapsed_seconds ?? 0)),
+      wedstrijd_minuut: substitution.match_minute ?? "",
+      vak: substitution.vak ?? "",
+      vak_id: substitution.vak_id ?? "",
+      team: analysisTeamLabel(substitution.team_label, context.teamName),
+      positie: substitution.position ?? "",
+      wissel: substitution.substitution_type ?? "",
+      spelerId: substitution.player_id ?? "",
+      spelerNaam: substitution.player_name_snapshot ?? "",
+      score_korbis: substitution.score_for ?? "",
+      score_tegenstander: substitution.score_against ?? "",
+    };
+  });
+
+  const vakperiodes = sourceVakPeriods.map((period: any) => {
+    const context = matchContext(period.match_id);
+    const ids = combinationIds(period.combination_player_ids);
+    return {
+      ...context.common,
+      periode_id: period.source_period_id ?? period.id ?? "",
+      vak_id: period.vak_id ?? "",
+      start: formatTime(Number(period.start_seconds ?? 0)),
+      einde: formatTime(Number(period.end_seconds ?? 0)),
+      duur_seconden: period.duration_seconds ?? 0,
+      combinatie_key: period.combination_key ?? "",
+      combinatie_speler_ids: JSON.stringify(ids),
+      combinatie_spelers: combinationNames(ids, context.playerNames),
+    };
+  });
+
+  return { events, attacks, wissels, matches, vakperiodes };
+}
+
 function uid(prefix = "id") {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function encodeStateForShare(s: AppState): string {
-  const json = JSON.stringify(s);
-  return encodeURIComponent(btoa(json));
-}
-
-function decodeStateFromShare(encoded: string): AppState | null {
-  try {
-    const json = atob(decodeURIComponent(encoded));
-    const raw = JSON.parse(json);
-    return sanitizeState(raw);
-  } catch {
-    return null;
-  }
 }
 
 function getCurrentAttackInfo(state: AppState) {
@@ -427,17 +630,6 @@ function getCurrentAttackInfo(state: AppState) {
   return { attackId: a.id, attackIndex: a.index };
 }
 
-
-function getSharedStateFromUrl(): AppState | null {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const encoded = params.get("s");
-    if (!encoded) return null;
-    return decodeStateFromShare(encoded);
-  } catch {
-    return null;
-  }
-}
 
 function detectVakForSpeler(state: AppState, spelerId?: string): VakSide | undefined {
   if (!spelerId) return undefined;
@@ -565,6 +757,13 @@ function sanitizeState(raw: any): AppState {
           ? s.matchType
           : DEFAULT_STATE.matchType,
       matchEnded: bool(s.matchEnded, DEFAULT_STATE.matchEnded),
+      matchTeamSeasonId: typeof s.matchTeamSeasonId === "string" ? s.matchTeamSeasonId : "",
+      matchTeamId: typeof s.matchTeamId === "string" ? s.matchTeamId : "",
+      matchTeamName: typeof s.matchTeamName === "string" ? s.matchTeamName : "",
+      matchSeasonId: typeof s.matchSeasonId === "string" ? s.matchSeasonId : "",
+      matchSeasonName: typeof s.matchSeasonName === "string" ? s.matchSeasonName : "",
+      matchDate: typeof s.matchDate === "string" ? s.matchDate : "",
+      matchLegacyId: typeof s.matchLegacyId === "string" ? s.matchLegacyId : "",
     };
   }
 
@@ -583,6 +782,27 @@ const formatImportedDate = (value: any) => {
   if (nl) return `${nl[1].padStart(2, "0")}-${nl[2].padStart(2, "0")}-${nl[3]}`;
   return raw.slice(0, 10);
 };
+
+const safeDisplayText = (value: unknown, fallback = "—") => {
+  if (typeof value === "string") return value.trim() || fallback;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return fallback;
+};
+
+class InsightsErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error("Wedstrijdinzichten konden niet worden weergegeven", error, info);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-900"><h2 className="text-lg font-black">Wedstrijdinzichten konden niet worden geopend</h2><p className="mt-2 text-sm">Een afwijkende waarde in de wedstrijdhistorie kon niet veilig worden weergegeven. De rest van KorbIQ blijft beschikbaar.</p><details className="mt-3 text-xs"><summary className="cursor-pointer font-bold">Technische melding</summary><div className="mt-2 break-words rounded-lg bg-white p-3">{this.state.error.message}</div></details><button type="button" onClick={()=>this.setState({error:null})} className="mt-4 rounded-xl bg-red-700 px-4 py-2 text-sm font-bold text-white">Opnieuw proberen</button></div>;
+  }
+}
 
 //////////////////////////////////////////////////////////////////////////////
 // --- Main component --------------------------------------------------------
@@ -754,24 +974,928 @@ function MatchInfoGlyph({ type }: { type: "shirt" | "trophy" | "calendar" | "clo
   return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 10h3M14 10h3M8 14h8"/></svg>;
 }
 
-export default function App() {
-  const [state, setState] = useState<AppState>(() => {
-    // 1. eerst kijken of er een gedeelde state in de URL zit
-    const shared = getSharedStateFromUrl();
-    if (shared) return shared;
 
-    // 2. anders uit localStorage
+type AuthProfile = {
+  id: string;
+  email: string | null;
+  role: "coach" | "speler";
+  speler_id: string | null;
+  speler_naam: string | null;
+  naam?: string | null;
+  voornaam?: string | null;
+  tussenvoegsel?: string | null;
+  achternaam?: string | null;
+  actief?: boolean;
+  account_status?: "uitgenodigd" | "actief" | "gedeactiveerd" | null;
+  invitation_status?: "uitgenodigd" | "actief" | null;
+  invited_at?: string | null;
+  person_id?: string | null;
+};
+
+
+type KorbIQRole = "admin" | "tc" | "coach" | "speler";
+
+type UserRoleRow = {
+  id: string;
+  user_id: string;
+  role: KorbIQRole;
+  team_season_id: string | null;
+  actief: boolean;
+};
+
+type TeamSeasonContext = {
+  id: string;
+  teamId: string;
+  seasonId: string;
+  teamName: string;
+  teamIsTest: boolean;
+  seasonName: string;
+  seasonActive: boolean;
+  period: "veld_najaar" | "zaal" | "veld_voorjaar" | null;
+};
+
+const roleLabel = (role: KorbIQRole) => role === "admin" ? "Admin" : role === "tc" ? "TC-lid" : role === "coach" ? "Coach" : "Speler";
+
+const teamSortKey = (name: string) => {
+  const normalized = String(name ?? "").trim().toUpperCase().replace(/\s+/g, "");
+
+  const k = normalized.match(/^K(\d+)(?:[-._]?(\d+))?/);
+  if (k) return { group: 0, primary: Number(k[1]), secondary: Number(k[2] ?? 0), label: normalized };
+
+  const u = normalized.match(/^U(\d+)(?:[-._]?(\d+))?/);
+  if (u) return { group: 1, primary: -Number(u[1]), secondary: Number(u[2] ?? 0), label: normalized };
+
+  const j = normalized.match(/^J(\d+)(?:[-._]?(\d+))?/);
+  if (j) return { group: 2, primary: Number(j[1]), secondary: Number(j[2] ?? 0), label: normalized };
+
+  return { group: 3, primary: 0, secondary: 0, label: normalized };
+};
+
+const compareTeamNames = (a: string, b: string) => {
+  const ka = teamSortKey(a);
+  const kb = teamSortKey(b);
+  return (
+    ka.group - kb.group ||
+    ka.primary - kb.primary ||
+    ka.secondary - kb.secondary ||
+    ka.label.localeCompare(kb.label, "nl-NL", { numeric: true })
+  );
+};
+
+function KorbIQLogin() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage("");
+    setBusy(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) setMessage(error.message === "Invalid login credentials" ? "E-mailadres of wachtwoord is niet juist." : error.message);
+    setBusy(false);
+  };
+
+  const resetPassword = async () => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setMessage("Vul eerst je e-mailadres in.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, { redirectTo: `${KORBIQ_APP_ORIGIN}/account-activate?mode=recovery` });
+    setMessage(error ? error.message : "Er is een herstelmail verstuurd als dit e-mailadres bekend is.");
+    setBusy(false);
+  };
+
+  return <div className="min-h-screen bg-[#f6f8fc] px-4 py-10 text-slate-900">
+    <div className="mx-auto flex min-h-[75vh] max-w-md items-center">
+      <div className="w-full rounded-3xl border border-slate-200 bg-white p-7 shadow-xl shadow-slate-200/40">
+        <KorbIQLogo />
+        <div className="mt-7">
+          <div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">Veilige toegang</div>
+          <h1 className="mt-1 text-2xl font-black">Inloggen bij KorbIQ</h1>
+          <p className="mt-2 text-sm text-slate-500">Log in met je coach- of spelersaccount.</p>
+        </div>
+        <form onSubmit={submit} className="mt-6 space-y-4">
+          <label className="block text-sm font-bold text-slate-700">E-mailadres
+            <input type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
+          </label>
+          <label className="block text-sm font-bold text-slate-700">Wachtwoord
+            <input type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
+          </label>
+          {message && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</div>}
+          <button disabled={busy} className="w-full rounded-xl bg-blue-600 px-4 py-3 font-extrabold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60">{busy ? "Even wachten…" : "Inloggen"}</button>
+          <button type="button" disabled={busy} onClick={resetPassword} className="w-full text-sm font-semibold text-blue-700 hover:underline">Wachtwoord vergeten?</button>
+        </form>
+      </div>
+    </div>
+  </div>;
+}
+
+
+function AccountActivationScreen() {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [email, setEmail] = useState("");
+  const [checking, setChecking] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [sessionAvailable, setSessionAvailable] = useState(false);
+
+  const params = new URLSearchParams(window.location.search);
+  const isRecovery = params.get("mode") === "recovery" || window.location.hash.includes("type=recovery");
+
+  useEffect(() => {
+    let active = true;
+
+    const readSession = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (!active) return;
+      if (error) setMessage(error.message);
+      const session = data.session;
+      setSessionAvailable(Boolean(session));
+      setEmail(session?.user.email ?? "");
+      setChecking(false);
+    };
+
+    void readSession();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setSessionAvailable(Boolean(session));
+      setEmail(session?.user.email ?? "");
+      setChecking(false);
+    });
+
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const activate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage("");
+
+    if (password.length < 8) {
+      setMessage("Gebruik minimaal 8 tekens voor je wachtwoord.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setMessage("De twee wachtwoorden zijn niet gelijk.");
+      return;
+    }
+
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) {
+      setMessage(error.message);
+      setBusy(false);
+      return;
+    }
+
+    const { error: activationError } = await supabase.rpc("complete_account_activation");
+    if (activationError) {
+      setMessage(`Wachtwoord is ingesteld, maar KorbIQ kon de accountstatus niet afronden: ${activationError.message}`);
+      setBusy(false);
+      return;
+    }
+
+    window.location.replace(window.location.origin);
+  };
+
+  const goToLogin = async () => {
+    await supabase.auth.signOut();
+    window.location.replace(window.location.origin);
+  };
+
+  return <div className="min-h-screen bg-[#f6f8fc] px-4 py-10 text-slate-900">
+    <div className="mx-auto flex min-h-[75vh] max-w-md items-center">
+      <div className="w-full rounded-3xl border border-slate-200 bg-white p-7 shadow-xl shadow-slate-200/40">
+        <KorbIQLogo />
+        <div className="mt-7">
+          <div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">{isRecovery ? "Account herstellen" : "Welkom bij KorbIQ"}</div>
+          <h1 className="mt-1 text-2xl font-black">{isRecovery ? "Nieuw wachtwoord kiezen" : "Activeer je account"}</h1>
+          <p className="mt-2 text-sm text-slate-500">{isRecovery ? "Kies een nieuw wachtwoord om weer toegang te krijgen tot KorbIQ." : "Je uitnodiging is bevestigd. Kies nu een wachtwoord voor je KorbIQ-account."}</p>
+        </div>
+
+        {checking ? <div className="mt-6 rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">Uitnodiging controleren…</div> : !sessionAvailable ? <div className="mt-6 space-y-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Deze uitnodigingssessie is niet beschikbaar of de link is verlopen. Vraag een nieuwe uitnodiging of wachtwoordherstelmail aan.</div>
+          <button type="button" onClick={()=>void goToLogin()} className="w-full rounded-xl border px-4 py-3 font-bold">Naar inloggen</button>
+        </div> : <form onSubmit={activate} className="mt-6 space-y-4">
+          {email && <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-900"><span className="font-bold">Account:</span> {email}</div>}
+          <label className="block text-sm font-bold text-slate-700">Nieuw wachtwoord
+            <input type="password" autoComplete="new-password" minLength={8} required value={password} onChange={e=>setPassword(e.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
+          </label>
+          <label className="block text-sm font-bold text-slate-700">Bevestig wachtwoord
+            <input type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
+          </label>
+          <div className="text-xs text-slate-500">Gebruik minimaal 8 tekens.</div>
+          {message && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</div>}
+          <button disabled={busy} className="w-full rounded-xl bg-blue-600 px-4 py-3 font-extrabold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60">{busy ? "Account activeren…" : isRecovery ? "Wachtwoord opslaan" : "Account activeren"}</button>
+        </form>}
+      </div>
+    </div>
+  </div>;
+}
+
+type PublicSharedMatchData = {
+  available: boolean;
+  match?: {
+    team_name?: string;
+    opponent_name?: string;
+    match_name?: string;
+    match_date?: string;
+    location?: string;
+    season?: string;
+    match_type?: string;
+    score_for?: number;
+    score_against?: number;
+  };
+  stats?: {
+    attempts_for?: number;
+    goals_for?: number;
+    attempts_against?: number;
+    goals_against?: number;
+    rebounds?: number;
+    turnovers?: number;
+    attacks_for?: number;
+  };
+  players?: Array<{ name: string; minutes: number; attempts: number; goals: number; rebounds: number }>;
+  timeline?: Array<{ minute: number; team: string; scorer?: string | null; score_for?: number | null; score_against?: number | null }>;
+};
+
+function PublicSharedMatchPage({ token }: { token: string }) {
+  const [data, setData] = useState<PublicSharedMatchData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      const { data: result, error: rpcError } = await supabase.rpc("load_shared_match", { p_token: token });
+      if (!active) return;
+      if (rpcError) {
+        setError("Deze wedstrijdlink kon niet worden geladen.");
+        setData(null);
+      } else {
+        setData((result ?? null) as PublicSharedMatchData | null);
+        setError("");
+      }
+      setLoading(false);
+    };
+    void load();
+    return () => { active = false; };
+  }, [token]);
+
+  if (loading) return <div className="flex min-h-screen items-center justify-center bg-[#f6f8fc] text-sm font-semibold text-slate-500">Wedstrijdsamenvatting laden…</div>;
+  if (error || !data?.available || !data.match) return <div className="min-h-screen bg-[#f6f8fc] p-5"><div className="mx-auto max-w-xl pt-12"><KorbIQLogo /><div className="mt-8 rounded-3xl border border-amber-200 bg-white p-6 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[.14em] text-amber-700">Link niet beschikbaar</div><h1 className="mt-2 text-2xl font-black">Deze wedstrijd kan niet worden bekeken</h1><p className="mt-2 text-sm leading-6 text-slate-600">De link is mogelijk ingetrokken, vervangen of hoort bij een gearchiveerde wedstrijd. Vraag de coach om een nieuwe link.</p></div></div></div>;
+
+  const match = data.match;
+  const stats = data.stats ?? {};
+  const players = data.players ?? [];
+  const timeline = data.timeline ?? [];
+  const team = match.team_name || "Korbis";
+  const opponent = match.opponent_name || "Tegenstander";
+  const isAway = match.location === "Uit";
+  const leftTeam = isAway ? opponent : team;
+  const rightTeam = isAway ? team : opponent;
+  const leftScore = isAway ? Number(match.score_against ?? 0) : Number(match.score_for ?? 0);
+  const rightScore = isAway ? Number(match.score_for ?? 0) : Number(match.score_against ?? 0);
+  const attempts = Number(stats.attempts_for ?? 0);
+  const goals = Number(stats.goals_for ?? 0);
+  const scorePct = attempts ? goals / attempts * 100 : 0;
+
+  return <div className="min-h-screen bg-[#f6f8fc] text-slate-900">
+    <header className="border-b bg-white"><div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4"><KorbIQLogo /><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-extrabold text-blue-700">Openbare wedstrijdsamenvatting</span></div></header>
+    <main className="mx-auto max-w-5xl space-y-5 px-4 py-6 sm:py-9">
+      <section className="overflow-hidden rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-600 to-cyan-600 p-6 text-white shadow-lg sm:p-8">
+        <div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-100">{formatImportedDate(match.match_date)} · {match.match_type || "Wedstrijd"}</div>
+        <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-center"><div className="text-lg font-black sm:text-2xl">{leftTeam}</div><div className="rounded-2xl bg-white/15 px-4 py-3 text-3xl font-black ring-1 ring-white/25 sm:text-4xl">{leftScore} – {rightScore}</div><div className="text-lg font-black sm:text-2xl">{rightTeam}</div></div>
+        <div className="mt-5 text-center text-sm font-semibold text-blue-100">{match.season || ""}{match.location ? ` · ${match.location}` : ""}</div>
+      </section>
+      <section className="grid gap-3 grid-cols-2 lg:grid-cols-5"><MetricInsightCard label="Goals" value={goals}/><MetricInsightCard label="Kansen" value={attempts}/><MetricInsightCard label="Raak" value={attempts?`${scorePct.toFixed(1)}%`:"—"}/><MetricInsightCard label="Rebounds" value={Number(stats.rebounds??0)}/><MetricInsightCard label="Aanvallen" value={Number(stats.attacks_for??0)}/></section>
+      <section className="rounded-2xl border bg-white p-5"><div className="flex items-end justify-between gap-3"><div><h2 className="text-lg font-black">Spelers</h2><p className="text-sm text-slate-500">Geregistreerde bijdrage in deze wedstrijd.</p></div><div className="text-xs font-bold text-slate-500">{players.length} spelers</div></div><div className="mt-4 overflow-auto"><table className="w-full min-w-[600px] text-sm"><thead><tr className="border-b text-slate-500"><th className="py-2 text-left">Speler</th><th className="text-right">Minuten</th><th className="text-right">Goals</th><th className="text-right">Kansen</th><th className="text-right">Raak</th><th className="text-right">Rebounds</th></tr></thead><tbody>{players.map(player=><tr key={player.name} className="border-b border-slate-100"><td className="py-2.5 font-bold">{player.name}</td><td className="text-right">{player.minutes}</td><td className="text-right font-black">{player.goals}</td><td className="text-right">{player.attempts}</td><td className="text-right">{player.attempts?`${(player.goals/player.attempts*100).toFixed(1)}%`:"—"}</td><td className="text-right">{player.rebounds}</td></tr>)}</tbody></table>{!players.length&&<div className="py-6 text-center text-sm text-slate-500">Geen individuele acties geregistreerd.</div>}</div></section>
+      <section className="rounded-2xl border bg-white p-5"><h2 className="text-lg font-black">Scoreverloop</h2><p className="text-sm text-slate-500">Alle geregistreerde doelpunten op volgorde.</p><div className="mt-4 space-y-2">{timeline.map((event,index)=><div key={`${event.minute}-${index}`} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3"><div className="min-w-0"><div className="font-bold">{event.team}</div><div className="truncate text-xs text-slate-500">{event.scorer || "Doelpunt tegenstander"}</div></div><div className="shrink-0 text-right"><div className="font-black">{event.score_for ?? "–"} – {event.score_against ?? "–"}</div><div className="text-xs font-bold text-blue-700">{event.minute}'</div></div></div>)}{!timeline.length&&<div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Geen scoremomenten geregistreerd.</div>}</div></section>
+      <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-5 text-blue-800">Dit is een alleen-lezen samenvatting die door de coach is gedeeld. De pagina bevat geen account- of contactgegevens.</div>
+    </main>
+  </div>;
+}
+
+export default function App() {
+  const [authReady, setAuthReady] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authProfile, setAuthProfile] = useState<AuthProfile | null>(null);
+  const [authError, setAuthError] = useState("");
+  const [accessReady, setAccessReady] = useState(false);
+  const [accessError, setAccessError] = useState("");
+  const [userRoles, setUserRoles] = useState<UserRoleRow[]>([]);
+  const [teamContexts, setTeamContexts] = useState<TeamSeasonContext[]>([]);
+  const [activeTeamSeasonId, setActiveTeamSeasonId] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const loadUser = async (user: User | null) => {
+      if (!active) return;
+      setAuthUser(user);
+      setAuthError("");
+      if (!user) {
+        setAuthProfile(null);
+        setAuthReady(true);
+        return;
+      }
+      setAuthReady(false);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id,email,role,speler_id,speler_naam,naam,voornaam,tussenvoegsel,achternaam,actief,account_status,invitation_status,invited_at")
+        .eq("id", user.id)
+        .single();
+      if (!active) return;
+      if (error || !data) {
+        setAuthProfile(null);
+        setAuthError(error?.message ?? "Accountprofiel kon niet worden geladen.");
+      } else {
+        setAuthProfile(data as AuthProfile);
+      }
+      setAuthReady(true);
+    };
+
+    supabase.auth.getSession().then(({ data }) => { void loadUser(data.session?.user ?? null); });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      void loadUser(session?.user ?? null);
+    });
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const refreshAccess = async () => {
+    if (!authUser) {
+      setUserRoles([]);
+      setTeamContexts([]);
+      setActiveTeamSeasonId("");
+      setAccessError("");
+      setAccessReady(true);
+      return;
+    }
+
+    setAccessReady(false);
+    setAccessError("");
+
+    const { data: rolesData, error: rolesError } = await supabase
+      .from("user_roles")
+      .select("id,user_id,role,team_season_id,actief")
+      .eq("user_id", authUser.id)
+      .eq("actief", true);
+
+    if (rolesError) {
+      setUserRoles([]);
+      setTeamContexts([]);
+      setAccessError(rolesError.message);
+      setAccessReady(true);
+      return;
+    }
+
+    const roles = (rolesData ?? []) as UserRoleRow[];
+    setUserRoles(roles);
+
+    const globalAccess = roles.some((r) => r.role === "admin" || r.role === "tc");
+    // Voor een gewone medewerker geven uitsluitend expliciete coachrollen
+    // teamtoegang. Een speler- of andere rol met een team_season_id mag nooit
+    // per ongeluk het coachdashboard of wedstrijdbeheer ontsluiten.
+    const assignedIds = Array.from(new Set(
+      roles
+        .filter((r) => r.role === "coach" && r.actief)
+        .map((r) => r.team_season_id)
+        .filter((id): id is string => Boolean(id))
+    ));
+
+    let query = supabase
+      .from("team_seasons")
+      .select("id,team_id,season_id,actief,teams(id,naam,actief,is_test),seasons(id,naam,actief,periode)")
+      .eq("actief", true);
+
+    if (!globalAccess) {
+      if (!assignedIds.length) {
+        setTeamContexts([]);
+        setActiveTeamSeasonId("");
+        setAccessReady(true);
+        return;
+      }
+      query = query.in("id", assignedIds);
+    }
+
+    const { data: contextsData, error: contextsError } = await query;
+    if (contextsError) {
+      setTeamContexts([]);
+      setAccessError(contextsError.message);
+      setAccessReady(true);
+      return;
+    }
+
+    const relationOne = (value: any) => Array.isArray(value) ? value[0] : value;
+    const contexts = (contextsData ?? []).map((row: any) => {
+      const team = relationOne(row.teams);
+      const season = relationOne(row.seasons);
+      return {
+        id: String(row.id),
+        teamId: String(row.team_id),
+        seasonId: String(row.season_id),
+        teamName: String(team?.naam ?? "Onbekend team"),
+        teamIsTest: team?.is_test === true,
+        seasonName: String(season?.naam ?? "Onbekend seizoen"),
+        seasonActive: season?.actief !== false,
+        period: season?.periode === "veld_najaar" || season?.periode === "zaal" || season?.periode === "veld_voorjaar" ? season.periode : null,
+      } as TeamSeasonContext;
+    }).filter((c) => c.seasonActive)
+      .sort((a, b) => compareTeamNames(a.teamName, b.teamName) || a.seasonName.localeCompare(b.seasonName, "nl-NL"));
+
+    setTeamContexts(contexts);
+    const storageKey = `korbiq-active-team-season-${authUser.id}`;
+    const saved = localStorage.getItem(storageKey) ?? "";
+    const nextId = contexts.some((c) => c.id === saved) ? saved : (contexts[0]?.id ?? "");
+    setActiveTeamSeasonId(nextId);
+    if (nextId) localStorage.setItem(storageKey, nextId);
+    setAccessReady(true);
+  };
+
+  useEffect(() => {
+    void refreshAccess();
+  }, [authUser?.id]);
+
+  const actualIsAdmin = userRoles.some((r) => r.role === "admin" && r.actief);
+  const actualIsTc = userRoles.some((r) => r.role === "tc" && r.actief);
+  const actualIsCoachRole = userRoles.some((r) => r.role === "coach" && r.actief);
+  const actualHasStaffRole = actualIsAdmin || actualIsTc || actualIsCoachRole;
+  const [adminViewAs, setAdminViewAs] = useState<"admin" | "tc" | "coach" | "speler">("admin");
+  const [showTestTeams, setShowTestTeams] = useState(() => localStorage.getItem("korbiq-show-test-teams") === "true");
+
+  // Admin-testweergave is bewust alleen een UI-preview. De echte Supabase/RLS-rechten
+  // blijven die van het ingelogde adminaccount. Gebruik echte testaccounts voor securitytests.
+  const isAdmin = actualIsAdmin ? adminViewAs === "admin" : false;
+  const isTc = actualIsAdmin ? adminViewAs === "tc" : actualIsTc;
+  const isCoachRole = actualIsAdmin ? adminViewAs === "coach" : actualIsCoachRole;
+  const hasStaffRole = isAdmin || isTc || isCoachRole;
+  const isTruePlayerAccount = authProfile?.role === "speler" && !actualHasStaffRole;
+  const canManageOrganisation = isAdmin || isTc;
+  const activeTeamContext = teamContexts.find((c) => c.id === activeTeamSeasonId) ?? null;
+  const primaryRole: KorbIQRole = isAdmin ? "admin" : isTc ? "tc" : isCoachRole ? "coach" : "speler";
+
+  const [accountProfiles, setAccountProfiles] = useState<AuthProfile[]>([]);
+  const [accountProfilesLoading, setAccountProfilesLoading] = useState(false);
+
+  const refreshAccountProfiles = async () => {
+    if (!authProfile || !hasStaffRole) return;
+    setAccountProfilesLoading(true);
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id,email,role,speler_id,speler_naam,naam,voornaam,tussenvoegsel,achternaam,actief,account_status,invitation_status,invited_at")
+      .eq("role", "speler");
+    if (error) {
+      console.error("KorbIQ accountprofielen laden mislukt:", error);
+    } else {
+      setAccountProfiles((data ?? []) as AuthProfile[]);
+    }
+    setAccountProfilesLoading(false);
+  };
+
+  const invitePlayerAccount = async (player: Player, email: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) throw new Error("Vul een e-mailadres in.");
+    const { data, error } = await supabase.functions.invoke("invite-player", {
+      body: {
+        email: cleanEmail,
+        speler_id: player.id,
+        speler_naam: player.naam,
+      },
+    });
+    if (error) throw new Error(error.message || "Uitnodiging versturen is mislukt.");
+    if (data?.error) throw new Error(String(data.error));
+    await refreshAccountProfiles();
+  };
+
+  useEffect(() => {
+    if (authProfile && hasStaffRole) void refreshAccountProfiles();
+    else setAccountProfiles([]);
+  }, [authProfile?.id, hasStaffRole]);
+
+  const [state, setState] = useState<AppState>(() => {
+    // Wedstrijdstatus wordt niet meer vanuit een openbare URL ingelezen.
+    // De nieuwe deelfunctie krijgt later een beperkte, alleen-lezen dataset.
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) return sanitizeState(JSON.parse(raw));
     } catch {}
 
-    // 3. anders default
     return { ...DEFAULT_STATE };
   });
 
+  type MatchSaveStatus = "idle" | "saving" | "saved" | "error";
+  const [matchSaveStatus, setMatchSaveStatus] = useState<MatchSaveStatus>("idle");
+  const [matchSaveMessage, setMatchSaveMessage] = useState("");
+
+  const currentMatchHasDataForTeamLock =
+    state.klokLoopt ||
+    state.tijdSeconden > 0 ||
+    state.scoreThuis > 0 ||
+    state.scoreUit > 0 ||
+    state.log.length > 0 ||
+    state.fieldEvents.length > 0 ||
+    state.attacks.length > 0 ||
+    Boolean(state.opponentName.trim()) ||
+    Boolean(state.homeAway);
+
+  const teamOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    teamContexts.forEach((c) => {
+      if ((actualIsAdmin || actualIsTc) && c.teamIsTest && !showTestTeams) return;
+      if (!map.has(c.teamId)) map.set(c.teamId, { id: c.teamId, name: c.teamName });
+    });
+    return Array.from(map.values()).sort((a, b) => compareTeamNames(a.name, b.name));
+  }, [teamContexts, actualIsAdmin, actualIsTc, showTestTeams]);
+
+  useEffect(() => {
+    localStorage.setItem("korbiq-show-test-teams", String(showTestTeams));
+    if (!(actualIsAdmin || actualIsTc) || showTestTeams || !activeTeamContext?.teamIsTest) return;
+    const next = teamContexts.find((context) => !context.teamIsTest);
+    setActiveTeamSeasonId(next?.id ?? "");
+    if (authUser?.id && next?.id) localStorage.setItem(`korbiq-active-team-season-${authUser.id}`, next.id);
+  }, [showTestTeams, actualIsAdmin, actualIsTc, activeTeamContext?.teamIsTest, teamContexts, authUser?.id]);
+
+  const activeTeamId = activeTeamContext?.teamId ?? "";
+
+  const competitionPeriodOptions = useMemo(() => {
+    if (!activeTeamId) return [];
+    const periodOrder: Record<string, number> = {
+      veld_najaar: 0,
+      zaal: 1,
+      veld_voorjaar: 2,
+    };
+    const unique = new Map<string, TeamSeasonContext>();
+    teamContexts
+      .filter((c) => c.teamId === activeTeamId)
+      .forEach((c) => {
+        if (!unique.has(c.seasonId)) unique.set(c.seasonId, c);
+      });
+
+    const yearFromName = (name: string) => {
+      const match = name.match(/(20\d{2})\s*\/\s*(20\d{2})/);
+      return match ? Number(match[1]) : 0;
+    };
+
+    return Array.from(unique.values()).sort((a, b) =>
+      yearFromName(b.seasonName) - yearFromName(a.seasonName) ||
+      (periodOrder[a.period ?? ""] ?? 99) - (periodOrder[b.period ?? ""] ?? 99) ||
+      a.seasonName.localeCompare(b.seasonName, "nl-NL")
+    );
+  }, [teamContexts, activeTeamId]);
+
+  const chooseContextForTeam = (teamId: string, preferredSeasonName = state.season) => {
+    const options = teamContexts.filter((c) => c.teamId === teamId);
+    return options.find((c) => c.seasonName === preferredSeasonName) ?? options[0] ?? null;
+  };
+
+  const selectTeam = (teamId: string) => {
+    if (
+      currentMatchHasDataForTeamLock &&
+      !state.matchEnded &&
+      state.matchTeamId &&
+      teamId !== state.matchTeamId
+    ) {
+      alert(`Deze wedstrijd hoort bij ${state.matchTeamName || "het huidige team"}. Start eerst een nieuwe wedstrijd voordat je van team wisselt.`);
+      return;
+    }
+
+    const context = chooseContextForTeam(teamId);
+    if (!context) return;
+    setActiveTeamSeasonId(context.id);
+    if (authUser) localStorage.setItem(`korbiq-active-team-season-${authUser.id}`, context.id);
+  };
+
+  // Houd de lokale seizoenwaarde gelijk aan een geldige Supabase-competitieperiode.
+  // Oude lokale/Excel-seizoensnamen blijven wel in historische data bestaan, maar zijn
+  // niet langer handmatig aan te maken voor nieuwe wedstrijden.
+  useEffect(() => {
+    if (state.matchType !== "Competitie" || !competitionPeriodOptions.length) return;
+    if (competitionPeriodOptions.some((c) => c.seasonName === state.season)) return;
+    if (currentMatchHasDataForTeamLock && !state.matchEnded) return;
+    setState((prev) => ({ ...prev, season: competitionPeriodOptions[0].seasonName }));
+  }, [state.matchType, state.season, competitionPeriodOptions, currentMatchHasDataForTeamLock, state.matchEnded]);
+
+  // De gebruiker kiest het team los van de competitieperiode.
+  // De periode wordt pas relevant bij de wedstrijdinstellingen. Zolang er nog geen
+  // wedstrijddata is, kiezen we achter de schermen de bijpassende team_season-context.
+  useEffect(() => {
+    if (!activeTeamId || state.matchType !== "Competitie") return;
+    if (currentMatchHasDataForTeamLock && !state.matchEnded && state.matchTeamSeasonId) return;
+
+    const matching = teamContexts.find((c) => c.teamId === activeTeamId && c.seasonName === state.season);
+    if (!matching || matching.id === activeTeamSeasonId) return;
+
+    setActiveTeamSeasonId(matching.id);
+    if (authUser) localStorage.setItem(`korbiq-active-team-season-${authUser.id}`, matching.id);
+  }, [state.season, state.matchType, activeTeamId, teamContexts, activeTeamSeasonId, currentMatchHasDataForTeamLock, state.matchEnded, state.matchTeamSeasonId, authUser?.id]);
+
+  // Houd vóór de start van een wedstrijd de wedstrijdcontext gelijk aan het gekozen team.
+  // Zodra er wedstrijddata bestaat, blijft dit een snapshot en verandert deze niet meer.
+  useEffect(() => {
+    if (!activeTeamContext) return;
+
+    setState((prev) => {
+      const hasMatchData =
+        prev.klokLoopt ||
+        prev.tijdSeconden > 0 ||
+        prev.scoreThuis > 0 ||
+        prev.scoreUit > 0 ||
+        prev.log.length > 0 ||
+        prev.fieldEvents.length > 0 ||
+        prev.attacks.length > 0 ||
+        Boolean(prev.opponentName.trim()) ||
+        Boolean(prev.homeAway);
+
+      if (hasMatchData && prev.matchTeamSeasonId) return prev;
+
+      const next = {
+        ...prev,
+        matchTeamSeasonId: prev.matchType === "Competitie" ? activeTeamContext.id : "",
+        matchTeamId: activeTeamContext.teamId,
+        matchTeamName: activeTeamContext.teamName,
+        matchSeasonId: prev.matchType === "Competitie" ? activeTeamContext.seasonId : "",
+        matchSeasonName: prev.matchType === "Competitie" ? activeTeamContext.seasonName : "",
+      };
+
+      if (
+        prev.matchTeamSeasonId === next.matchTeamSeasonId &&
+        prev.matchTeamId === next.matchTeamId &&
+        prev.matchTeamName === next.matchTeamName &&
+        prev.matchSeasonId === next.matchSeasonId &&
+        prev.matchSeasonName === next.matchSeasonName
+      ) return prev;
+
+      return next;
+    });
+  }, [activeTeamContext?.id, activeTeamContext?.teamId, activeTeamContext?.teamName, activeTeamContext?.seasonId, activeTeamContext?.seasonName]);
+
+  // ---------------------------------------------------------------------------
+  // Fase 26: actuele teamselectie komt uit Supabase.
+  // De bestaande wedstrijd-/analysecode blijft voorlopig Player[] gebruiken,
+  // maar de bron is nu players + people + player_team_memberships.
+  // ---------------------------------------------------------------------------
+  const [teamRosterLoading, setTeamRosterLoading] = useState(false);
+  const [teamRosterError, setTeamRosterError] = useState("");
+  const [teamRosterVersion, setTeamRosterVersion] = useState(0);
+  const loadedRosterTeamIdRef = useRef("");
+
+  type RememberedTeamLineup = {
+    aanval: (string | null)[];
+    verdediging: (string | null)[];
+    vak1Aanvallend: boolean;
+  };
+
+  const teamLineupStorageKey = (teamId: string) =>
+    `korbiq-team-lineup-${authUser?.id ?? "unknown"}-${teamId}`;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadActiveTeamRoster = async () => {
+      if (!authUser || !activeTeamId) return;
+
+      // Een team wordt in KorbIQ één keer beheerd, maar heeft per competitiejaar
+      // meerdere team_season-koppelingen (veld najaar, zaal en veld voorjaar).
+      // Laad daarom het teamroster over alle perioden van het actieve team.
+      const activeTeamSeasonIds = teamContexts
+        .filter((context) => context.teamId === activeTeamId)
+        .map((context) => context.id);
+
+      if (!activeTeamSeasonIds.length) return;
+
+      setTeamRosterLoading(true);
+      setTeamRosterError("");
+
+      const { data: membershipData, error: membershipError } = await supabase
+        .from("player_team_memberships")
+        .select("player_id,status,actief")
+        .in("team_season_id", activeTeamSeasonIds)
+        .eq("actief", true);
+
+      if (membershipError) {
+        if (!cancelled) {
+          setTeamRosterError(membershipError.message);
+          setTeamRosterLoading(false);
+        }
+        return;
+      }
+
+      const memberships = (membershipData ?? []) as Array<{
+        player_id: string;
+        status: PlayerStatus;
+        actief: boolean;
+      }>;
+
+      // Dezelfde speler kan voor alle drie perioden een membership hebben. Toon
+      // deze maar één keer; Basisspeler gaat voor Gast als de statussen afwijken.
+      const membershipByPlayerId = new Map<string, {
+        player_id: string;
+        status: PlayerStatus;
+        actief: boolean;
+      }>();
+      memberships.forEach((membership) => {
+        const playerId = String(membership.player_id);
+        const existing = membershipByPlayerId.get(playerId);
+        if (!existing || membership.status === "Basisspeler") {
+          membershipByPlayerId.set(playerId, { ...membership, player_id: playerId });
+        }
+      });
+      const teamMemberships = Array.from(membershipByPlayerId.values());
+      const playerIds = teamMemberships.map((membership) => membership.player_id);
+
+      if (!playerIds.length) {
+        if (!cancelled) {
+          loadedRosterTeamIdRef.current = activeTeamId;
+          setState((prev) => ({
+            ...prev,
+            spelers: [],
+            aanval: [null, null, null, null],
+            verdediging: [null, null, null, null],
+            speelSeconden: {},
+          }));
+          setTeamRosterLoading(false);
+        }
+        return;
+      }
+
+      const { data: playerData, error: playerError } = await supabase
+        .from("players")
+        .select("id,person_id,naam,geslacht,actief")
+        .in("id", playerIds);
+
+      if (playerError) {
+        if (!cancelled) {
+          setTeamRosterError(playerError.message);
+          setTeamRosterLoading(false);
+        }
+        return;
+      }
+
+      const managedPlayers = (playerData ?? []) as Array<{
+        id: string;
+        person_id: string | null;
+        naam: string;
+        geslacht: Geslacht;
+        actief: boolean;
+      }>;
+
+      const personIds = Array.from(
+        new Set(
+          managedPlayers
+            .map((p) => p.person_id)
+            .filter((id): id is string => Boolean(id))
+        )
+      );
+
+      let peopleById = new Map<string, {
+        voornaam: string;
+        tussenvoegsel: string | null;
+        achternaam: string;
+        actief: boolean;
+      }>();
+
+      if (personIds.length) {
+        const { data: peopleData, error: peopleError } = await supabase
+          .from("people")
+          .select("id,voornaam,tussenvoegsel,achternaam,actief")
+          .in("id", personIds);
+
+        if (peopleError) {
+          if (!cancelled) {
+            setTeamRosterError(peopleError.message);
+            setTeamRosterLoading(false);
+          }
+          return;
+        }
+
+        peopleById = new Map(
+          (peopleData ?? []).map((p: any) => [
+            String(p.id),
+            {
+              voornaam: String(p.voornaam ?? ""),
+              tussenvoegsel: p.tussenvoegsel ? String(p.tussenvoegsel) : null,
+              achternaam: String(p.achternaam ?? ""),
+              actief: Boolean(p.actief),
+            },
+          ])
+        );
+      }
+
+      const playerById = new Map(managedPlayers.map((p) => [p.id, p]));
+
+      const roster: Player[] = teamMemberships
+        .flatMap<Player>((membership) => {
+          const player = playerById.get(String(membership.player_id));
+          if (!player || !player.actief) return [];
+
+          const person = player.person_id ? peopleById.get(player.person_id) : null;
+          if (person && !person.actief) return [];
+
+          const fullName = person
+            ? [person.voornaam, person.tussenvoegsel, person.achternaam]
+                .filter(Boolean)
+                .join(" ")
+            : String(player.naam ?? "").trim();
+
+          return [{
+            id: player.id,
+            naam: fullName || String(player.naam ?? "Onbekende speler"),
+            geslacht: player.geslacht,
+            status: membership.status,
+            actief: true,
+          }];
+        })
+        .sort((a, b) =>
+          a.status.localeCompare(b.status, "nl-NL") ||
+          a.naam.localeCompare(b.naam, "nl-NL")
+        );
+
+      if (cancelled) return;
+
+      const rosterIds = new Set(roster.map((p) => p.id));
+      const firstRosterLoad = !loadedRosterTeamIdRef.current;
+      let remembered: RememberedTeamLineup | null = null;
+      try {
+        const raw = localStorage.getItem(teamLineupStorageKey(activeTeamId));
+        if (raw) remembered = JSON.parse(raw) as RememberedTeamLineup;
+      } catch {
+        remembered = null;
+      }
+      loadedRosterTeamIdRef.current = activeTeamId;
+
+      setState((prev) => {
+        const nextSpeelSeconden: Record<string, number> = {};
+        roster.forEach((p) => {
+          nextSpeelSeconden[p.id] = prev.speelSeconden[p.id] ?? 0;
+        });
+
+        const fallbackToCurrent = firstRosterLoad && prev.matchTeamId === activeTeamId;
+        const sourceAanval = remembered?.aanval ?? (fallbackToCurrent ? prev.aanval : []);
+        const sourceVerdediging = remembered?.verdediging ?? (fallbackToCurrent ? prev.verdediging : []);
+        const used = new Set<string>();
+        const restoreFour = (source: (string | null)[]) =>
+          Array.from({ length: 4 }, (_, index) => {
+            const id = source[index] ?? null;
+            if (!id || !rosterIds.has(id) || used.has(id)) return null;
+            used.add(id);
+            return id;
+          });
+        const restoredAanval = restoreFour(sourceAanval);
+        const restoredVerdediging = restoreFour(sourceVerdediging);
+
+        return {
+          ...prev,
+          spelers: roster,
+          aanval: restoredAanval,
+          verdediging: restoredVerdediging,
+          vak1Aanvallend: remembered?.vak1Aanvallend ?? (fallbackToCurrent ? prev.vak1Aanvallend : true),
+          speelSeconden: nextSpeelSeconden,
+        };
+      });
+
+      setTeamRosterLoading(false);
+    };
+
+    void loadActiveTeamRoster();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser?.id, activeTeamId, teamContexts, teamRosterVersion]);
+
+  // Bewaar de laatst gekozen vakindeling apart per gebruiker en per echt team.
+  // Tijdens het omschakelen wachten we tot het nieuwe teamroster geladen is,
+  // zodat de opstelling van het vorige team nooit onder het nieuwe team belandt.
+  useEffect(() => {
+    if (!authUser || !activeTeamId || teamRosterLoading) return;
+    if (loadedRosterTeamIdRef.current !== activeTeamId) return;
+    const rosterIds = new Set(state.spelers.map((player) => player.id));
+    const clean = (positions: (string | null)[]) =>
+      positions.map((id) => id && rosterIds.has(id) ? id : null);
+    const remembered: RememberedTeamLineup = {
+      aanval: clean(state.aanval),
+      verdediging: clean(state.verdediging),
+      vak1Aanvallend: state.vak1Aanvallend,
+    };
+    try {
+      localStorage.setItem(teamLineupStorageKey(activeTeamId), JSON.stringify(remembered));
+    } catch {}
+  }, [authUser?.id, activeTeamId, teamRosterLoading, state.spelers, state.aanval, state.verdediging, state.vak1Aanvallend]);
+
   const [tab, setTab] =
-  useState<"dashboard" | "spelersanalyse" | "teamanalyse" | "spelers" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "doelen" | "portaal" | "voorbereiding" | "seizoen">("dashboard");
+  useState<"dashboard" | "wedstrijdinzichten" | "spelersanalyse" | "teamanalyse" | "spelers" | "personenbeheer" | "teamsbeheer" | "seizoenenbeheer" | "wedstrijdbeheer" | "vakken" | "wedstrijd" | "verslag" | "insights" | "combinaties" | "profielen" | "opstelling" | "wisseladvies" | "doelen" | "portaal" | "voorbereiding" | "seizoen">("dashboard");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -894,52 +2018,413 @@ export default function App() {
 const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const teamFileInputRef = useRef<HTMLInputElement | null>(null);
   const [dbSheets, setDbSheets] = useState<DatabaseSheets>(null);
+  const dbSheetsCacheRef = useRef<DatabaseSheets>(null);
+  const [localFallbackDbSheets, setLocalFallbackDbSheets] = useState<DatabaseSheets>(null);
+  type SupabaseHistoryStatus = "idle" | "loading" | "ready" | "error";
+  const [supabaseHistoryStatus, setSupabaseHistoryStatus] = useState<SupabaseHistoryStatus>("idle");
+  const [supabaseHistoryMessage, setSupabaseHistoryMessage] = useState("");
+  const [supabaseHistoryCount, setSupabaseHistoryCount] = useState(0);
+  const [localOnlyHistoryCount, setLocalOnlyHistoryCount] = useState(0);
+  const [portalPlayerFromSupabase, setPortalPlayerFromSupabase] = useState<Player | null>(null);
+  const [historyOwnerUserId, setHistoryOwnerUserId] = useState("");
+  const [historyRefreshVersion, setHistoryRefreshVersion] = useState(0);
+  useEffect(() => { dbSheetsCacheRef.current = dbSheets; }, [dbSheets]);
+
+  // Fase 26.4: analyses en historie worden standaard begrensd tot het actieve echte team.
+  // Nieuwe wedstrijden hebben team_id. Oude wedstrijden zonder team_id worden bewust
+  // niet stilzwijgend aan een team toegeschreven; die blijven beschikbaar voor een
+  // latere eenmalige migratie.
+  const legacyUnlinkedMatchCount = useMemo(
+    () => (dbSheets?.matches ?? []).filter((m: any) => !String(m.team_id ?? "").trim()).length,
+    [dbSheets]
+  );
+
+  const activeTeamHistoryDbSheets = useMemo<DatabaseSheetsData | null>(() => {
+    if (!dbSheets) return null;
+    // Een echt speleraccount krijgt uitsluitend het eigen, server-side gefilterde
+    // pakket. Een medewerker zonder teamtoegang krijgt bewust helemaal niets uit
+    // de lokale browsercache te zien.
+    if (!activeTeamId) return isTruePlayerAccount ? dbSheets : emptyHistoryDatabase();
+
+    const matches = (dbSheets.matches ?? []).filter(
+      (m: any) => String(m.team_id ?? "").trim() === activeTeamId
+    );
+    const matchIds = new Set(
+      matches.map((m: any) => String(m.wedstrijd_id ?? "").trim()).filter(Boolean)
+    );
+    const belongsToSelectedMatches = (row: any) =>
+      matchIds.has(String(row.wedstrijd_id ?? "").trim());
+
+    return {
+      ...dbSheets,
+      matches,
+      events: (dbSheets.events ?? []).filter(belongsToSelectedMatches),
+      attacks: (dbSheets.attacks ?? []).filter(belongsToSelectedMatches),
+      wissels: (dbSheets.wissels ?? []).filter(belongsToSelectedMatches),
+      vakperiodes: (dbSheets.vakperiodes ?? []).filter(belongsToSelectedMatches),
+    };
+  }, [dbSheets, activeTeamId, isTruePlayerAccount]);
+
+  const accessibleHistoryDbSheets = useMemo<DatabaseSheetsData | null>(() => {
+    if (!dbSheets) return null;
+    const allowedTeamIds = new Set(teamContexts.filter((context) => showTestTeams || !context.teamIsTest).map((context) => context.teamId));
+    const matches = (dbSheets.matches ?? []).filter((m: any) =>
+      allowedTeamIds.has(String(m.team_id ?? "").trim())
+    );
+    const matchIds = new Set(matches.map((m: any) => String(m.wedstrijd_id ?? "").trim()).filter(Boolean));
+    const belongsToAccessibleMatch = (row: any) => matchIds.has(String(row.wedstrijd_id ?? "").trim());
+    return {
+      ...dbSheets,
+      matches,
+      events: (dbSheets.events ?? []).filter(belongsToAccessibleMatch),
+      attacks: (dbSheets.attacks ?? []).filter(belongsToAccessibleMatch),
+      wissels: (dbSheets.wissels ?? []).filter(belongsToAccessibleMatch),
+      vakperiodes: (dbSheets.vakperiodes ?? []).filter(belongsToAccessibleMatch),
+    };
+  }, [dbSheets, teamContexts, showTestTeams]);
+
+  // Gearchiveerde wedstrijden blijven zichtbaar in Wedstrijden beheren, maar
+  // tellen nergens mee in dashboards, voorbereiding, doelen of speleranalyses.
+  const activeTeamDbSheets = useMemo<DatabaseSheetsData | null>(() => {
+    if (!activeTeamHistoryDbSheets) return null;
+    const matches = (activeTeamHistoryDbSheets.matches ?? []).filter((m: any) => !m.gearchiveerd);
+    const matchIds = new Set(
+      matches.map((m: any) => String(m.wedstrijd_id ?? "").trim()).filter(Boolean)
+    );
+    const belongsToActiveMatch = (row: any) =>
+      matchIds.has(String(row.wedstrijd_id ?? "").trim());
+    return {
+      ...activeTeamHistoryDbSheets,
+      matches,
+      events: (activeTeamHistoryDbSheets.events ?? []).filter(belongsToActiveMatch),
+      attacks: (activeTeamHistoryDbSheets.attacks ?? []).filter(belongsToActiveMatch),
+      wissels: (activeTeamHistoryDbSheets.wissels ?? []).filter(belongsToActiveMatch),
+      vakperiodes: (activeTeamHistoryDbSheets.vakperiodes ?? []).filter(belongsToActiveMatch),
+    };
+  }, [activeTeamHistoryDbSheets]);
+
+  type AnalysisPeriodFilter = "all" | "veld_najaar" | "zaal" | "veld_voorjaar";
+  const [analysisCompetitionYear, setAnalysisCompetitionYear] = useState("");
+  const [analysisPeriod, setAnalysisPeriod] = useState<AnalysisPeriodFilter>("all");
+
+  const competitionYearFromSeasonName = (value: unknown) => {
+    const name = String(value ?? "").trim();
+    const full = name.match(/(20\d{2})\s*\/\s*(20\d{2})/);
+    if (full) return `${full[1]}/${full[2]}`;
+
+    const single = name.match(/(20\d{2})/);
+    if (!single) return "";
+    const year = Number(single[1]);
+
+    if (/voorjaar/i.test(name)) return `${year - 1}/${year}`;
+    if (/najaar/i.test(name)) return `${year}/${year + 1}`;
+    return "";
+  };
+
+  const analysisCompetitionYears = useMemo(() => {
+    const values = new Set<string>();
+
+    teamContexts
+      .filter((c) => c.teamId === activeTeamId)
+      .forEach((c) => {
+        const year = competitionYearFromSeasonName(c.seasonName);
+        if (year) values.add(year);
+      });
+
+    (activeTeamDbSheets?.matches ?? []).forEach((m: any) => {
+      const year = competitionYearFromSeasonName(
+        m.team_seizoen_naam ?? m.seizoen ?? ""
+      );
+      if (year) values.add(year);
+    });
+
+    return Array.from(values).sort((a, b) => b.localeCompare(a, "nl-NL"));
+  }, [teamContexts, activeTeamId, activeTeamDbSheets]);
+
+  useEffect(() => {
+    if (!analysisCompetitionYears.length) {
+      if (analysisCompetitionYear) setAnalysisCompetitionYear("");
+      return;
+    }
+    if (!analysisCompetitionYears.includes(analysisCompetitionYear)) {
+      setAnalysisCompetitionYear(analysisCompetitionYears[0]);
+    }
+  }, [analysisCompetitionYears, analysisCompetitionYear]);
+
+  const analysisDbSheets = useMemo<DatabaseSheetsData | null>(() => {
+    if (!activeTeamDbSheets) return null;
+    if (!analysisCompetitionYear) return activeTeamDbSheets;
+
+    const matches = (activeTeamDbSheets.matches ?? []).filter((m: any) => {
+      const matchType = String(m.wedstrijdtype ?? "Competitie").trim();
+      if (matchType !== "Competitie") return false;
+
+      const seasonName = String(
+        m.team_seizoen_naam ?? m.seizoen ?? ""
+      ).trim();
+      if (competitionYearFromSeasonName(seasonName) !== analysisCompetitionYear) {
+        return false;
+      }
+
+      if (analysisPeriod === "all") return true;
+      if (analysisPeriod === "veld_najaar") return /veld\s*najaar/i.test(seasonName);
+      if (analysisPeriod === "zaal") return /zaal/i.test(seasonName);
+      return /veld\s*voorjaar/i.test(seasonName);
+    });
+
+    const matchIds = new Set(
+      matches.map((m: any) => String(m.wedstrijd_id ?? "").trim()).filter(Boolean)
+    );
+    const belongsToSelectedMatches = (row: any) =>
+      matchIds.has(String(row.wedstrijd_id ?? "").trim());
+
+    return {
+      ...activeTeamDbSheets,
+      matches,
+      events: (activeTeamDbSheets.events ?? []).filter(belongsToSelectedMatches),
+      attacks: (activeTeamDbSheets.attacks ?? []).filter(belongsToSelectedMatches),
+      wissels: (activeTeamDbSheets.wissels ?? []).filter(belongsToSelectedMatches),
+      vakperiodes: (activeTeamDbSheets.vakperiodes ?? []).filter(belongsToSelectedMatches),
+    };
+  }, [activeTeamDbSheets, analysisCompetitionYear, analysisPeriod]);
+
+  const analysisTabs = [
+    "dashboard","teamanalyse","insights","combinaties",
+    "profielen","opstelling","wisseladvies","seizoen"
+  ];
+
   const [databaseReady, setDatabaseReady] = useState(false);
   const [databaseSetupOpen, setDatabaseSetupOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [navSectionsOpen, setNavSectionsOpen] = useState({
+    wedstrijd: false,
+    analyse: true,
+    coaching: false,
+    beheer: false,
+  });
   const [portalPlayerId, setPortalPlayerId] = useState<string>(() => localStorage.getItem("korbiq-portal-player") ?? "");
   useEffect(() => {
     if (portalPlayerId) localStorage.setItem("korbiq-portal-player", portalPlayerId);
     else localStorage.removeItem("korbiq-portal-player");
   }, [portalPlayerId]);
   
-  const dbFileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Seizoensdatabase uit IndexedDB herstellen. Als er niets staat, laat de app
-  // bewust kiezen tussen een back-up herstellen en een nieuwe database starten.
+  // De browserdatabase blijft in fase 29 beschikbaar als cache en als terugval
+  // voor nog niet gemigreerde Excel-historie. Supabase is de primaire bron.
   useEffect(() => {
+    if (!authReady || !accessReady) return;
+    setDatabaseReady(false);
+    setHistoryOwnerUserId("");
+    if (authProfile?.role === "speler") {
+      const empty = emptyHistoryDatabase();
+      dbSheetsCacheRef.current = empty;
+      setPortalPlayerFromSupabase(null);
+      setSupabaseHistoryStatus("idle");
+      setSupabaseHistoryMessage("");
+      setLocalFallbackDbSheets(empty);
+      setDbSheets(empty);
+      setDatabaseSetupOpen(false);
+      setDatabaseReady(true);
+      setHistoryOwnerUserId(authUser?.id ?? "");
+      return;
+    }
+
+    if (!actualHasStaffRole) {
+      const empty = emptyHistoryDatabase();
+      dbSheetsCacheRef.current = empty;
+      setLocalFallbackDbSheets(empty);
+      setDbSheets(empty);
+      setDatabaseSetupOpen(false);
+      setDatabaseReady(true);
+      setHistoryOwnerUserId(authUser?.id ?? "");
+      return;
+    }
+
+    if (actualHasStaffRole && !activeTeamId) {
+      const empty = emptyHistoryDatabase();
+      dbSheetsCacheRef.current = empty;
+      setPortalPlayerFromSupabase(null);
+      setSupabaseHistoryStatus("idle");
+      setSupabaseHistoryMessage("Geen team gekoppeld; er wordt geen lokale historie geladen.");
+      setSupabaseHistoryCount(0);
+      setLocalOnlyHistoryCount(0);
+      setLocalFallbackDbSheets(empty);
+      setDbSheets(empty);
+      setDatabaseSetupOpen(false);
+      setDatabaseReady(true);
+      setHistoryOwnerUserId(authUser?.id ?? "");
+      return;
+    }
+
+    const restrictLocalHistoryToAccess = (source: DatabaseSheetsData): DatabaseSheetsData => {
+      if (actualIsAdmin || actualIsTc) return source;
+      const allowedTeamIds = new Set(teamContexts.map((context) => context.teamId));
+      const matches = (source.matches ?? []).filter((row:any) =>
+        allowedTeamIds.has(String(row.team_id ?? "").trim())
+      );
+      const matchIds = new Set(matches.map((row:any)=>String(row.wedstrijd_id??"").trim()).filter(Boolean));
+      const allowedDetail = (row:any) =>
+        allowedTeamIds.has(String(row.team_id??"").trim()) ||
+        matchIds.has(String(row.wedstrijd_id??"").trim());
+      return {
+        ...source,
+        matches,
+        events: (source.events ?? []).filter(allowedDetail),
+        attacks: (source.attacks ?? []).filter(allowedDetail),
+        wissels: (source.wissels ?? []).filter(allowedDetail),
+        vakperiodes: (source.vakperiodes ?? []).filter(allowedDetail),
+      };
+    };
+
     let mounted = true;
     loadDatabaseFromBrowser()
       .then((saved) => {
         if (!mounted) return;
-        if (saved) {
-          setDbSheets(saved);
-          setDatabaseSetupOpen(false);
-        } else {
-          setDatabaseSetupOpen(true);
-        }
+        const fallback = restrictLocalHistoryToAccess(saved ?? emptyHistoryDatabase());
+        dbSheetsCacheRef.current = fallback;
+        setLocalFallbackDbSheets(fallback);
+        setDbSheets(fallback);
+        setDatabaseSetupOpen(false);
       })
       .catch((err) => {
         console.warn("Kon browserdatabase niet laden", err);
-        if (mounted) setDatabaseSetupOpen(true);
+        if (mounted) {
+          const fallback = emptyHistoryDatabase();
+          dbSheetsCacheRef.current = fallback;
+          setLocalFallbackDbSheets(fallback);
+          setDbSheets(fallback);
+          setDatabaseSetupOpen(false);
+        }
       })
-      .finally(() => { if (mounted) setDatabaseReady(true); });
+      .finally(() => {
+        if (!mounted) return;
+        setDatabaseReady(true);
+        setHistoryOwnerUserId(authUser?.id ?? "");
+      });
     return () => { mounted = false; };
-  }, []);
+  }, [authReady, accessReady, authUser?.id, authProfile?.id, authProfile?.role, actualHasStaffRole, actualIsAdmin, actualIsTc, activeTeamId, teamContexts]);
 
-  // Ook later in de sessie bewaken: zonder database mag niet ongemerkt
-  // een nieuwe wedstrijd worden gestart. Een bewust nieuwe, lege database
-  // is wél een geldig DatabaseSheetsData-object en triggert dit dus niet.
+  // Haal na het inloggen de centrale historie op van ieder team waarvoor de
+  // gebruiker toegang heeft. Teamgerichte dashboards filteren deze set verder
+  // op het actieve team; overzichts- en beheerschermen kunnen zo onafhankelijk
+  // daarvan veilig "Alle teams" tonen. De bestaande RPC/RLS blijft leidend.
   useEffect(() => {
-    if (databaseReady && !dbSheets) setDatabaseSetupOpen(true);
-  }, [databaseReady, dbSheets]);
+    if (!databaseReady || !authUser) return;
+    if (!isTruePlayerAccount && !activeTeamId) return;
+    let cancelled = false;
+
+    const loadSupabaseHistory = async () => {
+      setSupabaseHistoryStatus("loading");
+      setSupabaseHistoryMessage(isTruePlayerAccount ? "Persoonlijke historie laden…" : "Wedstrijdhistorie uit Supabase laden…");
+      const accessibleTeamIds = Array.from(new Set(teamContexts.map((context) => context.teamId).filter(Boolean)));
+      const personalResult = isTruePlayerAccount
+        ? await supabase.rpc("load_my_active_player_history")
+        : null;
+      const teamResults = isTruePlayerAccount
+        ? []
+        : await Promise.all(accessibleTeamIds.map(async (teamId) => ({
+            teamId,
+            result: await supabase.rpc("load_match_history", { p_team_id: teamId }),
+          })));
+      const failedTeamResult = teamResults.find(({ result }) => result.error);
+      const data = isTruePlayerAccount
+        ? personalResult?.data
+        : teamResults.map(({ result }) => result.data);
+      const error = isTruePlayerAccount ? personalResult?.error : failedTeamResult?.result.error;
+
+      if (cancelled) return;
+      if (error) {
+        setSupabaseHistoryStatus("error");
+        setSupabaseHistoryMessage(`Supabase-historie kon niet worden geladen: ${error.message}`);
+        if (isTruePlayerAccount) {
+          setPortalPlayerFromSupabase(null);
+          setSupabaseHistoryCount(0);
+          setLocalOnlyHistoryCount(0);
+          setDbSheets(emptyHistoryDatabase());
+        } else {
+          setDbSheets((current) => current ?? localFallbackDbSheets ?? emptyHistoryDatabase());
+        }
+        return;
+      }
+
+      const remote = isTruePlayerAccount
+        ? supabaseHistoryToDatabase(data)
+        : teamResults.reduce<DatabaseSheetsData>((combined, { result: teamResult }) => {
+            const teamHistory = supabaseHistoryToDatabase(teamResult.data);
+            combined.matches.push(...teamHistory.matches);
+            combined.events.push(...teamHistory.events);
+            combined.attacks.push(...teamHistory.attacks);
+            combined.wissels.push(...teamHistory.wissels);
+            combined.vakperiodes ??= [];
+            combined.vakperiodes.push(...(teamHistory.vakperiodes ?? []));
+            return combined;
+          }, emptyHistoryDatabase());
+      if (isTruePlayerAccount) {
+        const player = (data as any)?.player;
+        setPortalPlayerFromSupabase(player?.id ? {
+          id: String(player.id),
+          naam: String(player.naam ?? authProfile?.speler_naam ?? "Speler"),
+          geslacht: player.geslacht === "Heer" ? "Heer" : "Dame",
+          status: player.status === "Gast" ? "Gast" : "Basisspeler",
+          actief: player.actief !== false,
+        } : null);
+        setDbSheets(remote);
+        setSupabaseHistoryCount(remote.matches.length);
+        setLocalOnlyHistoryCount(0);
+        setSupabaseHistoryStatus("ready");
+        setSupabaseHistoryMessage(
+          `${remote.matches.length} persoonlijke wedstrijd${remote.matches.length === 1 ? "" : "en"} veilig geladen.`
+        );
+        return;
+      }
+
+      setPortalPlayerFromSupabase(null);
+      const remoteMatchIds = new Set(
+        remote.matches.map((row: any) => String(row.wedstrijd_id ?? "")).filter(Boolean)
+      );
+      const local = dbSheetsCacheRef.current ?? localFallbackDbSheets ?? emptyHistoryDatabase();
+      const accessibleTeamIdSet = new Set(accessibleTeamIds);
+      const keepLocalMatch = (row: any) =>
+        !accessibleTeamIdSet.has(String(row.team_id ?? "")) ||
+        !remoteMatchIds.has(String(row.wedstrijd_id ?? ""));
+      const keepLocalDetail = (row: any) =>
+        !remoteMatchIds.has(String(row.wedstrijd_id ?? ""));
+
+      const merged: DatabaseSheetsData = {
+        ...local,
+        matches: [...(local.matches ?? []).filter(keepLocalMatch), ...remote.matches],
+        events: [...(local.events ?? []).filter(keepLocalDetail), ...remote.events],
+        attacks: [...(local.attacks ?? []).filter(keepLocalDetail), ...remote.attacks],
+        wissels: [...(local.wissels ?? []).filter(keepLocalDetail), ...remote.wissels],
+        vakperiodes: [...(local.vakperiodes ?? []).filter(keepLocalDetail), ...(remote.vakperiodes ?? [])],
+      };
+
+      setDbSheets(merged);
+      setSupabaseHistoryCount(remote.matches.length);
+      setLocalOnlyHistoryCount((local.matches ?? []).filter(keepLocalMatch).filter((row: any) => {
+        const teamId = String(row.team_id ?? "");
+        return !row.supabase_match_id && (accessibleTeamIdSet.has(teamId) || !teamId);
+      }).length);
+      setSupabaseHistoryStatus("ready");
+      setSupabaseHistoryMessage(
+        `${remote.matches.length} wedstrijd${remote.matches.length === 1 ? "" : "en"} van ${accessibleTeamIds.length} toegankelijk${accessibleTeamIds.length === 1 ? " team" : "e teams"} geladen.`
+      );
+      setDatabaseSetupOpen(false);
+    };
+
+    void loadSupabaseHistory();
+    return () => { cancelled = true; };
+  }, [databaseReady, authUser?.id, authProfile?.speler_naam, activeTeamId, isTruePlayerAccount, localFallbackDbSheets, historyRefreshVersion, teamContexts]);
 
   useEffect(() => {
     if (!databaseReady || !dbSheets) return;
+    // Alleen TC/Admin onderhouden zolang fase 30 nog niet is uitgevoerd de
+    // gedeelde migratiecache. Een coach mag zijn gefilterde weergave nooit
+    // terugschrijven over cachegegevens van andere teams.
+    if (isTruePlayerAccount || (!actualIsAdmin && !actualIsTc)) return;
     saveDatabaseToBrowser(dbSheets).catch((err) =>
       console.warn("Kon browserdatabase niet opslaan", err)
     );
-  }, [dbSheets, databaseReady]);
+  }, [dbSheets, databaseReady, isTruePlayerAccount, actualIsAdmin, actualIsTc]);
 
   // Persist
   // Timer (intern: op-tellen; UI toont resterend) + balbezit
@@ -1627,601 +3112,264 @@ const exportTeam = () => {
   URL.revokeObjectURL(url);
 };
 
-const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-
-  reader.onload = (event) => {
-    try {
-      const data = new Uint8Array(event.target?.result as ArrayBuffer);
-      const wb = XLSX.read(data, { type: "array" });
-      const rows = (name: string) =>
-        wb.Sheets[name] ? (XLSX.utils.sheet_to_json(wb.Sheets[name]) as any[]) : [];
-
-      const imported: DatabaseSheetsData = {
-        events: rows("Events"),
-        attacks: rows("Attacks"),
-        wissels: rows("Wissels"),
-        matches: rows("Wedstrijden"),
-        spelers: rows("Spelers"),
-        team: rows("Team"),
-        vakindeling: rows("Vakindeling"),
-        instellingen: rows("Instellingen"),
-        databaseInfo: rows("DatabaseInfo"),
-        vakperiodes: rows("Vakperiodes"),
-      };
-
-      const info = imported.databaseInfo?.[0] ?? {};
-      const settings = imported.instellingen?.[0] ?? {};
-      const hasFullBackup = (imported.spelers?.length ?? 0) > 0;
-      const importedPlayers: Player[] = hasFullBackup
-        ? (imported.spelers ?? []).map<Player>((p: any) => ({
-            id: String(p.speler_id ?? p.id ?? ""),
-            naam: String(p.naam ?? p.spelerNaam ?? ""),
-            geslacht: p.geslacht === "Heer" ? "Heer" : "Dame",
-            status: p.status === "Gast" ? "Gast" : "Basisspeler",
-            actief: !(
-              p.actief === false ||
-              Number(p.actief) === 0 ||
-              ["nee", "inactief", "false"].includes(String(p.actief ?? "").trim().toLowerCase())
-            ),
-            foto: typeof p.foto === "string" && p.foto ? p.foto : undefined,
-          })).filter((p) => Boolean(p.id && p.naam))
-        : [];
-
-      const vak1Rows = (imported.vakindeling ?? [])
-        .filter((r: any) => Number(r.vak_id) === 1)
-        .sort((a: any, b: any) => Number(a.positie ?? 0) - Number(b.positie ?? 0));
-      const vak2Rows = (imported.vakindeling ?? [])
-        .filter((r: any) => Number(r.vak_id) === 2)
-        .sort((a: any, b: any) => Number(a.positie ?? 0) - Number(b.positie ?? 0));
-      const toVak = (vakRows: any[]) => Array.from({ length: 4 }, (_, i) => {
-        const row = vakRows.find((r: any) => Number(r.positie) === i + 1) ?? vakRows[i];
-        const id = row?.speler_id ?? row?.spelerId ?? "";
-        return id ? String(id) : null;
-      });
-
-      const activeImportedIds = new Set(importedPlayers.filter((p) => p.actief).map((p) => p.id));
-      const restoredVak1 = toVak(vak1Rows).map((id) => id && activeImportedIds.has(id) ? id : null);
-      const restoredVak2 = toVak(vak2Rows).map((id) => id && activeImportedIds.has(id) ? id : null);
-      const restoredVak1Aanvallend =
-        settings.vak1_aanvallend === false || String(settings.vak1_aanvallend).toLowerCase() === "nee"
-          ? false
-          : true;
-      const seasonOptionsFromFile = (() => {
-        try {
-          const parsed = JSON.parse(String(settings.seizoen_opties_json ?? "[]"));
-          return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string" && x.trim()) : [];
-        } catch { return []; }
-      })();
-
-      setDbSheets(imported);
-      setDatabaseSetupOpen(false);
-
-      if (hasFullBackup) {
-        setState((prev) => ({
-          ...prev,
-          spelers: importedPlayers,
-          aanval: restoredVak1Aanvallend ? restoredVak1 : restoredVak2,
-          verdediging: restoredVak1Aanvallend ? restoredVak2 : restoredVak1,
-          vak1Aanvallend: restoredVak1Aanvallend,
-          halfMinuten: Number(settings.half_duur_minuten) || prev.halfMinuten,
-          autoVakWisselNa2:
-            settings.auto_vakwissel_na_2 === true || String(settings.auto_vakwissel_na_2).toLowerCase() === "ja",
-          aanvalLinks:
-            settings.aanval_links === false || String(settings.aanval_links).toLowerCase() === "nee" ? false : true,
-          season: String(settings.actief_seizoen ?? info.actief_seizoen ?? prev.season),
-          seasonOptions: Array.from(new Set([
-            ...prev.seasonOptions,
-            ...seasonOptionsFromFile,
-            String(settings.actief_seizoen ?? info.actief_seizoen ?? prev.season),
-          ].filter(Boolean))),
-          matchType: (["Competitie", "Oefenwedstrijd", "Toernooi"].includes(String(settings.standaard_wedstrijdtype))
-            ? String(settings.standaard_wedstrijdtype)
-            : prev.matchType) as MatchType,
-          // Een import herstelt de database/configuratie, niet een half gespeelde wedstrijd.
-          scoreThuis: 0,
-          scoreUit: 0,
-          tijdSeconden: 0,
-          klokLoopt: false,
-          log: [],
-          possessionOwner: null,
-          possessionThuisSeconden: 0,
-          possessionUitSeconden: 0,
-          speelSeconden: {},
-          goalsSinceLastSwitch: 0,
-          currentHalf: 1,
-          activeVak: "aanvallend",
-          attacks: [],
-          currentAttackId: null,
-          fieldEvents: [],
-          markerGroup: 0,
-          opponentName: "",
-          matchEnded: false,
-        }));
-      }
-
-      const count = imported.matches.length;
-      alert(
-        hasFullBackup
-          ? `Volledige back-up hersteld ✅\n${count} wedstrijd${count === 1 ? "" : "en"}, spelers, vakindeling en instellingen zijn geladen.`
-          : `Excel database geladen ✅\n${count} wedstrijd${count === 1 ? "" : "en"}. Dit is een oudere database zonder teamconfiguratie.`
-      );
-    } catch (err) {
-      console.error(err);
-      alert("Kon dit Excel-bestand niet inlezen 😅");
-    } finally {
-      e.target.value = "";
-    }
-  };
-
-  reader.readAsArrayBuffer(file);
-};
-
-
-
-
-
-
-const exportToExcel = () => {
-  // Stabiel wedstrijd-ID: opnieuw exporteren vervangt dezelfde wedstrijd i.p.v. dupliceren.
-  const exportDate = new Date().toLocaleDateString("sv-SE");
-  const opponentSlug = (state.opponentName || "tegenstander")
+// Fase 28: bouw één compleet pakket dat door save_match_bundle in één
+// PostgreSQL-transactie wordt opgeslagen.
+const buildSupabaseMatchBundle = (snapshot: AppState) => {
+  const matchDate = snapshot.matchDate || new Date().toLocaleDateString("sv-SE");
+  const opponentSlug = (snapshot.opponentName || "tegenstander")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "tegenstander";
-  const wedstrijdId = `WED-${exportDate}-${state.homeAway}-${opponentSlug}`;
+  const legacyMatchId = snapshot.matchLegacyId ||
+    `WED-${matchDate}-${snapshot.homeAway || "onbekend"}-${opponentSlug}`;
 
-  const alreadyExists = (dbSheets?.matches ?? []).some(
-    (m: any) => String(m.wedstrijd_id ?? "") === wedstrijdId
-  );
-  if (alreadyExists && !confirm("Deze wedstrijd staat al in de database. Bestaande versie vervangen?")) {
-    return;
+  const isCompetition = snapshot.matchType === "Competitie";
+  const teamId = snapshot.matchTeamId || activeTeamContext?.teamId || "";
+  const teamSeasonId = isCompetition
+    ? (snapshot.matchTeamSeasonId || activeTeamContext?.id || "")
+    : "";
+  const seasonId = isCompetition
+    ? (snapshot.matchSeasonId || activeTeamContext?.seasonId || "")
+    : "";
+  const teamName = snapshot.matchTeamName || activeTeamContext?.teamName || "Korbis";
+  const seasonName = isCompetition
+    ? (snapshot.matchSeasonName || activeTeamContext?.seasonName || snapshot.season)
+    : "";
+
+  if (!teamId) throw new Error("Er is geen team aan deze wedstrijd gekoppeld.");
+  if (isCompetition && (!teamSeasonId || !seasonId)) {
+    throw new Error("Er is geen geldige competitieperiode aan deze wedstrijd gekoppeld.");
   }
 
-  // 🔹 Gemeenschappelijke velden voor naamgeving
-  const thuisTeamNaam = "Korbis";
-  const uitTeamNaam = state.opponentName || "Tegenstander";
-  const locatieLabel = state.homeAway === "thuis" ? "Thuis" : state.homeAway === "uit" ? "Uit" : "";
+  const location = snapshot.homeAway === "thuis" ? "Thuis" : snapshot.homeAway === "uit" ? "Uit" : "";
+  const opponentName = snapshot.opponentName.trim() || "Tegenstander";
+  const matchName = snapshot.homeAway === "uit"
+    ? `${opponentName} - ${teamName}`
+    : `${teamName} - ${opponentName}`;
+  const playerById = new Map(snapshot.spelers.map((player) => [player.id, player]));
 
-  const wedstrijdNaam =
-    state.homeAway === "thuis"
-      ? `${thuisTeamNaam} - ${uitTeamNaam}`
-      : `${uitTeamNaam} - ${thuisTeamNaam}`;
+  const chronologicalLog = snapshot.log.slice().reverse();
+  let scoreFor = 0;
+  let scoreAgainst = 0;
+  const scoreAtEvent = new Map<string, { for: number; against: number }>();
+  chronologicalLog.forEach((event) => {
+    const ownGoal = event.soort === "Kans" && event.vak === "aanvallend" &&
+      (event.reden === "Gescoord" || event.reden === "Doelpunt");
+    const opponentGoal = event.soort === "Gemis" && event.vak === "verdedigend" &&
+      (event.reden === "Doorgelaten" || event.reden === "Doelpunt");
+    if (ownGoal) scoreFor += 1;
+    if (opponentGoal) scoreAgainst += 1;
+    scoreAtEvent.set(event.id, { for: scoreFor, against: scoreAgainst });
+  });
 
-  // ---------- 0) TUSSENSTAND PER EVENT OPBOUWEN ----------
-  const sortedForScore = state.log.slice().reverse();
-  let scoreThuis = 0;
-  let scoreUit = 0;
-  const scoreAtEvent = new Map<string, { thuis: number; uit: number }>();
+  const findFieldEvent = (event: LogEvent) => {
+    if (!event.attackId || !event.vak) return undefined;
+    const candidates = snapshot.fieldEvents.filter(
+      (fieldEvent) => fieldEvent.attackId === event.attackId && fieldEvent.vak === event.vak
+    );
+    return candidates.reduce<FieldEvent | undefined>((best, candidate) => {
+      if (!best) return candidate;
+      return Math.abs(candidate.tijdSeconden - event.tijdSeconden) <=
+        Math.abs(best.tijdSeconden - event.tijdSeconden) ? candidate : best;
+    }, undefined);
+  };
 
-  for (const e of sortedForScore) {
-    const isThuisGoal =
-      e.soort === "Kans" &&
-      e.vak === "aanvallend" &&
-      (e.reden === "Gescoord" || e.reden === "Doelpunt");
+  const halfSeconds = (Number.isFinite(snapshot.halfMinuten)
+    ? snapshot.halfMinuten
+    : DEFAULT_STATE.halfMinuten) * 60;
 
-    const isUitGoal =
-      e.soort === "Gemis" &&
-      e.vak === "verdedigend" &&
-      (e.reden === "Doorgelaten" || e.reden === "Doelpunt");
-
-    if (isThuisGoal) scoreThuis++;
-    if (isUitGoal) scoreUit++;
-
-    scoreAtEvent.set(e.id, { thuis: scoreThuis, uit: scoreUit });
-  }
-
-  // ---------- 1) EVENTS SHEET (zonder wissels) ----------
-  const eventsForSheet = state.log
-    .slice()
-    .reverse()
-    .filter((e) => e.soort !== "Wissel");
-
-  const eventRows = eventsForSheet.map((e) => {
-    const attackMeta = e.attackId
-      ? state.attacks.find((a) => a.id === e.attackId)
-      : undefined;
-
-    const aanvalDuurSeconden =
-      attackMeta && attackMeta.endSeconden != null
-        ? attackMeta.endSeconden - attackMeta.startSeconden
+  const events = chronologicalLog
+    .filter((event) => event.soort !== "Wissel")
+    .map((event) => {
+      const attack = event.attackId
+        ? snapshot.attacks.find((candidate) => candidate.id === event.attackId)
         : undefined;
+      const fieldEvent = findFieldEvent(event);
+      const combinationPlayerIds = event.spelerIds ?? attack?.spelerIds ?? [];
+      const eventScore = scoreAtEvent.get(event.id);
+      const rawTeam = event.team ??
+        (event.vak === "aanvallend" ? "thuis" : event.vak === "verdedigend" ? "uit" : undefined);
+      const attackDuration = attack?.endSeconden != null
+        ? Math.max(0, attack.endSeconden - attack.startSeconden)
+        : null;
+      const playerId = event.spelerId && event.spelerId !== TEGENSTANDER_ID
+        ? event.spelerId
+        : null;
 
-    const findFieldEventForLog = (logEv: LogEvent): FieldEvent | undefined => {
-      if (!logEv.attackId || !logEv.vak) return undefined;
-
-      const candidates = state.fieldEvents.filter(
-        (fe) => fe.attackId === logEv.attackId && fe.vak === logEv.vak
-      );
-      if (candidates.length === 0) return undefined;
-
-      let best = candidates[0];
-      let bestDelta = Math.abs(best.tijdSeconden - logEv.tijdSeconden);
-
-      for (const fe of candidates) {
-        const delta = Math.abs(fe.tijdSeconden - logEv.tijdSeconden);
-        if (delta <= bestDelta) {
-          best = fe;
-          bestDelta = delta;
-        }
-      }
-      return best;
-    };
-
-    const fieldEv = findFieldEventForLog(e);
-
-    const halfMinuten2 = Number.isFinite(state.halfMinuten)
-      ? state.halfMinuten
-      : DEFAULT_STATE.halfMinuten;
-    const totalSeconds2 = halfMinuten2 * 60;
-
-    const resterend =
-      e.resterendSeconden ?? Math.max(totalSeconds2 - e.tijdSeconden, 0);
-
-    const score = scoreAtEvent.get(e.id);
-
-    const actieLabel =
-      e.actie ??
-      (e.soort === "Schot" || e.soort === "Rebound" ? e.soort : "");
-
-    const uitkomstLabel = e.resultaat ?? "";
-
-    const rawTeam: "thuis" | "uit" | undefined =
-      e.team ??
-      (e.vak === "aanvallend"
-        ? "thuis"
-        : e.vak === "verdedigend"
-        ? "uit"
-        : undefined);
-
-    const teamLabel = rawTeam
-      ? rawTeam === "thuis"
-        ? thuisTeamNaam
-        : uitTeamNaam
-      : "";
-
-    return {
-      wedstrijd_id: wedstrijdId,
-      wedstrijd_naam: wedstrijdNaam,        // 👈 nieuw
-      locatie: locatieLabel,
-      seizoen: state.season,
-      wedstrijdtype: state.matchType,
-      id: e.id,
-      tijd_verstreken: formatTime(e.tijdSeconden),
-      klok_resterend: formatTime(resterend),
-      wedstrijd_minuut:
-        e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
-      vak: e.vak ?? "",
-      vak_id: e.vakId ?? attackMeta?.vakId ?? "",
-      combinatie_key: e.combinatieKey ?? attackMeta?.combinatieKey ?? "",
-      combinatie_speler_ids: JSON.stringify(e.spelerIds ?? attackMeta?.spelerIds ?? []),
-      combinatie_spelers: (e.spelerIds ?? attackMeta?.spelerIds ?? []).map((id) => spelersMap.get(id)?.naam ?? id).join(" · "),
-      team: teamLabel,
-      actie: actieLabel,
-      uitkomst: uitkomstLabel,
-      reden: e.reden,
-      spelerId: e.spelerId || "",
-      spelerNaam:
-        e.spelerId === TEGENSTANDER_ID
+      return {
+        source_event_id: event.id,
+        elapsed_seconds: event.tijdSeconden,
+        remaining_seconds: event.resterendSeconden ?? Math.max(halfSeconds - (event.tijdSeconden % halfSeconds), 0),
+        match_minute: event.wedstrijdMinuut ?? Math.max(1, Math.ceil(event.tijdSeconden / 60)),
+        vak: event.vak ?? null,
+        vak_id: event.vakId ?? attack?.vakId ?? null,
+        combination_key: event.combinatieKey ?? attack?.combinatieKey ?? null,
+        combination_player_ids: combinationPlayerIds,
+        team_label: rawTeam === "thuis" ? teamName : rawTeam === "uit" ? opponentName : null,
+        action: event.actie ?? event.type ?? event.soort,
+        result: event.resultaat ?? null,
+        reason: event.reden,
+        player_id: playerId,
+        player_name_snapshot: event.spelerId === TEGENSTANDER_ID
           ? "Tegenstander"
-          : e.spelerId
-          ? spelersMap.get(e.spelerId)?.naam || ""
-          : "",
-      score_korbis: score?.thuis ?? "",
-      score_tegenstander: score?.uit ?? "",
-      x_pct: fieldEv ? Number(fieldEv.x.toFixed(1)) : "",
-      y_pct: fieldEv ? Number(fieldEv.y.toFixed(1)) : "",
-      aanval_nr: e.attackIndex ?? "",
-      aanval_start: attackMeta ? formatTime(attackMeta.startSeconden) : "",
-      aanval_einde:
-        attackMeta?.endSeconden != null
-          ? formatTime(attackMeta.endSeconden)
-          : "",
-      aanval_duur:
-        aanvalDuurSeconden != null ? formatTime(aanvalDuurSeconden) : "",
-    };
-  });
+          : playerId ? playerById.get(playerId)?.naam ?? null : null,
+        score_for: eventScore?.for ?? null,
+        score_against: eventScore?.against ?? null,
+        x_pct: fieldEvent ? Number(fieldEvent.x.toFixed(1)) : null,
+        y_pct: fieldEvent ? Number(fieldEvent.y.toFixed(1)) : null,
+        attack_number: event.attackIndex ?? attack?.index ?? null,
+        attack_start_seconds: attack?.startSeconden ?? null,
+        attack_end_seconds: attack?.endSeconden ?? null,
+        attack_duration_seconds: attackDuration,
+        payload: { ...event, field_event: fieldEvent ?? null },
+      };
+    });
 
-  // ---------- 2) ATTACKS SHEET ----------
-  const attackRows = state.attacks.map((a) => {
-    const eventsInAttack = state.log.filter((e) => e.attackId === a.id);
-    const schoten = eventsInAttack.filter((e) => e.actie === "Schot").length;
-    const doorloop = eventsInAttack.filter((e) => e.actie === "Doorloop").length;
-    const vrije = eventsInAttack.filter((e) => e.actie === "Vrijebal").length;
-    const straf = eventsInAttack.filter((e) => e.actie === "Strafworp").length;
-    const duurSeconden =
-      a.endSeconden != null ? a.endSeconden - a.startSeconden : undefined;
-
-    const teamLabel =
-      a.team === "thuis" ? thuisTeamNaam : uitTeamNaam;
-
+  const attacks = snapshot.attacks.map((attack) => {
+    const attackEvents = snapshot.log.filter((event) => event.attackId === attack.id);
+    const endSeconds = attack.endSeconden ?? snapshot.tijdSeconden;
     return {
-      wedstrijd_id: wedstrijdId,
-      wedstrijd_naam: wedstrijdNaam,        // 👈 nieuw
-      locatie: locatieLabel,
-      seizoen: state.season,
-      wedstrijdtype: state.matchType,
-      aanval_nr: a.index,
-      team: teamLabel,
-      vak: a.vak === "aanvallend" ? "Aanvallend" : "Verdedigend",
-      vak_id: a.vakId ?? "",
-      combinatie_key: a.combinatieKey ?? "",
-      combinatie_speler_ids: JSON.stringify(a.spelerIds ?? []),
-      combinatie_spelers: (a.spelerIds ?? []).map((id) => spelersMap.get(id)?.naam ?? id).join(" · "),
-      start: formatTime(a.startSeconden),
-      einde: a.endSeconden != null ? formatTime(a.endSeconden) : "",
-      duur: duurSeconden != null ? formatTime(duurSeconden) : "",
-      schoten,
-      doorloop,
-      vrije_ballen: vrije,
-      strafworpen: straf,
+      attack_number: attack.index,
+      team_label: attack.team === "thuis" ? teamName : opponentName,
+      vak: attack.vak,
+      vak_id: attack.vakId ?? null,
+      combination_key: attack.combinatieKey ?? null,
+      combination_player_ids: attack.spelerIds ?? [],
+      start_seconds: attack.startSeconden,
+      end_seconds: endSeconds,
+      duration_seconds: Math.max(0, endSeconds - attack.startSeconden),
+      shots: attackEvents.filter((event) => event.actie === "Schot").length,
+      run_throughs: attackEvents.filter((event) => event.actie === "Doorloop").length,
+      free_balls: attackEvents.filter((event) => event.actie === "Vrijebal").length,
+      penalties: attackEvents.filter((event) => event.actie === "Strafworp").length,
+      payload: attack,
     };
   });
 
-  // ---------- 3) WISSELS SHEET ----------
-  const wisselEvents = state.log
-    .slice()
-    .reverse()
-    .filter((e) => e.soort === "Wissel");
+  const substitutions = chronologicalLog
+    .filter((event) => event.soort === "Wissel")
+    .map((event) => {
+      const eventScore = scoreAtEvent.get(event.id);
+      const rawTeam = event.team ??
+        (event.vak === "aanvallend" ? "thuis" : event.vak === "verdedigend" ? "uit" : undefined);
+      const playerId = event.spelerId && event.spelerId !== TEGENSTANDER_ID
+        ? event.spelerId
+        : null;
+      return {
+        source_event_id: event.id,
+        elapsed_seconds: event.tijdSeconden,
+        match_minute: event.wedstrijdMinuut ?? Math.max(1, Math.ceil(event.tijdSeconden / 60)),
+        vak: event.vak ?? null,
+        vak_id: event.vakId ?? null,
+        team_label: rawTeam === "thuis" ? teamName : rawTeam === "uit" ? opponentName : null,
+        position: event.pos ?? null,
+        substitution_type: event.reden,
+        player_id: playerId,
+        player_name_snapshot: playerId ? playerById.get(playerId)?.naam ?? null : null,
+        score_for: eventScore?.for ?? null,
+        score_against: eventScore?.against ?? null,
+        payload: event,
+      };
+    });
 
-  const wisselRows = wisselEvents.map((e) => {
-    const score = scoreAtEvent.get(e.id);
-
-    const rawTeam: "thuis" | "uit" | undefined =
-      e.team ??
-      (e.vak === "aanvallend"
-        ? "thuis"
-        : e.vak === "verdedigend"
-        ? "uit"
-        : undefined);
-
-    const teamLabel = rawTeam
-      ? rawTeam === "thuis"
-        ? thuisTeamNaam
-        : uitTeamNaam
-      : "";
-
+  const vakPeriods = snapshot.vakPeriods.map((period) => {
+    const endSeconds = period.endSeconden ?? snapshot.tijdSeconden;
     return {
-      wedstrijd_id: wedstrijdId,
-      wedstrijd_naam: wedstrijdNaam,        // 👈 nieuw
-      locatie: locatieLabel,
-      seizoen: state.season,
-      wedstrijdtype: state.matchType,
-      id: e.id,
-      tijd_verstreken: formatTime(e.tijdSeconden),
-      wedstrijd_minuut:
-        e.wedstrijdMinuut ?? Math.max(1, Math.ceil(e.tijdSeconden / 60)),
-      vak: e.vak ?? "",
-      vak_id: e.vakId ?? "",
-      team: teamLabel,
-      positie: e.pos ?? "",
-      wissel: e.reden,
-      spelerId: e.spelerId || "",
-      spelerNaam: e.spelerId ? spelersMap.get(e.spelerId)?.naam || "" : "",
-      score_korbis: score?.thuis ?? "",
-      score_tegenstander: score?.uit ?? "",
+      source_period_id: period.id,
+      vak_id: String(period.vakId),
+      start_seconds: period.startSeconden,
+      end_seconds: endSeconds,
+      duration_seconds: Math.max(0, endSeconds - period.startSeconden),
+      combination_key: period.combinatieKey,
+      combination_player_ids: period.spelerIds,
+      payload: period,
     };
   });
 
-  // ---------- 4) VAKPERIODES / COMBINATIES ----------
-  const vakPeriodeRows = state.vakPeriods.map((period) => {
-    const end = period.endSeconden ?? state.tijdSeconden;
-    return {
-      wedstrijd_id: wedstrijdId,
-      wedstrijd_naam: wedstrijdNaam,
-      locatie: locatieLabel,
-      seizoen: state.season,
-      wedstrijdtype: state.matchType,
-      periode_id: period.id,
-      vak_id: period.vakId,
-      start: formatTime(period.startSeconden),
-      einde: formatTime(end),
-      duur_seconden: Math.max(0, end - period.startSeconden),
-      combinatie_key: period.combinatieKey,
-      combinatie_speler_ids: JSON.stringify(period.spelerIds),
-      combinatie_spelers: period.spelerIds.map((id) => spelersMap.get(id)?.naam ?? id).join(" · "),
-    };
+  const possessionTotal = snapshot.possessionThuisSeconden + snapshot.possessionUitSeconden;
+  let attackForSeconds = 0;
+  let attackAgainstSeconds = 0;
+  snapshot.attacks.forEach((attack) => {
+    const endSeconds = attack.endSeconden ?? snapshot.tijdSeconden;
+    const duration = Math.max(0, endSeconds - attack.startSeconden);
+    if (attack.team === "thuis" && attack.vak === "aanvallend") attackForSeconds += duration;
+    if (attack.team === "uit" && attack.vak === "verdedigend") attackAgainstSeconds += duration;
   });
+  const attackTotal = attackForSeconds + attackAgainstSeconds;
 
-  // ---------- 5) MATCH SUMMARY SHEET ----------
-  const nowTime = state.tijdSeconden;
-  const totalPoss =
-  state.possessionThuisSeconden + state.possessionUitSeconden;
-
-  const possThuisPct =
-    totalPoss > 0 ? (state.possessionThuisSeconden / totalPoss) * 100 : 0;
-
-  const possUitPct =
-    totalPoss > 0 ? (state.possessionUitSeconden / totalPoss) * 100 : 0;
-  const computeAttackSecondsPerTeam = () => {
-    let thuis = 0;
-    let uit = 0;
-
-    for (const a of state.attacks) {
-      const end = a.endSeconden != null ? a.endSeconden : nowTime;
-      if (end <= a.startSeconden) continue;
-
-      const duur = end - a.startSeconden;
-
-      if (a.team === "thuis" && a.vak === "aanvallend") {
-        thuis += duur;
-      }
-      if (a.team === "uit" && a.vak === "verdedigend") {
-        uit += duur;
-      }
-    }
-
-    return { thuis, uit };
-  };
-
-  const { thuis: attackThuisSec, uit: attackUitSec } =
-    computeAttackSecondsPerTeam();
-  const totalAttackSec = attackThuisSec + attackUitSec;
-  const attackThuisPct =
-    totalAttackSec > 0 ? (attackThuisSec / totalAttackSec) * 100 : 0;
-  const attackUitPct =
-    totalAttackSec > 0 ? (attackUitSec / totalAttackSec) * 100 : 0;
-
-  const matchSummaryRows = [
-    {
-      wedstrijd_id: wedstrijdId,
-      wedstrijd_naam: wedstrijdNaam,        // 👈 nieuw
-      locatie: locatieLabel,
-      seizoen: state.season,
-      wedstrijdtype: state.matchType,
-      datum: exportDate,
-      tegenstander: uitTeamNaam,
-      half_duur_minuten: Number.isFinite(state.halfMinuten)
-        ? state.halfMinuten
-        : DEFAULT_STATE.halfMinuten,
-      score_korbis: state.scoreThuis,
-      score_tegenstander: state.scoreUit,
-      bezit_thuis_seconden: state.possessionThuisSeconden,
-      bezit_uit_seconden: state.possessionUitSeconden,
-      bezit_thuis_pct: totalPoss > 0 ? possThuisPct.toFixed(1) : "",
-      bezit_uit_pct: totalPoss > 0 ? possUitPct.toFixed(1) : "",
-      aanval_thuis_seconden: attackThuisSec,
-      aanval_uit_seconden: attackUitSec,
-      aanval_thuis_pct:
-        totalAttackSec > 0 ? attackThuisPct.toFixed(1) : "",
-      aanval_uit_pct:
-        totalAttackSec > 0 ? attackUitPct.toFixed(1) : "",
-      speeltijd_spelers_json: JSON.stringify(
-        state.spelers.map((p) => ({
-          spelerId: p.id,
-          spelerNaam: p.naam,
-          status: p.status,
-          seconden: state.speelSeconden[p.id] ?? 0,
-        }))
-      ),
-      wedstrijd_afgesloten: state.matchEnded ? "ja" : "nee",
+  const match = {
+    legacy_match_id: legacyMatchId,
+    team_id: teamId,
+    team_season_id: teamSeasonId || null,
+    season_id: seasonId || null,
+    team_name_snapshot: teamName,
+    season_name_snapshot: seasonName || null,
+    match_type: snapshot.matchType,
+    match_date: matchDate,
+    location: location || null,
+    opponent_name: opponentName,
+    match_name: matchName,
+    half_duration_minutes: snapshot.halfMinuten,
+    score_for: snapshot.scoreThuis,
+    score_against: snapshot.scoreUit,
+    possession_for_seconds: snapshot.possessionThuisSeconden,
+    possession_against_seconds: snapshot.possessionUitSeconden,
+    possession_for_pct: possessionTotal ? Number((snapshot.possessionThuisSeconden / possessionTotal * 100).toFixed(2)) : null,
+    possession_against_pct: possessionTotal ? Number((snapshot.possessionUitSeconden / possessionTotal * 100).toFixed(2)) : null,
+    attack_for_seconds: attackForSeconds,
+    attack_against_seconds: attackAgainstSeconds,
+    attack_for_pct: attackTotal ? Number((attackForSeconds / attackTotal * 100).toFixed(2)) : null,
+    attack_against_pct: attackTotal ? Number((attackAgainstSeconds / attackTotal * 100).toFixed(2)) : null,
+    player_playtime: snapshot.spelers.map((player) => ({
+      player_id: player.id,
+      player_name: player.naam,
+      status: player.status,
+      seconds: snapshot.speelSeconden[player.id] ?? 0,
+    })),
+    match_closed: snapshot.matchEnded,
+    payload: {
+      korbiq_phase: 28,
+      local_match_id: legacyMatchId,
+      state: snapshot,
     },
-  ];
-
-  // ---------- 5) MERGE MET BESTAANDE DATABASE (dbSheets) ----------
-  // Zelfde wedstrijd-ID wordt eerst verwijderd; zo blijft iedere wedstrijd exact één keer bestaan.
-  const keepOtherMatch = (row: any) => String(row.wedstrijd_id ?? "") !== wedstrijdId;
-  const allEvents = [...(dbSheets?.events ?? []).filter(keepOtherMatch), ...eventRows];
-  const allAttacks = [...(dbSheets?.attacks ?? []).filter(keepOtherMatch), ...attackRows];
-  const allWissels = [...(dbSheets?.wissels ?? []).filter(keepOtherMatch), ...wisselRows];
-  const allVakPeriodes = [...(dbSheets?.vakperiodes ?? []).filter(keepOtherMatch), ...vakPeriodeRows];
-  const normalizeMatchRow = (m: any) => ({
-    wedstrijd_id: m.wedstrijd_id ?? "", wedstrijd_naam: m.wedstrijd_naam ?? "", locatie: m.locatie ?? "",
-    seizoen: m.seizoen ?? "", wedstrijdtype: m.wedstrijdtype ?? "",
-    datum: m.datum ?? "", tegenstander: m.tegenstander ?? "", half_duur_minuten: m.half_duur_minuten ?? "",
-    score_korbis: m.score_korbis ?? "", score_tegenstander: m.score_tegenstander ?? "",
-    bezit_thuis_seconden: m.bezit_thuis_seconden ?? "", bezit_uit_seconden: m.bezit_uit_seconden ?? "",
-    bezit_thuis_pct: m.bezit_thuis_pct ?? "", bezit_uit_pct: m.bezit_uit_pct ?? "",
-    aanval_thuis_seconden: m.aanval_thuis_seconden ?? "", aanval_uit_seconden: m.aanval_uit_seconden ?? "",
-    aanval_thuis_pct: m.aanval_thuis_pct ?? "", aanval_uit_pct: m.aanval_uit_pct ?? "",
-    speeltijd_spelers_json: m.speeltijd_spelers_json ?? "",
-    wedstrijd_afgesloten: m.wedstrijd_afgesloten ?? "",
-  });
-  const allMatches = [
-    ...(dbSheets?.matches ?? []).filter(keepOtherMatch).map(normalizeMatchRow),
-    ...matchSummaryRows.map(normalizeMatchRow),
-  ];
-
-  // ---------- 6) VOLLEDIGE APP-BACK-UP ----------
-  const spelerRows = state.spelers.map((p) => ({
-    speler_id: p.id,
-    naam: p.naam,
-    geslacht: p.geslacht,
-    status: p.status,
-    actief: p.actief ? "ja" : "nee",
-    foto: p.foto ?? "",
-  }));
-
-  const vak1Ids = state.vak1Aanvallend ? state.aanval : state.verdediging;
-  const vak2Ids = state.vak1Aanvallend ? state.verdediging : state.aanval;
-  const vakRows = [
-    ...vak1Ids.map((id, index) => ({
-      vak_id: 1,
-      positie: index + 1,
-      speler_id: id ?? "",
-      speler_naam: id ? spelersMap.get(id)?.naam ?? "" : "",
-    })),
-    ...vak2Ids.map((id, index) => ({
-      vak_id: 2,
-      positie: index + 1,
-      speler_id: id ?? "",
-      speler_naam: id ? spelersMap.get(id)?.naam ?? "" : "",
-    })),
-  ];
-
-  const teamRows = [{
-    team_naam: "Korbis",
-    actief_seizoen: state.season,
-    aantal_spelers: state.spelers.length,
-  }];
-
-  const instellingenRows = [{
-    half_duur_minuten: state.halfMinuten,
-    auto_vakwissel_na_2: state.autoVakWisselNa2 ? "ja" : "nee",
-    aanval_links: state.aanvalLinks ? "ja" : "nee",
-    vak1_aanvallend: state.vak1Aanvallend ? "ja" : "nee",
-    actief_seizoen: state.season,
-    seizoen_opties_json: JSON.stringify(state.seasonOptions),
-    standaard_wedstrijdtype: state.matchType,
-  }];
-
-  const sortedMatchesForInfo = allMatches.slice().sort((a: any, b: any) =>
-    String(a.datum ?? "").localeCompare(String(b.datum ?? ""))
-  );
-  const databaseInfoRows = [{
-    database_versie: DATABASE_VERSION,
-    app_versie: APP_DATABASE_LABEL,
-    export_datum: new Date().toISOString(),
-    actief_seizoen: state.season,
-    aantal_wedstrijden: allMatches.length,
-    laatste_wedstrijd_datum: sortedMatchesForInfo.at(-1)?.datum ?? "",
-  }];
-
-  const nextDatabase: DatabaseSheetsData = {
-    events: allEvents, attacks: allAttacks, wissels: allWissels, matches: allMatches, vakperiodes: allVakPeriodes,
-    spelers: spelerRows, team: teamRows, vakindeling: vakRows,
-    instellingen: instellingenRows, databaseInfo: databaseInfoRows,
   };
-  setDbSheets(nextDatabase);
 
-  const eventsSheet = XLSX.utils.json_to_sheet(allEvents);
-  const attacksSheet = XLSX.utils.json_to_sheet(allAttacks);
-  const wisselSheet = XLSX.utils.json_to_sheet(allWissels);
-  const vakPeriodeSheet = XLSX.utils.json_to_sheet(allVakPeriodes);
-  const matchSheet = XLSX.utils.json_to_sheet(allMatches);
-  const spelersSheet = XLSX.utils.json_to_sheet(spelerRows);
-  const teamSheet = XLSX.utils.json_to_sheet(teamRows);
-  const vakSheet = XLSX.utils.json_to_sheet(vakRows);
-  const instellingenSheet = XLSX.utils.json_to_sheet(instellingenRows);
-  const infoSheet = XLSX.utils.json_to_sheet(databaseInfoRows);
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, eventsSheet, "Events");
-  XLSX.utils.book_append_sheet(wb, attacksSheet, "Attacks");
-  XLSX.utils.book_append_sheet(wb, wisselSheet, "Wissels");
-  XLSX.utils.book_append_sheet(wb, vakPeriodeSheet, "Vakperiodes");
-  XLSX.utils.book_append_sheet(wb, matchSheet, "Wedstrijden");
-  XLSX.utils.book_append_sheet(wb, spelersSheet, "Spelers");
-  XLSX.utils.book_append_sheet(wb, teamSheet, "Team");
-  XLSX.utils.book_append_sheet(wb, vakSheet, "Vakindeling");
-  XLSX.utils.book_append_sheet(wb, instellingenSheet, "Instellingen");
-  XLSX.utils.book_append_sheet(wb, infoSheet, "DatabaseInfo");
-
-  const filename = `korfbal-database-${state.season.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${exportDate}.xlsx`;
-
-  XLSX.writeFile(wb, filename);
+  return { match, events, attacks, substitutions, vak_periods: vakPeriods };
 };
 
+const saveMatchToSupabase = async (snapshot: AppState) => {
+  setMatchSaveStatus("saving");
+  setMatchSaveMessage("Wedstrijd wordt veilig opgeslagen in Supabase…");
+  try {
+    const bundle = buildSupabaseMatchBundle(snapshot);
+    const { data, error } = await supabase.rpc("save_match_bundle", { p_bundle: bundle });
+    if (error) throw error;
+    const result = data as any;
+    setMatchSaveStatus("saved");
+    setMatchSaveMessage(
+      `Opgeslagen in Supabase: ${Number(result?.events ?? bundle.events.length)} acties, ` +
+      `${Number(result?.attacks ?? bundle.attacks.length)} aanvallen, ` +
+      `${Number(result?.substitutions ?? bundle.substitutions.length)} wissels en ` +
+      `${Number(result?.vak_periods ?? bundle.vak_periods.length)} vakperiodes.`
+    );
+    setHistoryRefreshVersion((version) => version + 1);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setMatchSaveStatus("error");
+    setMatchSaveMessage(`Opslaan in Supabase is mislukt: ${message}`);
+  }
+};
+
+const retrySupabaseMatchSave = () => {
+  if (!state.matchEnded) return;
+  void saveMatchToSupabase(state);
+};
 
 const wisSeizoensdatabase = () => {
-  const aantal = dbSheets?.matches?.length ?? 0;
   const ok = confirm(
-    `Seizoensdatabase wissen?\n\nAlle ${aantal} opgeslagen wedstrijd${aantal === 1 ? "" : "en"} en bijbehorende historische gegevens worden definitief verwijderd. Je spelers, vakindeling en instellingen blijven behouden.\n\nDeze actie kan niet ongedaan worden gemaakt.`
+    "Lokale historiecache wissen?\n\nDe centrale wedstrijdhistorie in Supabase blijft behouden en wordt daarna opnieuw geladen. Alleen lokale historie die nog niet centraal is opgeslagen verdwijnt uit deze browser."
   );
   if (!ok) return;
 
@@ -2268,6 +3416,7 @@ const wisSeizoensdatabase = () => {
     }],
   };
 
+  setLocalFallbackDbSheets(emptyDatabase);
   setDbSheets(emptyDatabase);
   setDatabaseSetupOpen(false);
   saveDatabaseToBrowser(emptyDatabase).catch((err) =>
@@ -2276,10 +3425,11 @@ const wisSeizoensdatabase = () => {
 };
 
 const resetAlles = () => {
-  if (!confirm("Weet je zeker dat je alles wilt wissen?")) return;
+  if (!confirm("Lokale appinstellingen en cache wissen? De centrale wedstrijdhistorie in Supabase blijft behouden.")) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch {}
-  setDbSheets(null);
-  setDatabaseSetupOpen(true);
+  setLocalFallbackDbSheets(emptyHistoryDatabase());
+  setDbSheets(emptyHistoryDatabase());
+  setDatabaseSetupOpen(false);
   clearDatabaseFromBrowser().catch((err) => console.warn("Kon browserdatabase niet wissen", err));
   setState({ 
     ...DEFAULT_STATE,
@@ -2296,13 +3446,12 @@ const eindeWedstrijd = () => {
 
   if (!ok) return;
 
-  setState((prev) => {
-    const now = prev.tijdSeconden;
-    const attacks = [...prev.attacks];
+  const now = state.tijdSeconden;
+  const attacks = [...state.attacks];
 
-    if (prev.currentAttackId) {
+  if (state.currentAttackId) {
       const idx = attacks.findIndex(
-        (a) => a.id === prev.currentAttackId
+        (a) => a.id === state.currentAttackId
       );
 
       if (idx >= 0 && attacks[idx].endSeconden == null) {
@@ -2311,17 +3460,35 @@ const eindeWedstrijd = () => {
           endSeconden: now,
         };
       }
-    }
+  }
 
-    return {
-      ...prev,
-      klokLoopt: false,
-      matchEnded: true,
-      attacks,
-      currentAttackId: null,
-    };
-  });
+  const vakPeriods = state.vakPeriods.map((period) =>
+    period.endSeconden == null ? { ...period, endSeconden: now } : period
+  );
+  const matchDate = state.matchDate || new Date().toLocaleDateString("sv-SE");
+  const opponentSlug = (state.opponentName || "tegenstander")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "tegenstander";
+  const matchLegacyId = state.matchLegacyId ||
+    `WED-${matchDate}-${state.homeAway || "onbekend"}-${opponentSlug}`;
+
+  const finishedState: AppState = {
+    ...state,
+    klokLoopt: false,
+    matchEnded: true,
+    attacks,
+    currentAttackId: null,
+    vakPeriods,
+    matchDate,
+    matchLegacyId,
+  };
+
+  setState(finishedState);
   setTab("verslag");
+  void saveMatchToSupabase(finishedState);
 };
 
 const startNieuweDatabase = () => {
@@ -2372,6 +3539,7 @@ const startNieuweDatabase = () => {
     }],
   };
 
+  setLocalFallbackDbSheets(emptyDatabase);
   setDbSheets(emptyDatabase);
   setDatabaseSetupOpen(false);
   // Een nieuwe database is direct klaar voor het instellen van de eerste wedstrijd.
@@ -2400,7 +3568,7 @@ const requestNieuweWedstrijd = () => {
   // direct door naar Wedstrijdinstellingen.
   if (hasCurrentMatchData) {
     const confirmed = confirm(
-      "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren."
+      "Nieuwe wedstrijd starten? De huidige, nog niet afgeronde wedstrijdgegevens worden uit de app verwijderd. Rond de wedstrijd eerst af als je deze wilt bewaren."
     );
     if (!confirmed) return;
   }
@@ -2410,12 +3578,15 @@ const requestNieuweWedstrijd = () => {
 };
 
 const clearWedstrijd = (
-  warningText = "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Exporteer deze eerst naar Excel als je ze wilt bewaren.",
+  warningText = "Nieuwe wedstrijd starten? De huidige wedstrijdgegevens worden uit de app verwijderd. Rond de wedstrijd eerst af als je deze centraal wilt bewaren.",
   askConfirmation = true
 ) => {
   if (askConfirmation && !confirm(warningText)) {
     return;
   }
+
+  setMatchSaveStatus("idle");
+  setMatchSaveMessage("");
 
   setState((s) => ({
     ...s,
@@ -2448,6 +3619,13 @@ const clearWedstrijd = (
     opponentName: "",
     homeAway: "",
     matchEnded: false,
+    matchTeamSeasonId: state.matchType === "Competitie" ? (activeTeamContext?.id ?? "") : "",
+    matchTeamId: activeTeamContext?.teamId ?? "",
+    matchTeamName: activeTeamContext?.teamName ?? "",
+    matchSeasonId: state.matchType === "Competitie" ? (activeTeamContext?.seasonId ?? "") : "",
+    matchSeasonName: state.matchType === "Competitie" ? (activeTeamContext?.seasonName ?? "") : "",
+    matchDate: "",
+    matchLegacyId: "",
   }));
 };
 
@@ -2455,7 +3633,23 @@ const clearWedstrijd = (
 const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
 const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
 const databaseMatches = dbSheets?.matches ?? [];
-const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const av = typeof a.datum === "number" ? a.datum : Date.parse(String(a.datum ?? "")); const bv = typeof b.datum === "number" ? b.datum : Date.parse(String(b.datum ?? "")); return av - bv; }).at(-1);
+const latestDatabaseMatch = (activeTeamDbSheets?.matches ?? []).slice().sort((a:any,b:any)=>{ const av = typeof a.datum === "number" ? a.datum : Date.parse(String(a.datum ?? "")); const bv = typeof b.datum === "number" ? b.datum : Date.parse(String(b.datum ?? "")); return av - bv; }).at(-1);
+const latestShareableDatabaseMatch = (activeTeamDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.supabase_match_id)&&!Boolean(m.gearchiveerd)&&String(m.wedstrijd_afgesloten??"").toLowerCase()==="ja").slice().sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??"")))[0] ?? null;
+const archivedHistoryCount = (activeTeamHistoryDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.gearchiveerd)).length;
+const activeSupabaseHistoryCount = (activeTeamDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.supabase_match_id)).length;
+const historySourceLabel = !databaseReady || supabaseHistoryStatus === "loading"
+  ? "● Supabase-historie laden…"
+  : supabaseHistoryStatus === "ready"
+  ? isTruePlayerAccount
+    ? `● Mijn historie · ${supabaseHistoryCount}`
+    : `● Supabase ${supabaseHistoryCount} · lokaal ${localOnlyHistoryCount}`
+  : supabaseHistoryStatus === "error"
+  ? "● Lokale terugval actief"
+  : "● Historie voorbereiden…";
+const historySourceReady = supabaseHistoryStatus === "ready";
+const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.speler_id
+  ? portalPlayerFromSupabase
+  : null;
 
 
   //////////////////////////////////////////////////////////////////////////////
@@ -2463,9 +3657,14 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
   //////////////////////////////////////////////////////////////////////////////
   const sectionTitle: Record<typeof tab, string> = {
     dashboard: "Coach Dashboard",
-    spelersanalyse: "Spelers",
+    wedstrijdinzichten: "Wedstrijdinzichten",
+    spelersanalyse: "Spelerinzichten",
     teamanalyse: "Team & Vakken",
     spelers: "Spelers beheren",
+    personenbeheer: "Personen",
+    teamsbeheer: "Teams",
+    seizoenenbeheer: "Seizoenen",
+    wedstrijdbeheer: "Wedstrijden beheren",
     vakken: "Wedstrijdinstellingen",
     wedstrijd: "Wedstrijdregistratie",
     verslag: "Wedstrijdverslag",
@@ -2478,22 +3677,6 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     wisseladvies: "Speeltijd & wisseladvies",
     doelen: "Wedstrijddoelen",
     portaal: "Spelersportaal",
-  };
-
-  const shareMatch = () => {
-    try {
-      const encoded = encodeStateForShare(state);
-      const url = `${window.location.origin}${window.location.pathname}?s=${encoded}`;
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(url);
-        alert("Deel-link gekopieerd naar je klembord ✅");
-      } else {
-        prompt("Kopieer deze link:", url);
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Het lukt niet om een deel-link te maken 😅");
-    }
   };
 
   const SideNavButton = ({ id, label, icon }: { id: typeof tab; label: string; icon: "match" | "insights" | "season" | "players" | "settings" }) => (
@@ -2510,27 +3693,92 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
     </button>
   );
 
-  const CurrentMatchNavCard = ({ mobile = false }: { mobile?: boolean }) => {
+  const CollapsibleNavSection = ({
+    section,
+    label,
+    children,
+    mobile = false,
+  }: {
+    section: "wedstrijd" | "analyse" | "coaching" | "beheer";
+    label: string;
+    children: React.ReactNode;
+    mobile?: boolean;
+  }) => {
+    const open = navSectionsOpen[section];
     const hasFixture = Boolean(state.opponentName.trim());
-    const isLive = hasFixture && !state.matchEnded;
-    const fixture = hasFixture
-      ? (state.homeAway === "uit" ? `${state.opponentName} – Korbis` : `Korbis – ${state.opponentName}`)
-      : "Nog geen wedstrijd ingesteld";
+    const hasRecordedProgress = state.klokLoopt || state.tijdSeconden > 0 || state.scoreThuis > 0 || state.scoreUit > 0 || state.log.length > 0 || state.fieldEvents.length > 0 || state.attacks.length > 0;
+    const isActiveMatch = section === "wedstrijd" && hasFixture && !state.matchEnded && hasRecordedProgress;
+    const ownTeamLabel = state.matchTeamName || activeTeamContext?.teamName || "Korbis";
+    const fixture = state.homeAway === "uit" ? `${state.opponentName} – ${ownTeamLabel}` : `${ownTeamLabel} – ${state.opponentName}`;
+    const matchMinute = state.tijdSeconden > 0 ? `${Math.max(1, Math.ceil(state.tijdSeconden / 60))}e minuut` : "Klaar voor start";
     return (
-      <button
-        type="button"
-        onClick={() => { setTab("wedstrijd"); if (mobile) setMobileMenuOpen(false); }}
-        className={`w-full rounded-2xl border p-3 text-left transition shadow-sm ${tab === "wedstrijd" ? "border-blue-300 bg-blue-600 text-white" : "border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50 text-slate-900 hover:border-blue-300 hover:shadow"}`}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <div className={`text-[11px] font-extrabold uppercase tracking-[0.12em] ${tab === "wedstrijd" ? "text-blue-100" : "text-blue-700"}`}>{isLive ? "● LIVE · Huidige wedstrijd" : "Huidige wedstrijd"}</div>
-          <NavGlyph type="match" />
-        </div>
-        <div className="mt-1 truncate text-sm font-black">{fixture}</div>
-        {hasFixture && <div className={`mt-1 text-xs font-semibold ${tab === "wedstrijd" ? "text-blue-100" : "text-slate-600"}`}>{state.scoreThuis} – {state.scoreUit} · {formatTime(state.tijdSeconden)}</div>}
-      </button>
+      <section className={mobile ? "border-t border-slate-200 pt-2" : "border-t border-slate-200 pt-2 first:border-t-0 first:pt-0"}>
+        <button
+          type="button"
+          onClick={() => setNavSectionsOpen((prev) => ({
+            wedstrijd: section === "wedstrijd" ? !prev.wedstrijd : false,
+            analyse: section === "analyse" ? !prev.analyse : false,
+            coaching: section === "coaching" ? !prev.coaching : false,
+            beheer: section === "beheer" ? !prev.beheer : false,
+          }))}
+          className={`flex w-full items-start justify-between rounded-xl px-3 text-left transition hover:bg-slate-50 ${isActiveMatch ? "py-3" : "py-2"} ${open ? "text-blue-700" : "text-slate-600"}`}
+          aria-expanded={open}
+        >
+          <span className="min-w-0">
+            <span className="block text-[11px] font-extrabold uppercase tracking-[0.12em]">{label}</span>
+            {isActiveMatch && <span className="mt-1 block">
+              <span className="block truncate text-xs font-black normal-case tracking-normal text-slate-900">● {fixture}</span>
+              <span className="mt-0.5 block text-[11px] font-bold normal-case tracking-normal text-blue-700">{matchMinute} · {state.scoreThuis} – {state.scoreUit}</span>
+            </span>}
+          </span>
+          <span className={`text-sm transition-transform duration-200 ${open ? "rotate-180" : ""}`}>⌄</span>
+        </button>
+        {open && <div className={`mt-1 space-y-1 ${mobile ? "pb-2" : "pb-1"}`}>{children}</div>}
+      </section>
     );
   };
+
+  const sharedMatchRoute = window.location.pathname.replace(/\/+$/, "").match(/^\/wedstrijd-delen\/([0-9a-f-]{36})$/i);
+  if (sharedMatchRoute) return <PublicSharedMatchPage token={sharedMatchRoute[1]} />;
+
+  const isAccountActivationRoute = window.location.pathname.replace(/\/+$/, "") === "/account-activate";
+  if (isAccountActivationRoute) return <AccountActivationScreen />;
+
+  if (!authReady) return <div className="flex min-h-screen items-center justify-center bg-[#f6f8fc] text-sm font-semibold text-slate-500">KorbIQ account controleren…</div>;
+
+  if (!authUser) return <KorbIQLogin />;
+
+  if (!authProfile) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-red-200 bg-white p-6 shadow-sm"><KorbIQLogo /><h2 className="mt-6 text-xl font-black">Accountprofiel niet beschikbaar</h2><p className="mt-2 text-sm text-slate-600">KorbIQ kon je profiel in Supabase niet laden.</p>{authError && <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{authError}</div>}<button onClick={()=>void supabase.auth.signOut()} className="mt-5 rounded-xl border px-4 py-2 text-sm font-bold">Uitloggen</button></div></div>;
+
+  if (!accessReady) return <div className="flex min-h-screen items-center justify-center bg-[#f6f8fc] text-sm font-semibold text-slate-500">KorbIQ rechten en teams laden…</div>;
+
+  if (accessError) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-red-200 bg-white p-6 shadow-sm"><KorbIQLogo /><h2 className="mt-6 text-xl font-black">Rechten konden niet worden geladen</h2><p className="mt-2 text-sm text-slate-600">Controleer de nieuwe Supabase-tabellen en RLS-regels.</p><div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{accessError}</div><button onClick={()=>void refreshAccess()} className="mt-5 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Opnieuw proberen</button></div></div>;
+
+  if (historyOwnerUserId !== authUser.id) return <div className="flex min-h-screen items-center justify-center bg-[#f6f8fc] text-sm font-semibold text-slate-500">Persoonlijke KorbIQ-omgeving voorbereiden…</div>;
+
+  if (actualIsCoachRole && !actualIsAdmin && !actualIsTc && !activeTeamId) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-amber-200 bg-white p-6 shadow-sm"><KorbIQLogo /><div className="mt-6 inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-amber-800">Nog geen teamtoegang</div><h2 className="mt-3 text-xl font-black">Je coachaccount is nog niet aan een team gekoppeld</h2><p className="mt-2 text-sm leading-6 text-slate-600">Totdat een TC-lid of beheerder je aan minimaal één team koppelt, toont KorbIQ geen spelers, wedstrijden, lokale cache of analyses.</p><div className="mt-5 flex flex-wrap gap-3"><button onClick={()=>void refreshAccess()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Toegang opnieuw controleren</button><button onClick={()=>void supabase.auth.signOut()} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold text-slate-600">Uitloggen</button></div></div></div>;
+
+  if (actualIsAdmin && adminViewAs === "speler") return <div className="min-h-screen bg-[#f6f8fc] text-slate-900">
+    <header className="sticky top-0 z-40 border-b border-violet-200 bg-violet-50/95 backdrop-blur">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div>
+          <div className="text-[10px] font-extrabold uppercase tracking-[.14em] text-violet-700">Admin testweergave</div>
+          <div className="text-sm font-black text-slate-900">Je bekijkt KorbIQ als speler</div>
+          <div className="text-xs text-slate-500">Alleen de interface wordt nagebootst; je echte database-rechten blijven Admin.</div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {(["admin","tc","coach","speler"] as const).map(role=><button key={role} onClick={()=>setAdminViewAs(role)} className={`rounded-lg px-3 py-1.5 text-xs font-extrabold ${adminViewAs===role?"bg-violet-600 text-white":"border border-violet-200 bg-white text-violet-700"}`}>{role==="admin"?"Admin":role==="tc"?"TC":role==="coach"?"Coach":"Speler"}</button>)}
+        </div>
+      </div>
+    </header>
+    <main className="mx-auto max-w-6xl p-4 sm:p-6">
+      <SpelersportaalDashboard state={state} dbSheets={dbSheets} selectedPlayerId={portalPlayerId} onSelectPlayer={setPortalPlayerId} />
+    </main>
+  </div>;
+
+  if (isTruePlayerAccount) return <div className="min-h-screen bg-[#f6f8fc] text-slate-900"><header className="border-b bg-white"><div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4"><KorbIQLogo /><div className="flex items-center gap-3"><div className="hidden text-right sm:block"><div className="text-xs font-bold uppercase tracking-wide text-blue-700">Speleraccount</div><div className="text-sm font-semibold text-slate-600">{authProfile.speler_naam || authProfile.email}</div></div><button onClick={()=>void supabase.auth.signOut()} className="rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">Uitloggen</button></div></div></header><main className="mx-auto max-w-6xl p-4 sm:p-6">{supabaseHistoryStatus === "loading" && <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">Persoonlijke wedstrijdhistorie veilig laden…</div>}{supabaseHistoryStatus === "error" && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{supabaseHistoryMessage}</div>}<SpelersportaalDashboard state={state} dbSheets={verifiedPortalPlayer && supabaseHistoryStatus === "ready" ? activeTeamDbSheets : emptyHistoryDatabase()} selectedPlayerId={authProfile.speler_id ?? ""} onSelectPlayer={()=>{}} locked playerOverride={verifiedPortalPlayer} /></main></div>;
+
+  if (!hasStaffRole) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-amber-200 bg-white p-6 shadow-sm"><KorbIQLogo /><h2 className="mt-6 text-xl font-black">Nog geen actieve KorbIQ-rol</h2><p className="mt-2 text-sm text-slate-600">Dit account is ingelogd, maar heeft nog geen actieve Admin-, TC- of Coachrol in de nieuwe rechtenstructuur.</p><button onClick={()=>void supabase.auth.signOut()} className="mt-5 rounded-xl border px-4 py-2 text-sm font-bold">Uitloggen</button></div></div>;
 
   return (
     <div className="korbiq-app min-h-screen bg-[#f6f8fc] text-slate-900">
@@ -2546,58 +3794,63 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
       `}</style>
 
       <div className="flex min-h-screen w-full items-start">
-        <aside className="korbiq-desktop-sidebar sticky top-0 h-screen w-[250px] shrink-0 border-r border-slate-200/90 bg-white px-4 py-5 shadow-[2px_0_16px_rgba(15,23,42,0.025)]">
+        <aside className="korbiq-desktop-sidebar sticky top-0 h-screen w-[250px] shrink-0 overflow-y-auto overscroll-contain border-r border-slate-200/90 bg-white px-4 py-5 shadow-[2px_0_16px_rgba(15,23,42,0.025)]">
           <div className="px-2 pb-4"><KorbIQLogo /></div>
-          <div className="mb-5"><CurrentMatchNavCard /></div>
+          {actualIsAdmin && <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-2.5">
+            <div className="text-[10px] font-extrabold uppercase tracking-[.12em] text-violet-700">Testweergave</div>
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              {(["admin","tc","coach","speler"] as const).map(role=><button key={role} onClick={()=>setAdminViewAs(role)} className={`rounded-lg px-2 py-1.5 text-[11px] font-extrabold transition ${adminViewAs===role?"bg-violet-600 text-white shadow-sm":"border border-violet-200 bg-white text-violet-700 hover:bg-violet-100"}`}>{role==="admin"?"Admin":role==="tc"?"TC":role==="coach"?"Coach":"Speler"}</button>)}
+            </div>
+            {adminViewAs!=="admin"&&<div className="mt-2 text-[10px] leading-snug text-violet-700">Previewmodus · je echte account blijft Admin.</div>}
+          </div>}
+          <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="flex items-center justify-between gap-2"><div className="text-[10px] font-extrabold uppercase tracking-wide text-blue-700">{roleLabel(primaryRole)}</div><span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-200">Korbis</span></div>
+            <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{authProfile.email ?? authUser.email}</div>
+            {teamOptions.length > 0 && <label className="mt-2 block text-[10px] font-bold uppercase tracking-wide text-slate-500">Actief team<select value={activeTeamId} onChange={e=>selectTeam(e.target.value)} disabled={currentMatchHasDataForTeamLock && !state.matchEnded && Boolean(state.matchTeamId)} title={currentMatchHasDataForTeamLock && !state.matchEnded && state.matchTeamId ? "Team staat vast tijdens een lopende wedstrijd" : "Actief team kiezen"} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold normal-case text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400">{teamOptions.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
+            {!teamOptions.length && <div className="mt-2 text-[11px] text-amber-700">Nog geen team beschikbaar.</div>}
+            <button onClick={()=>void supabase.auth.signOut()} className="mt-2 text-xs font-bold text-slate-500 hover:text-blue-700">Uitloggen</button>
+          </div>
 
-          <nav className="space-y-5">
-            <section>
-              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Wedstrijd</div>
-              <div className="space-y-1">
-                <button onClick={requestNieuweWedstrijd} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
-                <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
-                <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
-              </div>
-            </section>
+          <nav className="space-y-2">
+            <CollapsibleNavSection section="wedstrijd" label="Wedstrijd">
+              <button onClick={requestNieuweWedstrijd} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
+              <SideNavButton id="wedstrijd" label="Huidige wedstrijd" icon="match" />
+              <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
+              <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
+              <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
+            </CollapsibleNavSection>
 
-            <section className="border-t border-slate-200 pt-5">
-              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Analyse</div>
-              <div className="space-y-1">
-                <SideNavButton id="dashboard" label="Coach Dashboard" icon="season" />
-                <SideNavButton id="spelersanalyse" label="Spelers" icon="players" />
-                <SideNavButton id="teamanalyse" label="Team & Vakken" icon="insights" />
-              </div>
-            </section>
+            <CollapsibleNavSection section="analyse" label="Analyse">
+              <SideNavButton id="dashboard" label="Coach Dashboard" icon="season" />
+              <SideNavButton id="wedstrijdinzichten" label="Wedstrijdinzichten" icon="match" />
+              <SideNavButton id="spelersanalyse" label="Spelerinzichten" icon="players" />
+              <SideNavButton id="teamanalyse" label="Team & Vakken" icon="insights" />
+            </CollapsibleNavSection>
 
-            <section className="border-t border-slate-200 pt-5">
-              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Coaching</div>
-              <div className="space-y-1">
-                <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
-                <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
-                <SideNavButton id="doelen" label="Wedstrijddoelen" icon="insights" />
-                <SideNavButton id="portaal" label="Spelersportaal" icon="players" />
-              </div>
-            </section>
+            <CollapsibleNavSection section="coaching" label="Coaching">
+              <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
+              <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
+              <SideNavButton id="doelen" label="Wedstrijddoelen" icon="insights" />
+              <SideNavButton id="portaal" label="Spelersportaal" icon="players" />
+            </CollapsibleNavSection>
 
-            <section className="border-t border-slate-200 pt-5">
-              <div className="mb-2 px-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Beheer</div>
-              <div className="space-y-1">
-                <SideNavButton id="spelers" label="Spelers beheren" icon="players" />
-                <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
-                <button onClick={exportToExcel} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="export"/><span>Exporteren</span></button>
-                <button onClick={() => dbFileInputRef.current?.click()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="backup"/><span>Backup laden</span></button>
-                <button onClick={shareMatch} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"><NavGlyph type="share"/><span>Deel wedstrijd</span></button>
-                <button onClick={wisSeizoensdatabase} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-orange-700 transition hover:bg-orange-50"><NavGlyph type="reset"/><span>Database wissen</span></button>
-                <button onClick={resetAlles} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
-              </div>
-            </section>
+            <CollapsibleNavSection section="beheer" label="Beheer">
+              <SideNavButton id="wedstrijdbeheer" label="Wedstrijden" icon="match" />
+              {canManageOrganisation && <>
+                <SideNavButton id="personenbeheer" label="Personen" icon="players" />
+                <SideNavButton id="teamsbeheer" label="Teams" icon="settings" />
+                <SideNavButton id="seizoenenbeheer" label="Seizoenen" icon="season" />
+              </>}
+              <button onClick={wisSeizoensdatabase} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-orange-700 transition hover:bg-orange-50"><NavGlyph type="reset"/><span>Lokale historie wissen</span></button>
+              <button onClick={resetAlles} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
+            </CollapsibleNavSection>
           </nav>
 
-          <div className="absolute bottom-5 left-4 right-4 rounded-2xl bg-slate-50 p-3 text-xs text-slate-500 ring-1 ring-slate-200">
+          <div className="mt-5 rounded-2xl bg-slate-50 p-3 text-xs text-slate-500 ring-1 ring-slate-200">
             <div className="font-bold text-slate-700">{state.season}</div>
             <div className="mt-1">{databaseMatches.length} wedstrijd{databaseMatches.length === 1 ? "" : "en"} opgeslagen</div>
-            <div className={`mt-2 font-semibold ${databaseReady && dbSheets ? "text-emerald-700" : "text-amber-700"}`}>
-              {!databaseReady ? "● Database laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
+            <div className={`mt-2 font-semibold ${historySourceReady ? "text-emerald-700" : "text-amber-700"}`} title={supabaseHistoryMessage}>
+              {historySourceLabel}
             </div>
           </div>
         </aside>
@@ -2611,14 +3864,14 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
                 <div className="min-w-0">
                   <div className="truncate text-lg font-bold text-slate-900">{sectionTitle[tab]}</div>
                   <div className="mt-0.5 hidden truncate text-xs text-slate-500 md:block">
-                    {state.opponentName ? `Korbis · ${state.opponentName}` : "KorbIQ · wedstrijddata en coaching"}
+                    {state.matchTeamSeasonId && currentMatchHasDataForTeamLock ? `${state.matchTeamName || activeTeamContext?.teamName || "Korbis"} · ${state.matchSeasonName || activeTeamContext?.seasonName || ""}${state.opponentName ? ` · ${state.opponentName}` : ""}` : activeTeamContext ? `${activeTeamContext.teamName}${state.opponentName ? ` · ${state.opponentName}` : ""}` : (state.opponentName ? `Korbis · ${state.opponentName}` : "KorbIQ · wedstrijddata en coaching")}
                   </div>
                 </div>
               </div>
               <div className="hidden items-center gap-3 text-xs md:flex">
                 {latestDatabaseMatch && <span className="text-slate-500">Laatste: {formatImportedDate(latestDatabaseMatch.datum)}{latestDatabaseMatch.tegenstander ? ` · ${latestDatabaseMatch.tegenstander}` : ""}</span>}
-                <span className={`rounded-full px-3 py-1.5 font-semibold ${databaseReady && dbSheets ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                  {!databaseReady ? "● Database laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
+                <span title={supabaseHistoryMessage} className={`rounded-full px-3 py-1.5 font-semibold ${historySourceReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                  {historySourceLabel}
                 </span>
               </div>
               <button
@@ -2633,50 +3886,42 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             </div>
 
             {mobileMenuOpen && (
-              <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
+              <div className="lg:hidden max-h-[calc(100vh-70px)] overflow-y-auto overscroll-contain border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
                 <div className="mx-auto max-w-xl space-y-4">
-                  <CurrentMatchNavCard mobile />
-                  <section>
-                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Wedstrijd</div>
-                    <div className="space-y-1">
-                      <button onClick={() => { setMobileMenuOpen(false); requestNieuweWedstrijd(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
-                      <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
-                      <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
-                    </div>
-                  </section>
-                  <section className="border-t border-slate-200 pt-4">
-                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Analyse</div>
-                    <div className="space-y-1">
-                      <SideNavButton id="dashboard" label="Coach Dashboard" icon="season" />
-                      <SideNavButton id="spelersanalyse" label="Spelers" icon="players" />
-                      <SideNavButton id="teamanalyse" label="Team & Vakken" icon="insights" />
-                    </div>
-                  </section>
-                  <section className="border-t border-slate-200 pt-4">
-                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Coaching</div>
-                    <div className="space-y-1">
-                      <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
-                <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
-                      <SideNavButton id="doelen" label="Wedstrijddoelen" icon="insights" />
-                    </div>
-                  </section>
-                  <section className="border-t border-slate-200 pt-4">
-                    <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-blue-700">Beheer</div>
-                    <div className="space-y-1">
-                      <SideNavButton id="spelers" label="Spelers beheren" icon="players" />
-                      <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
-                      <button onClick={() => { setMobileMenuOpen(false); exportToExcel(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="export"/><span>Exporteren</span></button>
-                      <button onClick={() => { setMobileMenuOpen(false); dbFileInputRef.current?.click(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="backup"/><span>Backup laden</span></button>
-                      <button onClick={() => { setMobileMenuOpen(false); shareMatch(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><NavGlyph type="share"/><span>Deel wedstrijd</span></button>
-                      <button onClick={() => { setMobileMenuOpen(false); wisSeizoensdatabase(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-orange-700 hover:bg-orange-50"><NavGlyph type="reset"/><span>Database wissen</span></button>
-                      <button onClick={() => { setMobileMenuOpen(false); resetAlles(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
-                    </div>
-                  </section>
+                  <CollapsibleNavSection section="wedstrijd" label="Wedstrijd" mobile>
+                    <button onClick={() => { setMobileMenuOpen(false); requestNieuweWedstrijd(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
+                    <SideNavButton id="wedstrijd" label="Huidige wedstrijd" icon="match" />
+                    <SideNavButton id="vakken" label="Wedstrijdinstellingen" icon="settings" />
+                    <SideNavButton id="verslag" label="Wedstrijdverslag" icon="insights" />
+                    <SideNavButton id="voorbereiding" label="Voorbereiding" icon="insights" />
+                  </CollapsibleNavSection>
+                  <CollapsibleNavSection section="analyse" label="Analyse" mobile>
+                    <SideNavButton id="dashboard" label="Coach Dashboard" icon="season" />
+                    <SideNavButton id="wedstrijdinzichten" label="Wedstrijdinzichten" icon="match" />
+                    <SideNavButton id="spelersanalyse" label="Spelerinzichten" icon="players" />
+                    <SideNavButton id="teamanalyse" label="Team & Vakken" icon="insights" />
+                  </CollapsibleNavSection>
+                  <CollapsibleNavSection section="coaching" label="Coaching" mobile>
+                    <SideNavButton id="opstelling" label="Opstellingsassistent" icon="players" />
+                    <SideNavButton id="wisseladvies" label="Speeltijd & wisseladvies" icon="season" />
+                    <SideNavButton id="doelen" label="Wedstrijddoelen" icon="insights" />
+                    <SideNavButton id="portaal" label="Spelersportaal" icon="players" />
+                  </CollapsibleNavSection>
+                  <CollapsibleNavSection section="beheer" label="Beheer" mobile>
+                    <SideNavButton id="wedstrijdbeheer" label="Wedstrijden" icon="match" />
+                    {canManageOrganisation && <>
+                      <SideNavButton id="personenbeheer" label="Personen" icon="players" />
+                      <SideNavButton id="teamsbeheer" label="Teams" icon="settings" />
+                      <SideNavButton id="seizoenenbeheer" label="Seizoenen" icon="season" />
+                    </>}
+                    <button onClick={() => { setMobileMenuOpen(false); wisSeizoensdatabase(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-orange-700 hover:bg-orange-50"><NavGlyph type="reset"/><span>Lokale historie wissen</span></button>
+                    <button onClick={() => { setMobileMenuOpen(false); resetAlles(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"><NavGlyph type="reset"/><span>Reset alles</span></button>
+                  </CollapsibleNavSection>
                   <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 ring-1 ring-slate-200">
                     <div className="font-bold text-slate-700">{state.season}</div>
                     <div className="mt-1">{databaseMatches.length} wedstrijd{databaseMatches.length === 1 ? "" : "en"} opgeslagen</div>
-                    <div className={`mt-2 font-semibold ${databaseReady && dbSheets ? "text-emerald-700" : "text-amber-700"}`}>
-                      {!databaseReady ? "● Database laden…" : dbSheets ? "● Browserdatabase actief" : "● Geen database geladen"}
+                    <div className={`mt-2 font-semibold ${historySourceReady ? "text-emerald-700" : "text-amber-700"}`} title={supabaseHistoryMessage}>
+                      {historySourceLabel}
                     </div>
                   </div>
                 </div>
@@ -2697,6 +3942,74 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           </header>
 
           <main className="korbiq-main mx-auto w-full max-w-[1500px] px-4 py-5 md:px-6 md:py-7 xl:px-8">
+      {(teamRosterLoading || teamRosterError) && <div className={`mb-4 rounded-xl border px-3 py-2 text-xs font-semibold ${teamRosterError?"border-red-200 bg-red-50 text-red-700":"border-blue-100 bg-blue-50 text-blue-700"}`}>{teamRosterError?`Teamselectie kon niet uit Supabase worden geladen: ${teamRosterError}`:"Teamselectie uit Supabase laden…"}</div>}
+      {supabaseHistoryStatus === "error" && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"><span>{supabaseHistoryMessage} De lokaal bewaarde historie blijft beschikbaar.</span><button type="button" onClick={()=>setHistoryRefreshVersion(version=>version+1)} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold">Opnieuw proberen</button></div>}
+      {actualIsAdmin && adminViewAs !== "admin" && <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
+        <div><div className="text-[10px] font-extrabold uppercase tracking-[.14em] text-violet-700">Admin testweergave</div><div className="text-sm font-black">Bekijken als {adminViewAs === "tc" ? "TC-lid" : adminViewAs === "coach" ? "Coach" : "Speler"}</div><div className="text-xs text-slate-500">UI-preview; Supabase/RLS blijft onder je echte Admin-account draaien.</div></div>
+        <button onClick={()=>setAdminViewAs("admin")} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-extrabold text-white">Terug naar Admin</button>
+      </div>}
+      {analysisTabs.includes(tab) && (
+        <div className="mb-5 rounded-2xl border border-blue-100 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <div className="text-[10px] font-extrabold uppercase tracking-[.14em] text-blue-700">Analysefilter</div>
+              <div className="mt-0.5 text-sm font-black text-slate-900">{activeTeamContext?.teamName ?? "Actief team"}</div>
+              <div className="mt-1 text-xs text-slate-500">Standaard wordt alleen competitie-data van het gekozen team meegenomen.</div>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-extrabold uppercase tracking-wide">
+                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">Supabase actief: {activeSupabaseHistoryCount}</span>
+                {archivedHistoryCount>0&&<span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">Gearchiveerd: {archivedHistoryCount}</span>}
+                <span className={`rounded-full px-2.5 py-1 ${localOnlyHistoryCount ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500"}`}>Alleen lokaal: {localOnlyHistoryCount}</span>
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[520px]">
+              <label className="text-xs font-bold text-slate-600">Competitiejaar
+                <select value={analysisCompetitionYear} onChange={e=>setAnalysisCompetitionYear(e.target.value)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-800">
+                  {analysisCompetitionYears.length ? analysisCompetitionYears.map(year=><option key={year} value={year}>{year}</option>) : <option value="">Geen competitiejaar</option>}
+                </select>
+              </label>
+              <label className="text-xs font-bold text-slate-600">Periode
+                <select value={analysisPeriod} onChange={e=>setAnalysisPeriod(e.target.value as AnalysisPeriodFilter)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-800">
+                  <option value="all">Hele competitiejaar</option>
+                  <option value="veld_najaar">Veld najaar</option>
+                  <option value="zaal">Zaal</option>
+                  <option value="veld_voorjaar">Veld voorjaar</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span className="rounded-full bg-blue-50 px-2.5 py-1 font-bold text-blue-700">{analysisDbSheets?.matches.length ?? 0} competitiewedstrijd{(analysisDbSheets?.matches.length ?? 0)===1?"":"en"}</span>
+            <span>{analysisCompetitionYear || "—"} · {analysisPeriod==="all"?"hele competitiejaar":analysisPeriod==="veld_najaar"?"veld najaar":analysisPeriod==="zaal"?"zaal":"veld voorjaar"}</span>
+          </div>
+        </div>
+      )}
+      {legacyUnlinkedMatchCount > 0 && ["dashboard","spelersanalyse","teamanalyse","insights","combinaties","profielen","opstelling","wisseladvies","doelen","voorbereiding","seizoen"].includes(tab) && (
+        <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <b>Oude wedstrijddata:</b> {legacyUnlinkedMatchCount} wedstrijd{legacyUnlinkedMatchCount === 1 ? "" : "en"} zonder teamkoppeling {legacyUnlinkedMatchCount === 1 ? "wordt" : "worden"} niet meegenomen in de analyse van <b>{activeTeamContext?.teamName ?? "het actieve team"}</b>. Deze data kunnen we later éénmalig aan het juiste team koppelen.
+        </div>
+      )}
+      {tab === "personenbeheer" && canManageOrganisation && (
+        <OrganisationManagementDashboard mode="personen" isAdmin={isAdmin} isTcMember={actualIsTc} showTestData={showTestTeams} teamContexts={teamContexts} onRefreshAccess={refreshAccess} />
+      )}
+      {tab === "teamsbeheer" && canManageOrganisation && (
+        <OrganisationManagementDashboard mode="teams" isAdmin={isAdmin} isTcMember={actualIsTc} showTestData={showTestTeams} teamContexts={teamContexts} onRefreshAccess={refreshAccess} onRosterChanged={()=>setTeamRosterVersion(v=>v+1)} />
+      )}
+      {tab === "seizoenenbeheer" && canManageOrganisation && (
+        <OrganisationManagementDashboard mode="seizoenen" isAdmin={isAdmin} isTcMember={actualIsTc} showTestData={showTestTeams} teamContexts={teamContexts} onRefreshAccess={refreshAccess} />
+      )}
+
+      {tab === "wedstrijdbeheer" && hasStaffRole && (
+        <MatchManagementDashboard
+          matches={accessibleHistoryDbSheets?.matches ?? []}
+          onChanged={()=>setHistoryRefreshVersion(version=>version+1)}
+          canManageTestData={canManageOrganisation}
+          showTestTeams={showTestTeams}
+          testTeamCount={new Set(teamContexts.filter(context=>context.teamIsTest).map(context=>context.teamId)).size}
+          onShowTestTeams={setShowTestTeams}
+          onTestDataChanged={async()=>{setTeamRosterVersion(version=>version+1);setHistoryRefreshVersion(version=>version+1);await refreshAccess()}}
+        />
+      )}
+
       {tab === "spelers" && (
         <SpelersTab
           spelers={state.spelers}
@@ -2707,6 +4020,10 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           updateSpelerActief={updateSpelerActief}
           exportTeam={exportTeam}
           triggerImportTeam={triggerImportTeam}
+          accountProfiles={accountProfiles}
+          accountProfilesLoading={accountProfilesLoading}
+          invitePlayerAccount={invitePlayerAccount}
+          refreshAccountProfiles={refreshAccountProfiles}
         />
       )}
 
@@ -2740,25 +4057,23 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           setState((s) => ({ ...s, homeAway: value }))
           }
           season={state.season}
-          seasonOptions={state.seasonOptions}
+          competitionPeriodOptions={competitionPeriodOptions.map((c) => c.seasonName)}
           setSeason={(value) =>
             setState((s) => ({ ...s, season: value }))
           }
-          addSeason={(value) =>
-            setState((s) => {
-              const clean = value.trim();
-              if (!clean) return s;
-              return {
-                ...s,
-                season: clean,
-                seasonOptions: Array.from(new Set([...s.seasonOptions, clean])),
-              };
-            })
-          }
           matchType={state.matchType}
           setMatchType={(value) =>
-            setState((s) => ({ ...s, matchType: value }))
+            setState((s) => ({
+              ...s,
+              matchType: value,
+              season: value === "Competitie"
+                ? (competitionPeriodOptions.some((c) => c.seasonName === s.season)
+                    ? s.season
+                    : (competitionPeriodOptions[0]?.seasonName ?? s.season))
+                : s.season,
+            }))
           }
+          onOpenMatch={() => setTab("wedstrijd")}
         />
       )}
 
@@ -2775,23 +4090,31 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           openStealModal={() => setStealPopup({})}
           opponentName={state.opponentName}
           onEndMatch={eindeWedstrijd}
+          onOpenSettings={() => setTab("vakken")}
           onCancelMatch={() => clearWedstrijd("Wedstrijd annuleren? Alle gegevens van de huidige wedstrijd worden verwijderd en NIET aan de seizoensdatabase toegevoegd. Deze actie kan niet ongedaan worden gemaakt.")}
         />
       )}
 
       {tab === "verslag" && (
-        <MatchReport
-          state={state}
-          spelersMap={spelersMap}
-          dbSheets={dbSheets}
-          onBackToMatch={() => setTab("wedstrijd")}
-        />
+        <div className="space-y-5">
+          <MatchReport
+            state={state}
+            spelersMap={spelersMap}
+            dbSheets={activeTeamDbSheets}
+            saveStatus={matchSaveStatus}
+            saveMessage={matchSaveMessage}
+            onRetrySave={retrySupabaseMatchSave}
+            onBackToMatch={() => setTab("wedstrijd")}
+          />
+          {state.matchEnded && matchSaveStatus === "saved" && <LatestMatchSharePanel match={latestShareableDatabaseMatch} />}
+        </div>
       )}
 
       {tab === "voorbereiding" && (
         <MatchPreparationDashboard
           state={state}
-          dbSheets={dbSheets}
+          dbSheets={activeTeamDbSheets}
+          onSelectOpponent={(opponentName) => setState((current) => ({ ...current, opponentName }))}
           onOpenSettings={() => setTab("vakken")}
           onOpenMatch={() => setTab("wedstrijd")}
         />
@@ -2800,17 +4123,27 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
       {tab === "dashboard" && (
         <CoachDashboard
           state={state}
-          dbSheets={dbSheets}
+          dbSheets={analysisDbSheets}
           onNavigate={setTab}
         />
       )}
 
+      {tab === "wedstrijdinzichten" && (
+        <InsightsErrorBoundary>
+          <WedstrijdInsightsOverview
+            state={state}
+            spelersMap={spelersMap}
+            dbSheets={activeTeamDbSheets}
+          />
+        </InsightsErrorBoundary>
+      )}
+
       {tab === "spelersanalyse" && (
-        <SpelerAnalyseHub state={state} spelersMap={spelersMap} dbSheets={dbSheets} />
+        <SpelerAnalyseHub state={state} dbSheets={activeTeamDbSheets} />
       )}
 
       {tab === "teamanalyse" && (
-        <TeamAnalyseHub state={state} spelersMap={spelersMap} dbSheets={dbSheets} />
+        <TeamAnalyseHub state={state} spelersMap={spelersMap} dbSheets={analysisDbSheets} />
       )}
 
       {tab === "insights" && (
@@ -2818,38 +4151,38 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
           state={state}
           spelersMap={spelersMap}
           opponentName={state.opponentName}
-          dbSheets={dbSheets}
+          dbSheets={analysisDbSheets}
         />
       )}
 
       {tab === "combinaties" && (
-        <VakcombinatiesDashboard dbSheets={dbSheets} />
+        <VakcombinatiesDashboard dbSheets={analysisDbSheets} spelers={state.spelers} />
       )}
 
       {tab === "profielen" && (
-        <SpelerprofielenDashboard spelers={state.spelers} dbSheets={dbSheets} />
+        <SpelerprofielenDashboard spelers={state.spelers} dbSheets={analysisDbSheets} />
       )}
 
       {tab === "opstelling" && (
-        <OpstellingsassistentDashboard state={state} dbSheets={dbSheets} />
+        <OpstellingsassistentDashboard state={state} dbSheets={analysisDbSheets} />
       )}
 
       {tab === "wisseladvies" && (
-        <SpeeltijdWisseladviesDashboard state={state} dbSheets={dbSheets} />
+        <SpeeltijdWisseladviesDashboard state={state} dbSheets={analysisDbSheets} />
       )}
 
       {tab === "doelen" && (
-        <WedstrijddoelenDashboard state={state} dbSheets={dbSheets} />
+        <WedstrijddoelenDashboard state={state} dbSheets={activeTeamDbSheets} />
       )}
 
       {tab === "portaal" && (
-        <SpelersportaalDashboard state={state} dbSheets={dbSheets} selectedPlayerId={portalPlayerId} onSelectPlayer={setPortalPlayerId} />
+        <SpelersportaalDashboard state={state} dbSheets={activeTeamDbSheets} selectedPlayerId={portalPlayerId} onSelectPlayer={setPortalPlayerId} />
       )}
 
       {tab === "seizoen" && (
         <SeasonDashboard
           state={state}
-          dbSheets={dbSheets}
+          dbSheets={analysisDbSheets}
         />
       )}
 
@@ -2954,9 +4287,9 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             <div className="flex items-start gap-3">
               <div className="h-10 w-10 shrink-0 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold">!</div>
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Geen lokale seizoensdatabase gevonden</h2>
+                <h2 className="text-xl font-bold text-gray-900">Wedstrijdomgeving voorbereiden</h2>
                 <p className="mt-2 text-sm text-gray-600 leading-6">
-                  De browser heeft op dit moment geen opgeslagen wedstrijdendatabase. Laad je laatste Excel-back-up om verder te gaan met een bestaand seizoen, of start bewust een nieuwe database voor de eerste wedstrijd van een nieuw seizoen.
+                  KorbIQ gebruikt Supabase als centrale database. Ga door om de wedstrijdinstellingen voor het actieve team te openen.
                 </p>
               </div>
             </div>
@@ -2964,27 +4297,18 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
             <div className="mt-5 rounded-xl bg-gray-50 border border-gray-200 p-4 text-sm text-gray-600">
               <div className="font-semibold text-gray-800">Huidige app-instellingen</div>
               <div className="mt-1">Seizoen: {state.season} · {state.spelers.length} spelers in de spelerslijst</div>
-              <div className="mt-1 text-xs text-gray-500">Een nieuwe database wist je spelers of vakindeling niet; alleen de wedstrijdhistorie begint leeg.</div>
+              <div className="mt-1 text-xs text-gray-500">Spelers, teamkoppelingen en wedstrijdhistorie blijven centraal bewaard.</div>
             </div>
 
-            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Button
-                variant="secondary"
-                className="w-full"
-                onClick={() => dbFileInputRef.current?.click()}
-              >
-                Backup laden
-              </Button>
+            <div className="mt-6">
               <Button
                 className="w-full"
                 onClick={startNieuweDatabase}
               >
-                Nieuwe database starten
+                Naar wedstrijdinstellingen
               </Button>
             </div>
-            <p className="mt-4 text-xs text-gray-500 text-center">
-              Deze melding verdwijnt pas nadat een back-up is geladen of bewust een nieuwe database is gestart.
-            </p>
+            <p className="mt-4 text-xs text-gray-500 text-center">De centrale wedstrijdomgeving wordt voor het actieve team geopend.</p>
           </div>
         </div>
       )}
@@ -2997,20 +4321,686 @@ const latestDatabaseMatch = databaseMatches.slice().sort((a:any,b:any)=>{ const 
         className="hidden"
         onChange={handleImportTeamFile}
       />
-      {/* Verborgen file input voor Excel database */}
-      <input
-        type="file"
-        accept=".xlsx"
-        ref={dbFileInputRef}
-        className="hidden"
-        onChange={handleImportDatabaseFile}
-      />
           </main>
         </div>
       </div>
     </div>
   );
 }
+//////////////////////////////////////////////////////////////////////////////
+// --- Teams & gebruikers ----------------------------------------------------
+//////////////////////////////////////////////////////////////////////////////
+function MatchManagementDashboard({
+  matches,
+  onChanged,
+  canManageTestData,
+  showTestTeams,
+  testTeamCount,
+  onShowTestTeams,
+  onTestDataChanged,
+}: {
+  matches: any[];
+  onChanged: () => void;
+  canManageTestData: boolean;
+  showTestTeams: boolean;
+  testTeamCount: number;
+  onShowTestTeams: (show: boolean) => void;
+  onTestDataChanged: () => Promise<void>;
+}) {
+  type StatusFilter = "active" | "archived" | "all";
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
+  const [teamFilter, setTeamFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [busyId, setBusyId] = useState("");
+  const [testDataBusy, setTestDataBusy] = useState<""|"create"|"cleanup">("");
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const types = Array.from(new Set(matches.map((m:any)=>String(m.wedstrijdtype??"").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"nl-NL"));
+  const teamOptionsMap=new Map<string,{id:string;name:string}>();
+  matches.forEach((match:any)=>{const id=String(match.team_id??match.team_naam??"");if(id&&!teamOptionsMap.has(id))teamOptionsMap.set(id,{id,name:String(match.team_naam??"Onbekend team")})});
+  const teams:Array<{id:string;name:string}>=Array.from(teamOptionsMap.values()).sort((a,b)=>a.name.localeCompare(b.name,"nl-NL"));
+  const archivedCount = matches.filter((m:any)=>Boolean(m.gearchiveerd)).length;
+  const localCount = matches.filter((m:any)=>!String(m.supabase_match_id??"").trim()).length;
+  const normalizedSearch = search.trim().toLocaleLowerCase("nl-NL");
+  const visibleMatches = matches
+    .filter((m:any)=>teamFilter==="all" || String(m.team_id??m.team_naam??"")===teamFilter)
+    .filter((m:any)=>statusFilter==="all" || (statusFilter==="archived" ? Boolean(m.gearchiveerd) : !m.gearchiveerd))
+    .filter((m:any)=>typeFilter==="all" || String(m.wedstrijdtype??"")===typeFilter)
+    .filter((m:any)=>!dateFrom || String(m.datum??"")>=dateFrom)
+    .filter((m:any)=>!dateTo || String(m.datum??"")<=dateTo)
+    .filter((m:any)=>!normalizedSearch || [m.tegenstander,m.wedstrijd_naam,m.seizoen,m.team_naam,m.locatie,m.wedstrijdtype].some(value=>String(value??"").toLocaleLowerCase("nl-NL").includes(normalizedSearch)))
+    .slice()
+    .sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??"")) || String(a.tegenstander??"").localeCompare(String(b.tegenstander??""),"nl-NL"));
+
+  const setArchived = async (match:any, archived:boolean) => {
+    const matchId=String(match.supabase_match_id??"");
+    if(!matchId)return;
+    const opponent=String(match.tegenstander??match.wedstrijd_naam??"deze wedstrijd");
+    const question=archived
+      ? `Wedstrijd tegen ${opponent} archiveren?\n\nDe wedstrijd blijft bewaard, maar wordt niet meer meegenomen in analyses.`
+      : `Wedstrijd tegen ${opponent} herstellen?\n\nDe wedstrijd wordt daarna weer meegenomen in analyses.`;
+    if(!confirm(question))return;
+    setBusyId(matchId);setMessage("");setErrorMessage("");
+    const {error}=await supabase.rpc("set_match_archived",{p_match_id:matchId,p_archived:archived});
+    if(error)setErrorMessage(error.message);
+    else{setMessage(archived?"Wedstrijd is gearchiveerd.":"Wedstrijd is hersteld en telt weer mee in analyses.");onChanged();}
+    setBusyId("");
+  };
+
+  const deleteMatch = async (match:any) => {
+    const matchId=String(match.supabase_match_id??"");
+    if(!matchId)return;
+    const opponent=String(match.tegenstander??match.wedstrijd_naam??"deze wedstrijd");
+    const answer=prompt(`Je staat op het punt de wedstrijd tegen ${opponent} definitief te verwijderen.\n\nOok alle acties, aanvallen, wissels en vakperiodes worden verwijderd. Dit kan niet ongedaan worden gemaakt.\n\nTyp VERWIJDEREN om door te gaan.`);
+    if(answer!=="VERWIJDEREN")return;
+    setBusyId(matchId);setMessage("");setErrorMessage("");
+    const {error}=await supabase.rpc("delete_match",{p_match_id:matchId});
+    if(error)setErrorMessage(error.message);
+    else{setMessage("Wedstrijd en alle bijbehorende wedstrijddata zijn definitief verwijderd.");onChanged();}
+    setBusyId("");
+  };
+
+  const createTestData = async () => {
+    const confirmed=confirm("Testomgeving (opnieuw) vullen?\n\nAlleen eerder gemarkeerde testdata wordt eerst opgeruimd. Echte teams, personen en wedstrijden blijven onaangetast.");
+    if(!confirmed)return;
+    setTestDataBusy("create");setMessage("");setErrorMessage("");
+    const {data,error}=await supabase.rpc("create_korbiq_test_data");
+    if(error)setErrorMessage(error.message);
+    else{
+      const result=data as any;
+      onShowTestTeams(true);
+      await onTestDataChanged();
+      setMessage(`Testomgeving gevuld: ${Number(result?.teams??3)} teams, ${Number(result?.people??36)} personen en ${Number(result?.matches??0)} wedstrijden in ${String(result?.competition_year??"het actieve competitiejaar")}.`);
+    }
+    setTestDataBusy("");
+  };
+
+  const cleanupTestData = async () => {
+    const answer=prompt("Alle gemarkeerde testteams, testpersonen en testwedstrijden definitief opruimen?\n\nEchte data wordt niet geraakt. Typ TESTDATA VERWIJDEREN om door te gaan.");
+    if(answer!=="TESTDATA VERWIJDEREN")return;
+    setTestDataBusy("cleanup");setMessage("");setErrorMessage("");
+    const {data,error}=await supabase.rpc("cleanup_korbiq_test_data");
+    if(error)setErrorMessage(error.message);
+    else{
+      const result=data as any;
+      onShowTestTeams(false);
+      await onTestDataChanged();
+      setMessage(`Testdata opgeruimd: ${Number(result?.teams??0)} teams, ${Number(result?.people??0)} personen en ${Number(result?.matches??0)} wedstrijden verwijderd.`);
+    }
+    setTestDataBusy("");
+  };
+
+  return <div className="space-y-5">
+    <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm">
+      <div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-700">Beheer</div>
+      <h2 className="mt-1 text-2xl font-black">Wedstrijden beheren</h2>
+      <p className="mt-1 max-w-4xl text-sm text-slate-600">Bekijk en filter alle wedstrijden van de teams waartoe je toegang hebt. De teamkeuze linksboven verandert dit overzicht niet. Archiveren bewaart een wedstrijd maar haalt haar uit alle analyses.</p>
+      <div className="mt-4 flex flex-wrap gap-2 text-xs font-bold">
+        <span className="rounded-full bg-white px-3 py-1.5 text-slate-700 ring-1 ring-slate-200">{matches.length} totaal</span>
+        <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">{matches.length-archivedCount} actief</span>
+        <span className="rounded-full bg-amber-50 px-3 py-1.5 text-amber-700">{archivedCount} gearchiveerd</span>
+        {localCount>0&&<span className="rounded-full bg-slate-100 px-3 py-1.5 text-slate-600">{localCount} alleen lokaal</span>}
+      </div>
+    </div>
+
+    {canManageTestData&&<div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div>
+          <div className="text-xs font-extrabold uppercase tracking-[.14em] text-violet-700">Afgescheiden testomgeving</div>
+          <h3 className="mt-1 font-black text-slate-900">Realistische oefendata in Supabase</h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">Maakt 3 herkenbare testteams met volledige spelersnamen, wedstrijden, acties, aanvallen, speeltijden, wissels en vakcombinaties. Alles krijgt een vaste testmarkering en is later in één keer veilig op te ruimen.</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <button type="button" disabled={Boolean(testDataBusy)} onClick={()=>void createTestData()} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-extrabold text-white hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60">{testDataBusy==="create"?"Testdata maken…":testTeamCount?"Testdata opnieuw vullen":"Testdata aanmaken"}</button>
+          <button type="button" disabled={Boolean(testDataBusy)} onClick={()=>void cleanupTestData()} className="rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-extrabold text-red-700 hover:bg-red-50 disabled:cursor-wait disabled:opacity-60">{testDataBusy==="cleanup"?"Opruimen…":"Testdata opruimen"}</button>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-200 bg-white px-3 py-2.5">
+        <div className="text-xs font-semibold text-slate-600">{testTeamCount?`${testTeamCount} testteams aanwezig. Ze blijven standaard buiten de gewone teamkeuze.`:"Nog geen testteams aanwezig."}</div>
+        <label className={`flex items-center gap-2 text-xs font-bold ${testTeamCount?"text-violet-800":"text-slate-400"}`}><input type="checkbox" checked={showTestTeams} disabled={!testTeamCount||Boolean(testDataBusy)} onChange={event=>onShowTestTeams(event.target.checked)} className="h-4 w-4 rounded border-violet-300 text-violet-600"/>Testteams tonen in teamkeuze</label>
+      </div>
+    </div>}
+
+    {(message||errorMessage)&&<div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${errorMessage?"border-red-200 bg-red-50 text-red-700":"border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{errorMessage||message}</div>}
+
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <label className="text-xs font-bold text-slate-600 xl:col-span-2">Zoeken
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Tegenstander, seizoen, locatie…" className="mt-1 w-full rounded-xl border px-3 py-2.5 text-sm font-medium outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"/>
+        </label>
+        <label className="text-xs font-bold text-slate-600">Status
+          <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value as StatusFilter)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2.5 text-sm font-bold"><option value="active">Actief</option><option value="archived">Gearchiveerd</option><option value="all">Alle statussen</option></select>
+        </label>
+        <label className="text-xs font-bold text-slate-600">Team
+          <select value={teamFilter} onChange={e=>setTeamFilter(e.target.value)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2.5 text-sm font-bold"><option value="all">Alle teams</option>{teams.map(team=><option key={team.id} value={team.id}>{team.name}</option>)}</select>
+        </label>
+        <label className="text-xs font-bold text-slate-600">Wedstrijdtype
+          <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2.5 text-sm font-bold"><option value="all">Alle typen</option>{types.map(type=><option key={type} value={type}>{type}</option>)}</select>
+        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-xs font-bold text-slate-600">Vanaf<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} className="mt-1 w-full rounded-xl border px-2 py-2.5 text-xs font-semibold"/></label>
+          <label className="text-xs font-bold text-slate-600">T/m<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} className="mt-1 w-full rounded-xl border px-2 py-2.5 text-xs font-semibold"/></label>
+        </div>
+      </div>
+    </div>
+
+    <div className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3"><div className="font-black">Wedstrijdoverzicht</div><div className="text-xs font-semibold text-slate-500">{visibleMatches.length} zichtbaar</div></div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1050px] text-sm">
+          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Datum</th><th className="px-4 py-3">Team</th><th className="px-4 py-3">Wedstrijd</th><th className="px-4 py-3">Type / seizoen</th><th className="px-4 py-3">Uitslag</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-right">Beheer</th></tr></thead>
+          <tbody>{visibleMatches.map((match:any,index:number)=>{const id=String(match.supabase_match_id??match.wedstrijd_id??index);const remote=Boolean(match.supabase_match_id);const archived=Boolean(match.gearchiveerd);return <tr key={id} className={`border-t ${archived?"bg-amber-50/40":"hover:bg-slate-50"}`}><td className="whitespace-nowrap px-4 py-3 font-bold">{formatImportedDate(match.datum)}</td><td className="px-4 py-3"><div className="font-bold">{match.team_naam||"Onbekend team"}</div><div className="text-xs text-slate-400">{match.locatie||"—"}</div></td><td className="px-4 py-3"><div className="font-black">{match.tegenstander||match.wedstrijd_naam||"Onbekende tegenstander"}</div><div className="mt-0.5 text-xs text-slate-400">{remote?"Supabase":"Alleen lokaal"}</div></td><td className="px-4 py-3"><div className="font-semibold">{match.wedstrijdtype||"—"}</div><div className="text-xs text-slate-400">{match.seizoen||"Geen seizoen"}</div></td><td className="whitespace-nowrap px-4 py-3 text-base font-black">{match.score_korbis??"?"} – {match.score_tegenstander??"?"}</td><td className="px-4 py-3">{archived?<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">Gearchiveerd</span>:<span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">Actief</span>}</td><td className="px-4 py-3"><div className="flex justify-end gap-2">{remote?<><button disabled={busyId===id} onClick={()=>void setArchived(match,!archived)} className={`rounded-lg border px-3 py-2 text-xs font-bold disabled:opacity-50 ${archived?"border-emerald-200 bg-emerald-50 text-emerald-700":"border-amber-200 bg-amber-50 text-amber-800"}`}>{archived?"Herstellen":"Archiveren"}</button><button disabled={busyId===id} onClick={()=>void deleteMatch(match)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-50">Verwijderen</button></>:<span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500">Alleen lokaal</span>}</div></td></tr>})}</tbody>
+        </table>
+      </div>
+      {!visibleMatches.length&&<div className="p-10 text-center text-sm text-slate-500">Geen wedstrijden gevonden met deze filters.</div>}
+    </div>
+    {localCount>0&&<div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><b>Lokale cache:</b> deze oude regels zijn alleen in deze browser aanwezig en worden niet gebruikt als centrale testdata.</div>}
+  </div>;
+}
+
+function OrganisationManagementDashboard({
+  mode,
+  isAdmin,
+  isTcMember,
+  showTestData,
+  teamContexts,
+  onRefreshAccess,
+  onRosterChanged,
+}: {
+  mode: "personen" | "teams" | "seizoenen";
+  isAdmin: boolean;
+  isTcMember: boolean;
+  showTestData: boolean;
+  teamContexts: TeamSeasonContext[];
+  onRefreshAccess: () => Promise<void>;
+  onRosterChanged?: () => void;
+}) {
+  type PersonRow = { id:string; voornaam:string; tussenvoegsel:string|null; achternaam:string; actief:boolean; is_test:boolean };
+  type PersonRoleRow = { id:string; person_id:string; role:KorbIQRole; team_season_id:string|null; actief:boolean };
+  type ManagedPlayer = { id:string; person_id:string|null; naam:string; geslacht:Geslacht; actief:boolean };
+  type PlayerMembership = { id:string; player_id:string; team_season_id:string; status:PlayerStatus; actief:boolean };
+  type TcMembership = { id:string; person_id:string; team_season_id:string; actief:boolean };
+  type ProfileWithPerson = AuthProfile & { person_id?:string|null };
+
+  const [busy,setBusy]=useState(false);
+  const [message,setMessage]=useState("");
+  const [people,setPeople]=useState<PersonRow[]>([]);
+  const [personRoles,setPersonRoles]=useState<PersonRoleRow[]>([]);
+  const [profiles,setProfiles]=useState<ProfileWithPerson[]>([]);
+  const [players,setPlayers]=useState<ManagedPlayer[]>([]);
+  const [playerMemberships,setPlayerMemberships]=useState<PlayerMembership[]>([]);
+  const [tcMemberships,setTcMemberships]=useState<TcMembership[]>([]);
+  type ManagedSeason = { id:string; naam:string; actief:boolean; competition_year_id:string|null; periode:"veld_najaar"|"zaal"|"veld_voorjaar"|null };
+  type CompetitionYearRow = { id:string; naam:string; startjaar:number; eindjaar:number; actief:boolean };
+  const [seasons,setSeasons]=useState<ManagedSeason[]>([]);
+  const [competitionYears,setCompetitionYears]=useState<CompetitionYearRow[]>([]);
+
+  const [personOpen,setPersonOpen]=useState(false);
+  const [personVoornaam,setPersonVoornaam]=useState("");
+  const [personTussenvoegsel,setPersonTussenvoegsel]=useState("");
+  const [personAchternaam,setPersonAchternaam]=useState("");
+  const [personRoleSpeler,setPersonRoleSpeler]=useState(false);
+  const [personRoleCoach,setPersonRoleCoach]=useState(false);
+  const [personRoleTc,setPersonRoleTc]=useState(false);
+  const [editingPersonId,setEditingPersonId]=useState<string|null>(null);
+  const [editVoornaam,setEditVoornaam]=useState("");
+  const [editTussenvoegsel,setEditTussenvoegsel]=useState("");
+  const [editAchternaam,setEditAchternaam]=useState("");
+  const [invitePersonId,setInvitePersonId]=useState<string|null>(null);
+  const [inviteEmail,setInviteEmail]=useState("");
+  const [accountPanelPersonId,setAccountPanelPersonId]=useState<string|null>(null);
+  const [accountEmailEdit,setAccountEmailEdit]=useState("");
+  const [personActionsId,setPersonActionsId]=useState<string|null>(null);
+  const [personSearch,setPersonSearch]=useState("");
+  const [personTeamFilter,setPersonTeamFilter]=useState("__all__");
+  const [showArchivedPeople,setShowArchivedPeople]=useState(false);
+  type PersonSortKey = "voornaam" | "achternaam" | "functie" | "team";
+  const [personSortKey,setPersonSortKey]=useState<PersonSortKey>("achternaam");
+  const [personSortDirection,setPersonSortDirection]=useState<"asc"|"desc">("asc");
+
+  const [newCompetitionStartYear,setNewCompetitionStartYear]=useState(String(new Date().getFullYear()));
+  const [newTeamName,setNewTeamName]=useState("");
+
+  const [teamPersonId,setTeamPersonId]=useState("");
+  const [teamPlayerGender,setTeamPlayerGender]=useState<Geslacht>("Dame");
+  const [teamPlayerStatus,setTeamPlayerStatus]=useState<PlayerStatus>("Basisspeler");
+  const [teamPlayerSearch,setTeamPlayerSearch]=useState("");
+  const [teamCoachSearch,setTeamCoachSearch]=useState("");
+  const [teamCoachPersonId,setTeamCoachPersonId]=useState("");
+  const [teamTcSearch,setTeamTcSearch]=useState("");
+  const [teamTcPersonId,setTeamTcPersonId]=useState("");
+  const [managedTeamId,setManagedTeamId]=useState("__all__");
+
+  const fullName=(p:PersonRow)=>[p.voornaam,p.tussenvoegsel,p.achternaam].filter(Boolean).join(" ");
+  const contextById=useMemo(()=>new Map(teamContexts.map(c=>[c.id,c])),[teamContexts]);
+  const profileByPersonId=useMemo(()=>{const m=new Map<string,ProfileWithPerson>();profiles.forEach(p=>{if(p.person_id)m.set(p.person_id,p)});return m},[profiles]);
+  const playerByPersonId=useMemo(()=>{const m=new Map<string,ManagedPlayer>();players.forEach(p=>{if(p.person_id)m.set(p.person_id,p)});return m},[players]);
+  const personById=useMemo(()=>new Map(people.map(p=>[p.id,p])),[people]);
+  const playerById=useMemo(()=>new Map(players.map(p=>[p.id,p])),[players]);
+
+  const load=async()=>{
+    setBusy(true);setMessage("");
+    const [a,b,c,d,e,f,g,h]=await Promise.all([
+      supabase.from("people").select("id,voornaam,tussenvoegsel,achternaam,actief,is_test").order("achternaam").order("voornaam"),
+      supabase.from("person_roles").select("id,person_id,role,team_season_id,actief"),
+      supabase.from("profiles").select("id,email,role,speler_id,speler_naam,naam,voornaam,tussenvoegsel,achternaam,actief,account_status,invitation_status,invited_at,person_id"),
+      supabase.from("players").select("id,person_id,naam,geslacht,actief"),
+      supabase.from("player_team_memberships").select("id,player_id,team_season_id,status,actief"),
+      supabase.from("team_tc_memberships").select("id,person_id,team_season_id,actief"),
+      supabase.from("seasons").select("id,naam,actief,competition_year_id,periode").order("naam",{ascending:false}),
+      supabase.from("competition_years").select("id,naam,startjaar,eindjaar,actief").order("startjaar",{ascending:false}),
+    ]);
+    const err=a.error||b.error||c.error||d.error||e.error||f.error||g.error||h.error;
+    if(err)setMessage(err.message);else{
+      setPeople((a.data??[]) as PersonRow[]);setPersonRoles((b.data??[]) as PersonRoleRow[]);setProfiles((c.data??[]) as ProfileWithPerson[]);setPlayers((d.data??[]) as ManagedPlayer[]);setPlayerMemberships((e.data??[]) as PlayerMembership[]);setTcMemberships((f.data??[]) as TcMembership[]);
+      setSeasons((g.data??[]) as ManagedSeason[]);setCompetitionYears((h.data??[]) as CompetitionYearRow[]);
+    }
+    setBusy(false);
+  };
+  useEffect(()=>{void load()},[]);
+  useEffect(()=>{
+    if(mode==="personen") setShowArchivedPeople(false);
+  },[mode]);
+
+  const createPerson=async()=>{
+    if(!personVoornaam.trim()||!personAchternaam.trim()){setMessage("Voornaam en achternaam zijn verplicht.");return}
+    setBusy(true);setMessage("");
+    const {data:personId,error}=await supabase.rpc("create_person",{p_voornaam:personVoornaam.trim(),p_tussenvoegsel:personTussenvoegsel.trim()||null,p_achternaam:personAchternaam.trim()});
+    if(error||!personId){setMessage(error?.message??"Persoon kon niet worden aangemaakt.");setBusy(false);return}
+    const selectedRoles:["speler"|"coach"|"tc",boolean][]=[["speler",personRoleSpeler],["coach",personRoleCoach],["tc",personRoleTc]];
+    for(const [role,selected] of selectedRoles){
+      if(!selected)continue;
+      const {error:roleError}=await supabase.rpc("assign_person_role",{p_person_id:String(personId),p_role:role,p_team_season_id:null});
+      if(roleError){setMessage(`Persoon aangemaakt, maar rol ${role} kon niet worden toegevoegd: ${roleError.message}`);await load();setBusy(false);return}
+    }
+    setPersonVoornaam("");setPersonTussenvoegsel("");setPersonAchternaam("");setPersonRoleSpeler(false);setPersonRoleCoach(false);setPersonRoleTc(false);setPersonOpen(false);setMessage("Persoon is toegevoegd. Rollen zijn opgeslagen; teamkoppelingen beheer je onder Teams.");await load();
+    setBusy(false);
+  };
+
+  const openEdit=(p:PersonRow)=>{setEditingPersonId(p.id);setEditVoornaam(p.voornaam);setEditTussenvoegsel(p.tussenvoegsel??"");setEditAchternaam(p.achternaam)};
+  const savePerson=async()=>{
+    if(!editingPersonId)return;
+    setBusy(true);setMessage("");
+    const {error}=await supabase.rpc("update_person",{p_person_id:editingPersonId,p_voornaam:editVoornaam.trim(),p_tussenvoegsel:editTussenvoegsel.trim()||null,p_achternaam:editAchternaam.trim()});
+    if(error)setMessage(error.message);else{setEditingPersonId(null);setMessage("Persoonsgegevens bijgewerkt.");await load()}
+    setBusy(false);
+  };
+  const archivePerson=async(id:string)=>{if(!confirm("Deze persoon archiveren? De historie blijft bewaard."))return;setBusy(true);const {error}=await supabase.rpc("archive_person",{p_person_id:id});if(error)setMessage(error.message);else{setMessage("Persoon gearchiveerd.");await load()}setBusy(false)};
+  const deletePerson=async(id:string)=>{if(!confirm("Deze persoon definitief verwijderen? Gebruik dit alleen voor een fout/testrecord."))return;setBusy(true);const {error}=await supabase.rpc("delete_person",{p_person_id:id});if(error)setMessage(error.message);else{setMessage("Persoon definitief verwijderd.");await load()}setBusy(false)};
+  const reactivatePerson=async(id:string)=>{setBusy(true);const {error}=await supabase.rpc("reactivate_person",{p_person_id:id});if(error)setMessage(error.message);else{setMessage("Persoon opnieuw actief.");await load()}setBusy(false)};
+
+  const addGlobalRole=async(personId:string,role:"tc"|"coach"|"speler")=>{setBusy(true);setMessage("");const {error}=await supabase.rpc("assign_person_role",{p_person_id:personId,p_role:role,p_team_season_id:null});if(error)setMessage(error.message);else{setMessage(role==="coach"?"Persoon is beschikbaar gemaakt als coach.":role==="speler"?"Persoon is beschikbaar gemaakt als speler.":"Persoon is TC-lid gemaakt.");await load()}setBusy(false)};
+  const removeRole=async(roleId:string)=>{if(!confirm("Deze rol intrekken?"))return;setBusy(true);const {error}=await supabase.rpc("deactivate_person_role",{p_role_id:roleId});if(error)setMessage(error.message);else{setMessage("Rol ingetrokken.");await load()}setBusy(false)};
+  const addCoach=async(personId:string,teamId:string)=>{if(!teamId)return;setBusy(true);const {error}=await supabase.rpc("add_coach_to_team_all_periods",{p_person_id:personId,p_team_id:teamId});if(error)setMessage(error.message);else{setMessage("Coach aan team gekoppeld voor alle competitieperioden.");await load()}setBusy(false)};
+  const removeCoach=async(personId:string,teamId:string)=>{if(!teamId)return;setBusy(true);const {error}=await supabase.rpc("remove_coach_from_team_all_periods",{p_person_id:personId,p_team_id:teamId});if(error)setMessage(error.message);else{setMessage("Coach uit team verwijderd.");await load()}setBusy(false)};
+  const addPlayerToTeam=async(personId:string,teamId:string,gender:Geslacht=teamPlayerGender,status:PlayerStatus=teamPlayerStatus)=>{if(!teamId)return;setBusy(true);const {error}=await supabase.rpc("add_player_to_team_all_periods",{p_person_id:personId,p_team_id:teamId,p_geslacht:gender,p_status:status});if(error)setMessage(error.message);else{setMessage("Speler aan team gekoppeld voor alle competitieperioden.");await load();onRosterChanged?.()}setBusy(false)};
+  const removePlayer=async(personId:string,teamId:string)=>{if(!teamId)return;setBusy(true);const {error}=await supabase.rpc("remove_player_from_team_all_periods",{p_person_id:personId,p_team_id:teamId});if(error)setMessage(error.message);else{setMessage("Speler uit team verwijderd.");await load();onRosterChanged?.()}setBusy(false)};
+  const addTc=async(personId:string,teamId:string)=>{if(!teamId)return;setBusy(true);const {error}=await supabase.rpc("add_tc_to_team_all_periods",{p_person_id:personId,p_team_id:teamId});if(error)setMessage(error.message);else{setMessage("TC-lid aan team gekoppeld voor alle competitieperioden.");await load()}setBusy(false)};
+  const removeTc=async(personId:string,teamId:string)=>{if(!teamId)return;setBusy(true);const {error}=await supabase.rpc("remove_tc_from_team_all_periods",{p_person_id:personId,p_team_id:teamId});if(error)setMessage(error.message);else{setMessage("TC-lid uit team verwijderd.");await load()}setBusy(false)};
+
+  const inviteAccount=async(personId:string)=>{
+    const email=inviteEmail.trim().toLowerCase();if(!email){setMessage("Vul een e-mailadres in.");return}
+    setBusy(true);setMessage("");
+    const {data,error}=await supabase.functions.invoke("manage-user",{body:{action:"invite_existing_person",person_id:personId,email,redirect_to:`${KORBIQ_APP_ORIGIN}/account-activate`}});
+    if(error)setMessage(error.message);else if(data?.error)setMessage(String(data.error));else{setMessage("Uitnodiging verstuurd.");setInvitePersonId(null);setInviteEmail("");await load()}
+    setBusy(false);
+  };
+
+  const resendAccountInvite=async(personId:string)=>{
+    if(!confirm("Nieuwe uitnodiging versturen? De vorige uitnodigingslink wordt hiermee vervangen."))return;
+    setBusy(true);setMessage("");
+    const {data,error}=await supabase.functions.invoke("manage-user",{body:{action:"resend_invite",person_id:personId,redirect_to:`${KORBIQ_APP_ORIGIN}/account-activate`}});
+    if(error)setMessage(error.message);else if(data?.error)setMessage(String(data.error));else{setMessage("Nieuwe uitnodiging verstuurd.");await load()}
+    setBusy(false);
+  };
+
+  const changeAccountEmail=async(personId:string)=>{
+    const email=accountEmailEdit.trim().toLowerCase();
+    if(!email){setMessage("Vul een nieuw e-mailadres in.");return}
+    if(!confirm(`E-mailadres wijzigen naar ${email}?`))return;
+    setBusy(true);setMessage("");
+    const {data,error}=await supabase.functions.invoke("manage-user",{body:{action:"change_email",person_id:personId,email,redirect_to:`${KORBIQ_APP_ORIGIN}/account-activate`}});
+    if(error)setMessage(error.message);else if(data?.error)setMessage(String(data.error));else{setMessage(data?.reinvited?"E-mailadres gewijzigd en een nieuwe uitnodiging verstuurd.":"E-mailadres gewijzigd.");setAccountEmailEdit("");await load()}
+    setBusy(false);
+  };
+
+  const resetAccountPassword=async(personId:string)=>{
+    if(!confirm("Wachtwoordherstelmail naar dit account sturen?"))return;
+    setBusy(true);setMessage("");
+    const {data,error}=await supabase.functions.invoke("manage-user",{body:{action:"reset_password",person_id:personId,redirect_to:`${KORBIQ_APP_ORIGIN}/account-activate?mode=recovery`}});
+    if(error)setMessage(error.message);else if(data?.error)setMessage(String(data.error));else setMessage("Wachtwoordherstelmail verstuurd.");
+    setBusy(false);
+  };
+
+  const unlinkAccount=async(personId:string)=>{
+    if(!confirm("Loginaccount loskoppelen? De persoon, rollen, teams en historie blijven bestaan, maar het huidige loginaccount wordt definitief verwijderd."))return;
+    if(!confirm("Weet je het zeker? Daarna kan deze persoon niet meer met het huidige account inloggen."))return;
+    setBusy(true);setMessage("");
+    const {data,error}=await supabase.functions.invoke("manage-user",{body:{action:"unlink_account",person_id:personId}});
+    if(error)setMessage(error.message);else if(data?.error)setMessage(String(data.error));else{setMessage("Loginaccount losgekoppeld. De persoon en historie zijn behouden.");setAccountPanelPersonId(null);setAccountEmailEdit("");await load()}
+    setBusy(false);
+  };
+
+  const createCompetitionYear=async()=>{
+    const startjaar=Number(newCompetitionStartYear);
+    if(!Number.isInteger(startjaar)||startjaar<2020||startjaar>2100){setMessage("Vul een geldig startjaar in, bijvoorbeeld 2027.");return}
+    setBusy(true);setMessage("");
+    const {error}=await supabase.rpc("create_competition_year",{p_startjaar:startjaar});
+    if(error)setMessage(error.message);else{setMessage(`Competitiejaar ${startjaar}/${startjaar+1} is aangemaakt. Alle actieve teams zijn automatisch aan de drie competitieperioden gekoppeld.`);await onRefreshAccess();await load()}
+    setBusy(false);
+  };
+  const setCompetitionYearActive=async(id:string,actief:boolean)=>{
+    if(!actief&&!confirm("Dit competitiejaar archiveren? De historie blijft behouden, maar de periode verdwijnt uit de actieve teamkeuze."))return;
+    setBusy(true);setMessage("");
+    const {error}=await supabase.rpc("set_competition_year_active",{p_competition_year_id:id,p_actief:actief});
+    if(error)setMessage(error.message);else{setMessage(actief?"Competitiejaar opnieuw geactiveerd.":"Competitiejaar gearchiveerd.");await onRefreshAccess();await load()}
+    setBusy(false);
+  };
+  const createTeam=async()=>{const naam=newTeamName.trim();if(!naam)return;setBusy(true);setMessage("");const {error}=await supabase.rpc("create_team_for_all_competitions",{p_naam:naam});if(error)setMessage(error.message);else{setNewTeamName("");setMessage(`${naam} aangemaakt en automatisch aan alle actieve competitieperioden gekoppeld.`);await onRefreshAccess();await load()}setBusy(false)};
+  const archiveTeam=async(id:string)=>{if(!confirm("Dit team voor dit seizoen archiveren?"))return;setBusy(true);const {error}=await supabase.rpc("archive_team_season",{p_team_season_id:id});if(error)setMessage(error.message);else{setMessage("Team-seizoen gearchiveerd.");await onRefreshAccess();await load()}setBusy(false)};
+
+  const uniqueTeams=useMemo(()=>{
+    const map=new Map<string,{id:string;name:string}>();
+    teamContexts.forEach(c=>{if(c.teamIsTest&&!showTestData)return;if(!map.has(c.teamId))map.set(c.teamId,{id:c.teamId,name:c.teamName})});
+    return Array.from(map.values()).sort((a,b)=>compareTeamNames(a.name,b.name));
+  },[teamContexts,showTestData]);
+
+  useEffect(()=>{
+    if(managedTeamId==="__all__"||uniqueTeams.some(t=>t.id===managedTeamId))return;
+    setManagedTeamId("__all__");
+  },[managedTeamId,uniqueTeams]);
+
+  const activeContext=teamContexts.find(c=>c.teamId===managedTeamId)??null;
+  const activeTeamContextIds=new Set(teamContexts.filter(c=>c.teamId===managedTeamId).map(c=>c.id));
+
+  const activePlayersByPerson=new Map<string,{m:PlayerMembership;player:ManagedPlayer}>();
+  playerMemberships
+    .filter(m=>activeTeamContextIds.has(m.team_season_id)&&m.actief)
+    .forEach(m=>{
+      const player=playerById.get(m.player_id);
+      if(player?.person_id&&!activePlayersByPerson.has(player.person_id))activePlayersByPerson.set(player.person_id,{m,player});
+    });
+  const activePlayers=Array.from(activePlayersByPerson.values());
+
+  const activeCoachesByPerson=new Map<string,PersonRoleRow>();
+  personRoles
+    .filter(r=>r.role==="coach"&&r.team_season_id!==null&&activeTeamContextIds.has(r.team_season_id)&&r.actief)
+    .forEach(r=>{if(!activeCoachesByPerson.has(r.person_id))activeCoachesByPerson.set(r.person_id,r)});
+  const activeCoaches=Array.from(activeCoachesByPerson.values());
+
+  const activeTcsByPerson=new Map<string,TcMembership>();
+  tcMemberships
+    .filter(t=>activeTeamContextIds.has(t.team_season_id)&&t.actief)
+    .forEach(t=>{if(!activeTcsByPerson.has(t.person_id))activeTcsByPerson.set(t.person_id,t)});
+  const activeTcs=Array.from(activeTcsByPerson.values());
+
+  const activePlayerPersonIds=new Set(activePlayers.map(x=>String(x.player.person_id??"")).filter(Boolean));
+  const currentSeasonTeamIds=new Set(teamContexts.filter(c=>c.seasonId===activeContext?.seasonId).map(c=>c.id));
+  const primaryPlayerPersonIdsThisSeason=new Set(
+    playerMemberships
+      .filter(m=>m.actief&&m.status==="Basisspeler"&&currentSeasonTeamIds.has(m.team_season_id))
+      .map(m=>playerById.get(m.player_id)?.person_id)
+      .filter((id):id is string=>Boolean(id))
+  );
+  const playerCandidateSearch=teamPlayerSearch.trim().toLocaleLowerCase("nl-NL");
+  const teamPlayerCandidates=people
+    .filter(p=>p.actief&&!activePlayerPersonIds.has(p.id))
+    .filter(p=>personRoles.some(r=>r.person_id===p.id&&r.role==="speler"&&r.team_season_id===null&&r.actief))
+    .filter(p=>teamPlayerStatus==="Gast"||!primaryPlayerPersonIdsThisSeason.has(p.id))
+    .filter(p=>{
+      if(!playerCandidateSearch)return true;
+      const existingPlayer=playerByPersonId.get(p.id);
+      const memberships=existingPlayer?playerMemberships.filter(m=>m.player_id===existingPlayer.id&&m.actief):[];
+      const terms=[
+        fullName(p),p.voornaam,p.tussenvoegsel??"",p.achternaam,existingPlayer?.geslacht??"",
+        ...memberships.flatMap(m=>{const c=contextById.get(m.team_season_id);return [m.status,c?.teamName??"",c?.seasonName??""]})
+      ].join(" ").toLocaleLowerCase("nl-NL");
+      return terms.includes(playerCandidateSearch);
+    })
+    .sort((a,b)=>fullName(a).localeCompare(fullName(b),"nl-NL"));
+
+  const personRoleSearchTerms=(p:PersonRow)=>{
+    const roles=personRoles.filter(r=>r.person_id===p.id&&r.actief);
+    const tcTeams=tcMemberships.filter(t=>t.person_id===p.id&&t.actief);
+    return [
+      fullName(p),p.voornaam,p.tussenvoegsel??"",p.achternaam,
+      ...roles.flatMap(r=>{const c=r.team_season_id?contextById.get(r.team_season_id):null;return [r.role,c?.teamName??"",c?.seasonName??""]}),
+      ...tcTeams.flatMap(t=>{const c=contextById.get(t.team_season_id);return ["tc",c?.teamName??"",c?.seasonName??""]})
+    ].join(" ").toLocaleLowerCase("nl-NL");
+  };
+  const coachCandidateSearch=teamCoachSearch.trim().toLocaleLowerCase("nl-NL");
+  const teamCoachCandidates=people
+    .filter(p=>p.actief&&!activeCoaches.some(r=>r.person_id===p.id))
+    .filter(p=>personRoles.some(r=>r.person_id===p.id&&r.role==="coach"&&r.team_season_id===null&&r.actief))
+    .filter(p=>!coachCandidateSearch||personRoleSearchTerms(p).includes(coachCandidateSearch))
+    .sort((a,b)=>fullName(a).localeCompare(fullName(b),"nl-NL"));
+  const tcCandidateSearch=teamTcSearch.trim().toLocaleLowerCase("nl-NL");
+  const teamTcCandidates=people
+    .filter(p=>p.actief&&!activeTcs.some(t=>t.person_id===p.id))
+    .filter(p=>personRoles.some(r=>r.person_id===p.id&&r.role==="tc"&&r.actief))
+    .filter(p=>!tcCandidateSearch||personRoleSearchTerms(p).includes(tcCandidateSearch))
+    .sort((a,b)=>fullName(a).localeCompare(fullName(b),"nl-NL"));
+
+  const header=(title:string,sub:string)=><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ beheer</div><h2 className="mt-1 text-2xl font-black">{title}</h2><p className="mt-1 max-w-4xl text-sm text-slate-500">{sub}</p></div>;
+
+  const filteredPeople=people.filter(p=>{
+    if(p.is_test&&!showTestData)return false;
+    if(!showArchivedPeople&&!p.actief)return false;
+    const q=personSearch.trim().toLocaleLowerCase("nl-NL");
+    if(!q)return true;
+    const roles=personRoles.filter(r=>r.person_id===p.id&&r.actief);
+    const profile=profileByPersonId.get(p.id);
+    const player=playerByPersonId.get(p.id);
+    const tcTeams=tcMemberships.filter(t=>t.person_id===p.id&&t.actief).map(t=>contextById.get(t.team_season_id)?.teamName??"");
+    const roleTerms=roles.flatMap(r=>{
+      const context=r.team_season_id?contextById.get(r.team_season_id):null;
+      return [roleLabel(r.role),r.role,context?.teamName??"",context?.seasonName??""];
+    });
+    const haystack=[
+      fullName(p),p.voornaam,p.tussenvoegsel??"",p.achternaam,
+      profile?.email??"",profile?.account_status??"",profile?.invitation_status??"",
+      player?.geslacht??"",p.actief?"actief":"gearchiveerd",
+      ...roleTerms,...tcTeams,roles.some(r=>r.role==="tc")?"tc lid":""
+    ].join(" ").toLocaleLowerCase("nl-NL");
+    return haystack.includes(q);
+  });
+
+  const personRoleLabels=(p:PersonRow)=>{
+    const labels:string[]=[];
+    const roles=personRoles.filter(r=>r.person_id===p.id&&r.actief);
+    if(roles.some(r=>r.role==="admin"))labels.push("Admin");
+    if(roles.some(r=>r.role==="tc"))labels.push("TC-lid");
+    if(roles.some(r=>r.role==="coach"))labels.push("Coach");
+    if(roles.some(r=>r.role==="speler"))labels.push("Speler");
+    return labels;
+  };
+  const personTeamLabels=(p:PersonRow)=>{
+    const names=new Set<string>();
+    personRoles.filter(r=>r.person_id===p.id&&r.actief&&r.team_season_id).forEach(r=>{
+      const name=contextById.get(String(r.team_season_id))?.teamName;if(name)names.add(name);
+    });
+    tcMemberships.filter(t=>t.person_id===p.id&&t.actief).forEach(t=>{
+      const name=contextById.get(t.team_season_id)?.teamName;if(name)names.add(name);
+    });
+    const player=playerByPersonId.get(p.id);
+    if(player)playerMemberships.filter(m=>m.player_id===player.id&&m.actief).forEach(m=>{
+      const name=contextById.get(m.team_season_id)?.teamName;if(name)names.add(name);
+    });
+    return Array.from(names).sort(compareTeamNames);
+  };
+  const personTeamFilteredPeople=filteredPeople.filter(p=>
+    personTeamFilter==="__all__" || personTeamLabels(p).includes(uniqueTeams.find(team=>team.id===personTeamFilter)?.name??"")
+  );
+  const sortedPeople=personTeamFilteredPeople.slice().sort((a,b)=>{
+    const value=(p:PersonRow)=>personSortKey==="voornaam"?p.voornaam:
+      personSortKey==="achternaam"?`${p.achternaam} ${p.tussenvoegsel??""}`:
+      personSortKey==="functie"?personRoleLabels(p).join(" "):
+      personTeamLabels(p).join(" ");
+    const compared=value(a).localeCompare(value(b),"nl-NL",{sensitivity:"base",numeric:true});
+    if(compared!==0)return personSortDirection==="asc"?compared:-compared;
+    return fullName(a).localeCompare(fullName(b),"nl-NL");
+  });
+  const changePersonSort=(key:PersonSortKey)=>{
+    if(personSortKey===key)setPersonSortDirection(direction=>direction==="asc"?"desc":"asc");
+    else{setPersonSortKey(key);setPersonSortDirection("asc")}
+  };
+  const personSortIndicator=(key:PersonSortKey)=>personSortKey===key?(personSortDirection==="asc"?" ▲":" ▼"):"";
+  const teamSummaries=uniqueTeams.map(team=>{
+    const contextIds=new Set(teamContexts.filter(context=>context.teamId===team.id).map(context=>context.id));
+    const playerIds=new Set(playerMemberships.filter(m=>m.actief&&contextIds.has(m.team_season_id)).map(m=>m.player_id));
+    const coachIds=new Set(personRoles.filter(r=>r.actief&&r.role==="coach"&&Boolean(r.team_season_id)&&contextIds.has(String(r.team_season_id))).map(r=>r.person_id));
+    const tcIds=new Set(tcMemberships.filter(m=>m.actief&&contextIds.has(m.team_season_id)).map(m=>m.person_id));
+    return {team,players:playerIds.size,coaches:coachIds.size,tcs:tcIds.size,periods:contextIds.size};
+  });
+
+  if(mode==="personen") return <div className="space-y-5">
+    {header("Personen","Iedereen staat één keer in KorbIQ. Sorteer op naam, functie of team; uitgebreide bediening blijft per persoon beschikbaar.")}
+    {message&&<div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">{message}</div>}
+    <div className="rounded-2xl border bg-white p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div><h3 className="text-lg font-black">Personen</h3><p className="text-xs text-slate-500">Rollen bepalen de beschikbaarheid; teamkoppelingen beheer je onder Teams.</p></div>
+        <button onClick={()=>setPersonOpen(v=>!v)} className="shrink-0 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">+ Persoon</button>
+      </div>
+      <div className="mt-3 flex flex-col gap-2 rounded-xl border bg-slate-50 p-2.5 md:flex-row md:items-center">
+        <div className="relative min-w-0 flex-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input value={personSearch} onChange={e=>setPersonSearch(e.target.value)} placeholder="Zoek op naam, team, rol of e-mail…" className="w-full rounded-lg border bg-white py-2 pl-9 pr-9 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"/>{personSearch&&<button type="button" onClick={()=>setPersonSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md px-1.5 py-1 text-slate-400" aria-label="Zoekopdracht wissen">×</button>}</div>
+        <select value={personTeamFilter} onChange={e=>setPersonTeamFilter(e.target.value)} className="rounded-lg border bg-white px-2.5 py-2 text-xs font-bold"><option value="__all__">Alle teams</option>{uniqueTeams.map(team=><option key={team.id} value={team.id}>{team.name}</option>)}</select>
+        <div className="flex items-center gap-2"><select value={personSortKey} onChange={e=>setPersonSortKey(e.target.value as PersonSortKey)} className="rounded-lg border bg-white px-2 py-2 text-xs font-bold"><option value="voornaam">Voornaam</option><option value="achternaam">Achternaam</option><option value="functie">Functie</option><option value="team">Team</option></select><button type="button" onClick={()=>setPersonSortDirection(d=>d==="asc"?"desc":"asc")} className="rounded-lg border bg-white px-2.5 py-2 text-xs font-black" title="Sorteerrichting">{personSortDirection==="asc"?"A–Z":"Z–A"}</button></div>
+        <label className="flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs font-semibold text-slate-600"><input type="checkbox" checked={showArchivedPeople} onChange={e=>setShowArchivedPeople(e.target.checked)} className="h-4 w-4 rounded border-slate-300"/>Archief tonen</label>
+        <div className="text-xs font-semibold text-slate-400">{sortedPeople.length} resultaat{sortedPeople.length===1?"":"en"}</div>
+      </div>
+
+      {personOpen&&<div className="mt-3 rounded-xl border border-blue-200 bg-blue-50/40 p-4"><div className="grid gap-3 md:grid-cols-3"><input value={personVoornaam} onChange={e=>setPersonVoornaam(e.target.value)} placeholder="Voornaam" className="rounded-xl border px-3 py-2.5 text-sm"/><input value={personTussenvoegsel} onChange={e=>setPersonTussenvoegsel(e.target.value)} placeholder="Tussenvoegsel" className="rounded-xl border px-3 py-2.5 text-sm"/><input value={personAchternaam} onChange={e=>setPersonAchternaam(e.target.value)} placeholder="Achternaam" className="rounded-xl border px-3 py-2.5 text-sm"/></div><div className="mt-3 flex flex-wrap items-center gap-2"><span className="text-xs font-extrabold uppercase tracking-wide text-slate-500">Rollen</span><label className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-bold ${personRoleSpeler?"border-emerald-300 bg-emerald-50 text-emerald-700":"bg-white text-slate-600"}`}><input type="checkbox" checked={personRoleSpeler} onChange={e=>setPersonRoleSpeler(e.target.checked)}/>Speler</label><label className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-bold ${personRoleCoach?"border-cyan-300 bg-cyan-50 text-cyan-700":"bg-white text-slate-600"}`}><input type="checkbox" checked={personRoleCoach} onChange={e=>setPersonRoleCoach(e.target.checked)}/>Coach</label>{isAdmin&&<label className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-bold ${personRoleTc?"border-blue-300 bg-blue-50 text-blue-700":"bg-white text-slate-600"}`}><input type="checkbox" checked={personRoleTc} onChange={e=>setPersonRoleTc(e.target.checked)}/>TC-lid</label>}</div><div className="mt-3 flex justify-end gap-2"><button onClick={()=>{setPersonOpen(false);setPersonRoleSpeler(false);setPersonRoleCoach(false);setPersonRoleTc(false)}} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold">Annuleren</button><button disabled={busy} onClick={()=>void createPerson()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Opslaan</button></div></div>}
+
+      <div className="mt-3 overflow-x-auto rounded-xl border">
+        <div className="min-w-[1040px]">
+          <div className="grid grid-cols-[130px_170px_270px_180px_minmax(210px,1fr)_44px] items-center gap-2 border-b bg-slate-50 px-3 py-2 text-[11px] font-extrabold uppercase tracking-wide text-slate-500">
+            <button type="button" onClick={()=>changePersonSort("voornaam")} className="text-left">Voornaam{personSortIndicator("voornaam")}</button>
+            <button type="button" onClick={()=>changePersonSort("achternaam")} className="text-left">Achternaam{personSortIndicator("achternaam")}</button>
+            <button type="button" onClick={()=>changePersonSort("functie")} className="text-left">Functie{personSortIndicator("functie")}</button>
+            <button type="button" onClick={()=>changePersonSort("team")} className="text-left">Team{personSortIndicator("team")}</button>
+            <span>Account</span><span />
+          </div>
+          {sortedPeople.map(p=>{
+            const roles=personRoles.filter(r=>r.person_id===p.id&&r.actief);
+            const profile=profileByPersonId.get(p.id);
+            const globalTcRole=roles.find(r=>r.role==="tc"&&r.team_season_id===null);
+            const globalCoachRole=roles.find(r=>r.role==="coach"&&r.team_season_id===null);
+            const globalPlayerRole=roles.find(r=>r.role==="speler"&&r.team_season_id===null);
+            const teamLabels=personTeamLabels(p);
+            const actionsOpen=personActionsId===p.id;
+            return <div key={p.id} className={`border-b last:border-b-0 ${p.actief?"bg-white":"bg-slate-50 opacity-70"}`}>
+              {editingPersonId===p.id?<div className="p-3"><div className="grid gap-2 md:grid-cols-3"><input value={editVoornaam} onChange={e=>setEditVoornaam(e.target.value)} className="rounded-lg border px-3 py-2 text-sm"/><input value={editTussenvoegsel} onChange={e=>setEditTussenvoegsel(e.target.value)} className="rounded-lg border px-3 py-2 text-sm" placeholder="Tussenvoegsel"/><input value={editAchternaam} onChange={e=>setEditAchternaam(e.target.value)} className="rounded-lg border px-3 py-2 text-sm"/></div><div className="mt-2 flex justify-end gap-2"><button onClick={()=>setEditingPersonId(null)} className="rounded-lg border px-3 py-1.5 text-xs font-bold">Annuleren</button><button onClick={()=>void savePerson()} className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white">Opslaan</button></div></div>:<div className="grid grid-cols-[130px_170px_270px_180px_minmax(210px,1fr)_44px] items-center gap-2 px-3 py-2">
+                <div className="truncate text-sm font-bold text-slate-900">{p.voornaam}</div>
+                <div className="truncate text-sm font-bold text-slate-900">{[p.tussenvoegsel,p.achternaam].filter(Boolean).join(" ")}{!p.actief&&<span className="ml-1 rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-extrabold text-slate-600">ARCHIEF</span>}</div>
+                <div className="flex flex-wrap gap-1"><button disabled={busy||!p.actief} onClick={()=>globalPlayerRole?void removeRole(globalPlayerRole.id):void addGlobalRole(p.id,"speler")} className={`rounded-md border px-2 py-1 text-[10px] font-extrabold disabled:opacity-40 ${globalPlayerRole?"border-emerald-300 bg-emerald-50 text-emerald-700":"bg-white text-slate-500"}`}>{globalPlayerRole?"✓ Speler":"+ Speler"}</button><button disabled={busy||!p.actief} onClick={()=>globalCoachRole?void removeRole(globalCoachRole.id):void addGlobalRole(p.id,"coach")} className={`rounded-md border px-2 py-1 text-[10px] font-extrabold disabled:opacity-40 ${globalCoachRole?"border-cyan-300 bg-cyan-50 text-cyan-700":"bg-white text-slate-500"}`}>{globalCoachRole?"✓ Coach":"+ Coach"}</button>{isAdmin&&<button disabled={busy||!p.actief} onClick={()=>globalTcRole?void removeRole(globalTcRole.id):void addGlobalRole(p.id,"tc")} className={`rounded-md border px-2 py-1 text-[10px] font-extrabold disabled:opacity-40 ${globalTcRole?"border-blue-300 bg-blue-50 text-blue-700":"bg-white text-slate-500"}`}>{globalTcRole?"✓ TC":"+ TC"}</button>}{roles.some(r=>r.role==="admin")&&<span className="rounded-md bg-purple-100 px-2 py-1 text-[10px] font-extrabold text-purple-700">ADMIN</span>}</div>
+                <div className="truncate text-xs text-slate-600" title={teamLabels.join(", ")}>{teamLabels.join(", ")||"—"}</div>
+                <div className="min-w-0"><div className="truncate text-xs text-slate-600">{profile?.email??"Geen loginaccount"}</div>{profile&&<div className={`mt-0.5 text-[9px] font-extrabold uppercase ${profile.account_status==="actief"?"text-emerald-700":profile.account_status==="gedeactiveerd"?"text-slate-500":"text-amber-700"}`}>{profile.account_status==="actief"?"Actief":profile.account_status==="gedeactiveerd"?"Gedeactiveerd":"Uitgenodigd"}</div>}</div>
+                <button type="button" onClick={()=>{setPersonActionsId(v=>v===p.id?null:p.id);setInvitePersonId(null);setAccountPanelPersonId(null)}} className={`grid h-8 w-8 place-items-center rounded-lg border text-slate-500 ${actionsOpen?"border-blue-300 bg-blue-50 text-blue-700":"bg-white"}`} aria-label={`Beheer ${fullName(p)}`} title="Beheer">•••</button>
+              </div>}
+              {actionsOpen&&<div className="border-t bg-slate-50/70 px-3 py-2.5"><div className="flex flex-wrap gap-2"><button onClick={()=>openEdit(p)} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-bold">Bewerken</button>{!profile?<button onClick={()=>{setInvitePersonId(p.id);setInviteEmail("");setAccountPanelPersonId(null)}} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700">Account uitnodigen</button>:<button onClick={()=>{setAccountPanelPersonId(v=>v===p.id?null:p.id);setAccountEmailEdit(profile.email??"");setInvitePersonId(null)}} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">{accountPanelPersonId===p.id?"Account sluiten":"Account beheren"}</button>}{p.actief?<><button onClick={()=>void archivePerson(p.id)} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-bold text-orange-700">Archiveren</button>{!profile&&<button onClick={()=>void deletePerson(p.id)} className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-red-600">Definitief verwijderen</button>}</>:<button onClick={()=>void reactivatePerson(p.id)} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-bold text-emerald-700">Heractiveren</button>}</div></div>}
+              {invitePersonId===p.id&&<div className="border-t border-amber-200 bg-amber-50 p-3"><div className="text-sm font-bold">Loginaccount uitnodigen voor {fullName(p)}</div><div className="mt-2 flex gap-2"><input type="email" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} placeholder="E-mailadres" className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm"/><button onClick={()=>setInvitePersonId(null)} className="rounded-lg border bg-white px-3 py-2 text-xs font-bold">Annuleren</button><button disabled={busy} onClick={()=>void inviteAccount(p.id)} className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Uitnodigen</button></div></div>}
+              {accountPanelPersonId===p.id&&profile&&<div className="border-t border-blue-200 bg-blue-50/50 p-3"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black">Loginaccount beheren</div><div className="text-xs text-slate-500">{profile.email??"geen"}</div></div><span className="rounded-full bg-white px-2 py-1 text-[10px] font-extrabold uppercase">{profile.account_status??profile.invitation_status??"onbekend"}</span></div><div className="mt-3 grid gap-2 lg:grid-cols-[1fr_auto]"><input type="email" value={accountEmailEdit} onChange={e=>setAccountEmailEdit(e.target.value)} placeholder="Nieuw e-mailadres" className="rounded-lg border bg-white px-3 py-2 text-sm"/><button disabled={busy||!accountEmailEdit.trim()||accountEmailEdit.trim().toLowerCase()===(profile.email??"").trim().toLowerCase()} onClick={()=>void changeAccountEmail(p.id)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">E-mail wijzigen</button></div><div className="mt-3 flex flex-wrap gap-2">{profile.account_status!=="actief"&&profile.invitation_status!=="actief"&&<button disabled={busy} onClick={()=>void resendAccountInvite(p.id)} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700">Opnieuw uitnodigen</button>}{(profile.account_status==="actief"||profile.invitation_status==="actief")&&<button disabled={busy} onClick={()=>void resetAccountPassword(p.id)} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-bold">Wachtwoord herstellen</button>}<button disabled={busy} onClick={()=>void unlinkAccount(p.id)} className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-red-600">Account loskoppelen</button></div></div>}
+            </div>;
+          })}
+          {!sortedPeople.length&&<div className="p-8 text-center text-sm text-slate-500">{personSearch.trim()?"Geen personen gevonden met deze zoekopdracht.":showArchivedPeople?"Er zijn geen personen om te tonen.":"Geen actieve personen gevonden."}</div>}
+        </div>
+      </div>
+    </div>
+  </div>;
+
+  if(mode==="teams") return <div className="space-y-5">
+    {header("Teams","Beheer het team één keer. Spelers, coaches en TC gelden automatisch voor veld najaar, zaal en veld voorjaar.")}
+    {message&&<div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">{message}</div>}
+    <div className="rounded-2xl border bg-white p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-wrap items-center gap-3">
+          <select value={managedTeamId} onChange={e=>{setManagedTeamId(e.target.value);setTeamPersonId("");setTeamPlayerSearch("")}} className="min-w-[260px] rounded-xl border px-3 py-2.5 font-bold"><option value="__all__">Alle teams</option>{uniqueTeams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          {activeContext&&<button onClick={()=>void archiveTeam(activeContext.id)} className="rounded-xl border border-orange-200 px-3 py-2 text-xs font-bold text-orange-700">Team archiveren</button>}
+        </div>
+        {(isAdmin||isTcMember)&&<div className="min-w-0 lg:w-[420px]">
+          <div className="text-sm font-black">Nieuw team</div>
+          <div className="mt-1 text-xs text-slate-500">Admin en TC-leden kunnen teams aanmaken. Het team wordt automatisch aan alle actieve competitieperioden gekoppeld.</div>
+          <div className="mt-2 flex gap-2">
+            <input value={newTeamName} onChange={e=>setNewTeamName(e.target.value)} placeholder="Bijv. K4 of U17-2" className="min-w-0 flex-1 rounded-xl border px-3 py-2"/>
+            <button disabled={!newTeamName.trim()||busy} onClick={()=>void createTeam()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Team aanmaken</button>
+          </div>
+        </div>}
+      </div>
+      {!(isAdmin||isTcMember)&&<div className="mt-3 text-xs text-slate-500">Nieuwe teams kunnen alleen door Admin of TC worden aangemaakt.</div>}
+    </div>
+    {!activeContext?<div className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between gap-3"><div><h3 className="text-lg font-black">Alle teams</h3><p className="mt-1 text-sm text-slate-500">Dit overzicht staat los van de teamkeuze linksboven. Open een team om de koppelingen te beheren.</p></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{teamSummaries.length} teams</span></div><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{teamSummaries.map(summary=><button type="button" key={summary.team.id} onClick={()=>setManagedTeamId(summary.team.id)} className="rounded-2xl border p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40"><div className="flex items-center justify-between gap-3"><div className="text-lg font-black">{summary.team.name}</div><span className="text-xs font-bold text-blue-700">Beheren →</span></div><div className="mt-3 grid grid-cols-3 gap-2 text-center"><div className="rounded-xl bg-slate-50 px-2 py-2"><div className="text-lg font-black">{summary.players}</div><div className="text-[10px] font-bold uppercase text-slate-500">Spelers</div></div><div className="rounded-xl bg-slate-50 px-2 py-2"><div className="text-lg font-black">{summary.coaches}</div><div className="text-[10px] font-bold uppercase text-slate-500">Coaches</div></div><div className="rounded-xl bg-slate-50 px-2 py-2"><div className="text-lg font-black">{summary.tcs}</div><div className="text-[10px] font-bold uppercase text-slate-500">TC</div></div></div><div className="mt-2 text-xs text-slate-400">{summary.periods} gekoppelde competitieperiode{summary.periods===1?"":"n"}</div></button>)}{!teamSummaries.length&&<div className="text-sm text-slate-500">Nog geen actief team beschikbaar.</div>}</div></div>:<div className="grid gap-4 xl:grid-cols-3">
+      <div className="rounded-2xl border bg-white p-5">
+        <div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black">Spelers</h3><p className="mt-1 text-xs text-slate-500">Basisspelers horen bij dit team. Gastspelers kunnen uit de hele personenlijst worden gekozen.</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{activePlayers.length}</span></div>
+        <div className="mt-3 space-y-2">{activePlayers.map(({m,player})=>{const person=player?.person_id?personById.get(player.person_id):null;return person?<div key={m.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><div><div className="font-bold">{fullName(person)}</div><div className="text-xs text-slate-500">{m.status==="Gast"?"Gastspeler":"Basisspeler"} · {player?.geslacht}</div></div><button onClick={()=>void removePlayer(person.id,managedTeamId)} className="text-xs font-bold text-red-600">Verwijderen</button></div>:null})}{!activePlayers.length&&<div className="text-sm text-slate-400">Geen spelers gekoppeld.</div>}</div>
+
+        <div className="mt-4 border-t pt-4">
+          <div className="text-sm font-black">Speler toevoegen</div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button type="button" onClick={()=>{setTeamPlayerStatus("Basisspeler");setTeamPersonId("")}} className={`rounded-xl border px-3 py-2 text-sm font-bold ${teamPlayerStatus==="Basisspeler"?"border-emerald-400 bg-emerald-50 text-emerald-700":"bg-white text-slate-600"}`}>Basisspeler</button>
+            <button type="button" onClick={()=>{setTeamPlayerStatus("Gast");setTeamPersonId("")}} className={`rounded-xl border px-3 py-2 text-sm font-bold ${teamPlayerStatus==="Gast"?"border-amber-400 bg-amber-50 text-amber-700":"bg-white text-slate-600"}`}>Gastspeler</button>
+          </div>
+          <div className="mt-2 relative">
+            <input value={teamPlayerSearch} onChange={e=>{setTeamPlayerSearch(e.target.value);setTeamPersonId("")}} placeholder="Zoek op naam, team of seizoen…" className="w-full rounded-xl border px-3 py-2.5 pr-9 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"/>
+            {teamPlayerSearch&&<button type="button" onClick={()=>{setTeamPlayerSearch("");setTeamPersonId("")}} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-100">×</button>}
+          </div>
+          <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border bg-white">
+            {teamPlayerCandidates.slice(0,80).map(p=>{
+              const existingPlayer=playerByPersonId.get(p.id);
+              const existingMemberships=existingPlayer?playerMemberships.filter(m=>m.player_id===existingPlayer.id&&m.actief):[];
+              const teamLabels=existingMemberships.map(m=>{const c=contextById.get(m.team_season_id);return c?`${c.teamName} (${m.status==="Gast"?"gast":"basis"})`:""}).filter(Boolean);
+              const selected=teamPersonId===p.id;
+              return <button type="button" key={p.id} onClick={()=>{setTeamPersonId(p.id);if(existingPlayer?.geslacht)setTeamPlayerGender(existingPlayer.geslacht)}} className={`flex w-full items-center justify-between gap-3 border-b px-3 py-2.5 text-left last:border-0 ${selected?"bg-blue-50":"hover:bg-slate-50"}`}><div className="min-w-0"><div className="truncate text-sm font-bold text-slate-800">{fullName(p)}</div><div className="truncate text-[11px] text-slate-500">{teamLabels.length?teamLabels.join(" · "):existingPlayer?"Speler zonder actieve teamkoppeling":"Nog geen spelersprofiel"}</div></div>{selected&&<span className="shrink-0 text-xs font-black text-blue-600">Gekozen</span>}</button>
+            })}
+            {!teamPlayerCandidates.length&&<div className="p-4 text-center text-sm text-slate-400">{teamPlayerSearch.trim()?"Geen personen gevonden.":teamPlayerStatus==="Gast"?"Geen beschikbare spelers. Geef iemand eerst de rol Speler bij Personen.":"Geen beschikbare basisspelers. Kies Gastspeler om ook spelers uit andere teams te zien."}</div>}
+          </div>
+          {teamPlayerCandidates.length>80&&<div className="mt-1 text-[11px] text-slate-400">Eerste 80 resultaten getoond. Gebruik de zoekbalk om gerichter te zoeken.</div>}
+          <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+            <select value={teamPlayerGender} onChange={e=>setTeamPlayerGender(e.target.value as Geslacht)} className="rounded-xl border px-2 py-2 text-sm"><option>Dame</option><option>Heer</option></select>
+            <button disabled={!teamPersonId||busy} onClick={()=>void addPlayerToTeam(teamPersonId,managedTeamId)} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">+ {teamPlayerStatus==="Gast"?"Gastspeler":"Basisspeler"} koppelen</button>
+          </div>
+          {teamPlayerStatus==="Gast"&&<div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">Bij Gastspeler worden ook spelers getoond die al basisspeler zijn bij een ander team in dit seizoen. De speler blijft daar gewoon gekoppeld.</div>}
+        </div>
+      </div>
+      <div className="rounded-2xl border bg-white p-5">
+        <div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black">Coaches</h3><p className="mt-1 text-xs text-slate-500">Zoek op naam, huidig team, rol of seizoen.</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{activeCoaches.length}</span></div>
+        <div className="mt-3 space-y-2">{activeCoaches.map(r=>{const person=personById.get(r.person_id);return person?<div key={r.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span className="font-bold">{fullName(person)}</span><button onClick={()=>void removeCoach(person.id,managedTeamId)} className="text-xs font-bold text-red-600">Verwijderen</button></div>:null})}{!activeCoaches.length&&<div className="text-sm text-slate-400">Geen coaches gekoppeld.</div>}</div>
+        <div className="mt-4 border-t pt-4">
+          <div className="relative"><input value={teamCoachSearch} onChange={e=>{setTeamCoachSearch(e.target.value);setTeamCoachPersonId("")}} placeholder="Zoek coach op naam, team of rol…" className="w-full rounded-xl border px-3 py-2.5 pr-9 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"/>{teamCoachSearch&&<button type="button" onClick={()=>{setTeamCoachSearch("");setTeamCoachPersonId("")}} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-100">×</button>}</div>
+          <div className="mt-2 max-h-52 overflow-y-auto rounded-xl border bg-white">{teamCoachCandidates.slice(0,80).map(p=>{const selected=teamCoachPersonId===p.id;const coachTeams=personRoles.filter(r=>r.person_id===p.id&&r.role==="coach"&&r.actief&&r.team_season_id).map(r=>contextById.get(String(r.team_season_id))?.teamName).filter(Boolean);return <button type="button" key={p.id} onClick={()=>setTeamCoachPersonId(p.id)} className={`flex w-full items-center justify-between gap-3 border-b px-3 py-2.5 text-left last:border-0 ${selected?"bg-blue-50":"hover:bg-slate-50"}`}><div className="min-w-0"><div className="truncate text-sm font-bold text-slate-800">{fullName(p)}</div><div className="truncate text-[11px] text-slate-500">{coachTeams.length?`Coach: ${coachTeams.join(" · ")}`:"Nog niet als coach aan een team gekoppeld"}</div></div>{selected&&<span className="shrink-0 text-xs font-black text-blue-600">Gekozen</span>}</button>})}{!teamCoachCandidates.length&&<div className="p-4 text-center text-sm text-slate-400">Geen coaches/personen gevonden.</div>}</div>
+          {teamCoachCandidates.length>80&&<div className="mt-1 text-[11px] text-slate-400">Eerste 80 resultaten getoond. Zoek gerichter om de lijst te verkleinen.</div>}
+          <button disabled={!teamCoachPersonId||busy} onClick={async()=>{await addCoach(teamCoachPersonId,managedTeamId);setTeamCoachPersonId("");setTeamCoachSearch("")}} className="mt-2 w-full rounded-xl bg-cyan-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">+ Coach koppelen</button>
+        </div>
+      </div>
+      <div className="rounded-2xl border bg-white p-5">
+        <div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black">TC</h3><p className="mt-1 text-xs text-slate-500">Alleen personen met de rol TC-lid worden hier aangeboden.</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{activeTcs.length}</span></div>
+        <div className="mt-3 space-y-2">{activeTcs.map(t=>{const person=personById.get(t.person_id);return person?<div key={t.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span className="font-bold">{fullName(person)}</span><button onClick={()=>void removeTc(person.id,managedTeamId)} className="text-xs font-bold text-red-600">Verwijderen</button></div>:null})}{!activeTcs.length&&<div className="text-sm text-slate-400">Geen TC-lid gekoppeld.</div>}</div>
+        <div className="mt-4 border-t pt-4">
+          <div className="relative"><input value={teamTcSearch} onChange={e=>{setTeamTcSearch(e.target.value);setTeamTcPersonId("")}} placeholder="Zoek TC-lid op naam of team…" className="w-full rounded-xl border px-3 py-2.5 pr-9 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"/>{teamTcSearch&&<button type="button" onClick={()=>{setTeamTcSearch("");setTeamTcPersonId("")}} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-100">×</button>}</div>
+          <div className="mt-2 max-h-52 overflow-y-auto rounded-xl border bg-white">{teamTcCandidates.slice(0,80).map(p=>{const selected=teamTcPersonId===p.id;const tcTeams=tcMemberships.filter(t=>t.person_id===p.id&&t.actief).map(t=>contextById.get(t.team_season_id)?.teamName).filter(Boolean);return <button type="button" key={p.id} onClick={()=>setTeamTcPersonId(p.id)} className={`flex w-full items-center justify-between gap-3 border-b px-3 py-2.5 text-left last:border-0 ${selected?"bg-blue-50":"hover:bg-slate-50"}`}><div className="min-w-0"><div className="truncate text-sm font-bold text-slate-800">{fullName(p)}</div><div className="truncate text-[11px] text-slate-500">{tcTeams.length?`TC: ${tcTeams.join(" · ")}`:"TC-lid · nog niet aan een team gekoppeld"}</div></div>{selected&&<span className="shrink-0 text-xs font-black text-blue-600">Gekozen</span>}</button>})}{!teamTcCandidates.length&&<div className="p-4 text-center text-sm text-slate-400">Geen TC-leden gevonden. Geef iemand eerst de rol TC-lid bij Personen.</div>}</div>
+          {teamTcCandidates.length>80&&<div className="mt-1 text-[11px] text-slate-400">Eerste 80 resultaten getoond. Zoek gerichter om de lijst te verkleinen.</div>}
+          <button disabled={!teamTcPersonId||busy} onClick={async()=>{await addTc(teamTcPersonId,managedTeamId);setTeamTcPersonId("");setTeamTcSearch("")}} className="mt-2 w-full rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">+ TC-lid koppelen</button>
+        </div>
+      </div>
+    </div>}
+  </div>;
+
+  const periodLabel=(periode:ManagedSeason["periode"])=>periode==="veld_najaar"?"Veld najaar":periode==="zaal"?"Zaal":periode==="veld_voorjaar"?"Veld voorjaar":"Overig";
+
+  return <div className="space-y-5">
+    {header("Seizoenen","Beheer competitiejaren. KorbIQ maakt automatisch veld najaar, zaal en veld voorjaar aan en koppelt alle actieve teams.")}
+    {message&&<div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">{message}</div>}
+    <div className="rounded-2xl border bg-white p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><h3 className="text-lg font-black">Nieuw competitiejaar</h3><p className="mt-1 text-sm text-slate-500">Je vult alleen het eerste jaar in. KorbIQ maakt automatisch de drie competitieperioden en alle teamkoppelingen.</p></div><div className="flex gap-2"><input type="number" min="2020" max="2100" value={newCompetitionStartYear} onChange={e=>setNewCompetitionStartYear(e.target.value)} className="w-28 rounded-xl border px-3 py-2"/><div className="flex items-center text-sm font-bold text-slate-500">/ {Number(newCompetitionStartYear||0)+1||"…"}</div><button disabled={busy||!newCompetitionStartYear} onClick={()=>void createCompetitionYear()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">+ Competitiejaar</button></div></div>
+    </div>
+    <div className="space-y-3">{competitionYears.map(y=>{const yearSeasons=seasons.filter(s=>s.competition_year_id===y.id).sort((a,b)=>["veld_najaar","zaal","veld_voorjaar"].indexOf(String(a.periode))-["veld_najaar","zaal","veld_voorjaar"].indexOf(String(b.periode)));return <div key={y.id} className={`rounded-2xl border bg-white p-5 ${y.actief?"":"opacity-70"}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-xs font-extrabold uppercase tracking-[.12em] text-blue-700">Competitiejaar</div><h3 className="mt-0.5 text-xl font-black">{y.naam}</h3><div className="mt-1 text-xs text-slate-500">{y.actief?"Actief":"Gearchiveerd"} · teams worden automatisch gekoppeld</div></div><button disabled={busy} onClick={()=>void setCompetitionYearActive(y.id,!y.actief)} className={`rounded-xl px-3 py-2 text-xs font-extrabold ${y.actief?"border border-slate-200 bg-white text-slate-600":"bg-emerald-600 text-white"}`}>{y.actief?"Archiveren":"Opnieuw activeren"}</button></div><div className="mt-4 grid gap-2 md:grid-cols-3">{yearSeasons.map(s=><div key={s.id} className={`rounded-xl border px-3 py-3 ${s.actief?"border-blue-100 bg-blue-50/60":"bg-slate-50"}`}><div className="font-bold">{periodLabel(s.periode)}</div><div className="mt-0.5 text-xs text-slate-500">{s.naam}</div></div>)}</div></div>})}{!competitionYears.length&&<div className="rounded-2xl border border-dashed bg-white p-8 text-center text-sm text-slate-500">Nog geen competitiejaren gevonden. Voer eerst Query 24 uit en maak daarna hierboven je eerste competitiejaar aan.</div>}</div>
+    <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Wedstrijdtypen</h3><p className="mt-1 text-sm leading-6 text-slate-500"><b>Competitie</b> gebruikt één van de drie competitieperioden. <b>Oefenwedstrijd</b> en <b>Toernooi</b> blijven losse wedstrijden en worden niet als seizoen aangemaakt.</p></div>
+  </div>;
+}
+
 //////////////////////////////////////////////////////////////////////////////
 // --- Spelers Tab -----------------------------------------------------------
 //////////////////////////////////////////////////////////////////////////////
@@ -3023,6 +5013,10 @@ function SpelersTab({
   updateSpelerActief,
   exportTeam,
   triggerImportTeam,
+  accountProfiles,
+  accountProfilesLoading,
+  invitePlayerAccount,
+  refreshAccountProfiles,
 }: {
   spelers: Player[];
   speelSeconden: Record<string, number>;
@@ -3032,11 +5026,27 @@ function SpelersTab({
   updateSpelerActief: (id: string, actief: boolean) => void;
   exportTeam: () => void;
   triggerImportTeam: () => void;
+  accountProfiles: AuthProfile[];
+  accountProfilesLoading: boolean;
+  invitePlayerAccount: (player: Player, email: string) => Promise<void>;
+  refreshAccountProfiles: () => Promise<void>;
 }) {
   const [naam, setNaam] = useState("");
   const [geslacht, setGeslacht] = useState<Geslacht>("Dame");
   const [status, setStatus] = useState<PlayerStatus>("Basisspeler");
   const [foto, setFoto] = useState("");
+  const [invitePlayerId, setInvitePlayerId] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState("");
+
+  const profileByPlayerId = useMemo(() => {
+    const map = new Map<string, AuthProfile>();
+    accountProfiles.forEach((profile) => {
+      if (profile.speler_id) map.set(profile.speler_id, profile);
+    });
+    return map;
+  }, [accountProfiles]);
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -3114,47 +5124,123 @@ function SpelersTab({
 
       {/* Rechter kolom: spelerslijst */}
       <div className="border rounded-2xl p-4">
-        <h2 className="font-semibold mb-2">Spelerslijst</h2>
+        <div className="mb-2 flex items-center justify-between gap-3"><h2 className="font-semibold">Spelerslijst</h2><button type="button" onClick={()=>void refreshAccountProfiles()} disabled={accountProfilesLoading} className="text-xs font-bold text-blue-700 hover:underline disabled:opacity-50">{accountProfilesLoading ? "Accounts laden…" : "Accounts vernieuwen"}</button></div>
         <div className="flex flex-col gap-2">
           {spelers.length === 0 && (
             <div className="text-gray-500">Nog geen spelers toegevoegd.</div>
           )}
-          {spelers.map((p) => (
-            <div
-              key={p.id}
-              className={`flex items-center justify-between gap-3 border rounded-xl p-2 ${p.actief ? "bg-white" : "bg-gray-100 opacity-70"}`}
-            >
-              <div className="flex items-center gap-3">
-                <Avatar url={p.foto} naam={p.naam} />
-                <div>
-                  <div className="font-medium">{p.naam}</div>
-                  <div className="text-xs text-gray-500">{p.geslacht} · {Math.floor((speelSeconden[p.id] ?? 0) / 60)} min gespeeld deze wedstrijd</div>
-                  <select
-                    value={p.status}
-                    onChange={(e) => updateSpelerStatus(p.id, e.target.value as PlayerStatus)}
-                    className="mt-1 border rounded-lg px-2 py-1 text-xs bg-white"
-                  >
-                    <option value="Basisspeler">Basisspeler</option>
-                    <option value="Gast">Invaller / Gast</option>
-                  </select>
-                  <label className="mt-2 flex items-center gap-2 text-xs font-medium">
-                    <input
-                      type="checkbox"
-                      checked={p.actief}
-                      onChange={(e) => updateSpelerActief(p.id, e.target.checked)}
-                    />
-                    Actief en beschikbaar voor wedstrijden
-                  </label>
-                </div>
-              </div>
-              <button
-                className="text-red-600 text-sm"
-                onClick={() => delSpeler(p.id)}
+          {spelers.map((p) => {
+            const account = profileByPlayerId.get(p.id);
+            const invitationOpen = invitePlayerId === p.id;
+            const accountState = account?.invitation_status === "actief"
+              ? "actief"
+              : account
+                ? "uitgenodigd"
+                : "geen";
+            return (
+              <div
+                key={p.id}
+                className={`border rounded-xl p-3 ${p.actief ? "bg-white" : "bg-gray-100 opacity-70"}`}
               >
-                Verwijder
-              </button>
-            </div>
-          ))}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <Avatar url={p.foto} naam={p.naam} />
+                    <div className="min-w-0">
+                      <div className="font-medium">{p.naam}</div>
+                      <div className="text-xs text-gray-500">{p.geslacht} · {Math.floor((speelSeconden[p.id] ?? 0) / 60)} min gespeeld deze wedstrijd</div>
+                      <select
+                        value={p.status}
+                        onChange={(e) => updateSpelerStatus(p.id, e.target.value as PlayerStatus)}
+                        className="mt-1 border rounded-lg px-2 py-1 text-xs bg-white"
+                      >
+                        <option value="Basisspeler">Basisspeler</option>
+                        <option value="Gast">Invaller / Gast</option>
+                      </select>
+                      <label className="mt-2 flex items-center gap-2 text-xs font-medium">
+                        <input
+                          type="checkbox"
+                          checked={p.actief}
+                          onChange={(e) => updateSpelerActief(p.id, e.target.checked)}
+                        />
+                        Actief en beschikbaar voor wedstrijden
+                      </label>
+                    </div>
+                  </div>
+                  <button
+                    className="shrink-0 text-red-600 text-sm"
+                    onClick={() => delSpeler(p.id)}
+                  >
+                    Verwijder
+                  </button>
+                </div>
+
+                {p.status === "Basisspeler" ? (
+                  <div className="mt-3 border-t pt-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-extrabold uppercase tracking-wide text-slate-500">KorbIQ-account</div>
+                        {accountState === "actief" && <div className="mt-1 text-xs font-semibold text-emerald-700">● Actief{account?.email ? ` · ${account.email}` : ""}</div>}
+                        {accountState === "uitgenodigd" && <div className="mt-1 text-xs font-semibold text-amber-700">● Uitnodiging verstuurd{account?.email ? ` · ${account.email}` : ""}</div>}
+                        {accountState === "geen" && <div className="mt-1 text-xs font-semibold text-slate-500">● Geen account</div>}
+                      </div>
+                      {accountState === "geen" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInviteMessage("");
+                            setInviteEmail("");
+                            setInvitePlayerId(invitationOpen ? null : p.id);
+                          }}
+                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100"
+                        >
+                          {invitationOpen ? "Annuleren" : "Uitnodigen"}
+                        </button>
+                      )}
+                    </div>
+
+                    {invitationOpen && accountState === "geen" && (
+                      <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                        <label className="block text-xs font-bold text-slate-700">E-mailadres speler
+                          <input
+                            type="email"
+                            value={inviteEmail}
+                            onChange={(e) => setInviteEmail(e.target.value)}
+                            placeholder="speler@voorbeeld.nl"
+                            className="mt-1.5 w-full rounded-lg border bg-white px-3 py-2 text-sm"
+                          />
+                        </label>
+                        {inviteMessage && <div className="mt-2 text-xs font-semibold text-red-700">{inviteMessage}</div>}
+                        <div className="mt-3 flex gap-2">
+                          <button
+                            type="button"
+                            disabled={inviteBusy}
+                            onClick={async () => {
+                              setInviteBusy(true);
+                              setInviteMessage("");
+                              try {
+                                await invitePlayerAccount(p, inviteEmail);
+                                setInvitePlayerId(null);
+                                setInviteEmail("");
+                              } catch (error) {
+                                setInviteMessage(error instanceof Error ? error.message : "Uitnodiging versturen is mislukt.");
+                              } finally {
+                                setInviteBusy(false);
+                              }
+                            }}
+                            className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-extrabold text-white hover:bg-blue-700 disabled:opacity-60"
+                          >
+                            {inviteBusy ? "Versturen…" : "Uitnodiging versturen"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-3 border-t pt-3 text-xs text-slate-500">Invallers / gasten krijgen geen standaard KorbIQ-account.</div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -3183,11 +5269,11 @@ function VakindelingTab({
   homeAway,
   setHomeAway,
   season,
-  seasonOptions,
+  competitionPeriodOptions,
   setSeason,
-  addSeason,
   matchType,
   setMatchType,
+  onOpenMatch,
 }: {
   spelers: Player[];
   toegewezen: Set<string>;
@@ -3212,18 +5298,20 @@ function VakindelingTab({
   homeAway: "" | "thuis" | "uit";
   setHomeAway: (value: "" | "thuis" | "uit") => void;
   season: string;
-  seasonOptions: string[];
+  competitionPeriodOptions: string[];
   setSeason: (value: string) => void;
-  addSeason: (value: string) => void;
   matchType: MatchType;
   setMatchType: (value: MatchType) => void;
+  onOpenMatch: () => void;
 }) {
-  const [newSeason, setNewSeason] = useState("");
   const beschikbare = spelers.filter((s) => s.actief && !toegewezen.has(s.id));
 
   // JSX VakindelingTab
   const opstellingCompleet = [...aanval, ...verdediging].every(Boolean);
-  const wedstrijdgegevensCompleet = Boolean(opponentName.trim()) && Boolean(homeAway);
+  const wedstrijdgegevensCompleet =
+    Boolean(opponentName.trim()) &&
+    Boolean(homeAway) &&
+    (matchType !== "Competitie" || Boolean(season));
 
 
   return (
@@ -3397,51 +5485,12 @@ function VakindelingTab({
         {/* Minder vaak te wijzigen instellingen */}
         <div className="border rounded-2xl p-4 bg-gray-50">
           <div className="mb-3">
-            <h3 className="font-bold">Seizoeninstellingen</h3>
+            <h3 className="font-bold">Wedstrijdinstellingen</h3>
             <p className="text-xs text-gray-500">
-              Deze instellingen wijzigen meestal niet iedere wedstrijd en worden onthouden.
+              Kies hier het wedstrijdtype. Alleen bij competitie is een competitieperiode nodig.
             </p>
           </div>
           <div className="grid md:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium mb-1">Seizoen:</label>
-              <select
-                className="border rounded-lg px-2 py-2 text-sm w-full"
-                value={season}
-                onChange={(e) => setSeason(e.target.value)}
-              >
-                {seasonOptions.map((item) => (
-                  <option key={item} value={item}>{item}</option>
-                ))}
-              </select>
-              <div className="flex gap-2 mt-2">
-                <input
-                  className="border rounded-lg px-2 py-1.5 text-sm flex-1 min-w-0"
-                  placeholder="Bijv. Zaal 2027/2028"
-                  value={newSeason}
-                  onChange={(e) => setNewSeason(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && newSeason.trim()) {
-                      e.preventDefault();
-                      addSeason(newSeason);
-                      setNewSeason("");
-                    }
-                  }}
-                />
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={!newSeason.trim()}
-                  onClick={() => {
-                    addSeason(newSeason);
-                    setNewSeason("");
-                  }}
-                >
-                  Nieuw seizoen
-                </Button>
-              </div>
-            </div>
-
             <div>
               <label className="block text-sm font-medium mb-1">Wedstrijdtype:</label>
               <select
@@ -3453,7 +5502,63 @@ function VakindelingTab({
                 <option value="Oefenwedstrijd">Oefenwedstrijd</option>
                 <option value="Toernooi">Toernooi</option>
               </select>
+              <div className="mt-1 text-xs text-gray-500">
+                Oefenwedstrijden en toernooien vallen buiten de competitieperiode.
+              </div>
             </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Competitieperiode{matchType === "Competitie" ? " *" : ""}
+              </label>
+              {matchType === "Competitie" ? (
+                competitionPeriodOptions.length ? (
+                  <select
+                    className="border rounded-lg px-2 py-2 text-sm w-full"
+                    value={season}
+                    onChange={(e) => setSeason(e.target.value)}
+                  >
+                    {competitionPeriodOptions.map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    Voor dit team is nog geen actieve competitieperiode beschikbaar.
+                  </div>
+                )
+              ) : (
+                <div className="rounded-lg border bg-white px-3 py-2 text-sm text-gray-500">
+                  Niet van toepassing
+                </div>
+              )}
+              <div className="mt-1 text-xs text-gray-500">
+                Competitieperioden beheer je centraal onder Beheer → Seizoenen.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`rounded-2xl border p-4 ${opstellingCompleet && wedstrijdgegevensCompleet ? "border-blue-200 bg-blue-50" : "border-amber-200 bg-amber-50"}`}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="font-bold">Klaar met instellen?</div>
+              <p className="mt-0.5 text-xs text-gray-600">
+                Open de huidige wedstrijd. De wedstrijd en klok starten pas wanneer je dat daar zelf kiest.
+              </p>
+              {(!opstellingCompleet || !wedstrijdgegevensCompleet) && (
+                <p className="mt-1 text-xs font-semibold text-amber-700">
+                  Je kunt alvast doorgaan; ontbrekende gegevens worden gecontroleerd wanneer je de wedstrijd echt start.
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onOpenMatch}
+              className="shrink-0 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-blue-700"
+            >
+              Naar huidige wedstrijd →
+            </button>
           </div>
         </div>
       </div>
@@ -3548,6 +5653,7 @@ function WedstrijdTab({
   openVakActionModal,
   opponentName,
   onEndMatch,
+  onOpenSettings,
   onCancelMatch,
 }: {
   state: AppState;
@@ -3566,6 +5672,7 @@ function WedstrijdTab({
   openStealModal: () => void;
   opponentName: string;
   onEndMatch: () => void;
+  onOpenSettings: () => void;
   onCancelMatch: () => void;
 }) {
   const handleVakClick = (vak: VakSide) => {
@@ -4034,6 +6141,13 @@ const attackUitPct =
                   <ul className="list-disc pl-5 text-sm text-amber-900">
                     {startValidationErrors.map((error) => <li key={error}>{error}</li>)}
                   </ul>
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className="mt-3 w-full rounded-xl border border-amber-400 bg-white px-4 py-2.5 text-sm font-extrabold text-amber-900 transition hover:bg-amber-100"
+                  >
+                    Naar wedstrijdinstellingen →
+                  </button>
                 </div>
               )}
 
@@ -4059,10 +6173,7 @@ const attackUitPct =
                     Wedstrijd is definitief afgesloten
                   </div>
 
-                  <div className="text-sm text-gray-500">
-                    Je kunt nu de wedstrijdgegevens bekijken in Insights
-                    of exporteren naar Excel.
-                  </div>
+                  <div className="text-sm text-gray-500">Je kunt de wedstrijd nu bekijken in het wedstrijdverslag en na het opslaan delen via een openbare link.</div>
                 </div>
               )}
     
@@ -4552,19 +6663,32 @@ function MatchReport({
   state,
   spelersMap,
   dbSheets,
+  saveStatus,
+  saveMessage,
+  onRetrySave,
   onBackToMatch,
 }: {
   state: AppState;
   spelersMap: Map<string, Player>;
   dbSheets: DatabaseSheetsData | null;
+  saveStatus: "idle" | "saving" | "saved" | "error";
+  saveMessage: string;
+  onRetrySave: () => void;
   onBackToMatch: () => void;
 }) {
   const opponent = state.opponentName || "Tegenstander";
-  const attemptActions = new Set(["Schot", "Doorloop", "Vrijebal", "Strafworp"]);
-  const attempts = state.fieldEvents.filter((e) => Boolean(e.actie) && attemptActions.has(String(e.actie)));
+  const reportNorm = (value: unknown) => String(value ?? "").trim().toLowerCase();
+  const attemptActions = new Set(["schot", "doorloop", "vrijebal", "vrije bal", "vrije", "strafworp"]);
+  const isAttemptEvent = (event: { actie?: unknown }) => attemptActions.has(reportNorm(event.actie));
+  const isOwnAttempt = (event: LogEvent) => isAttemptEvent(event) && event.team !== "uit" && (event.team === "thuis" || event.vak === "aanvallend" || event.soort === "Kans" || event.soort === "Schot");
+  const isMadeAttempt = (event: { resultaat?: unknown; reden?: unknown }) => reportNorm(event.resultaat) === "raak" || ["doelpunt", "gescoord"].includes(reportNorm(event.reden));
+  const isDirectedAttempt = (event: { resultaat?: unknown; reden?: unknown }) => isMadeAttempt(event) || reportNorm(event.resultaat) === "korf" || reportNorm(event.reden) === "korf";
+  // Het verslag gebruikt dezelfde logregels als de spelerskaarten en de opgeslagen database.
+  // Veldmarkers zijn alleen voor de heatmap en gebruiken bewust lowercase actienamen.
+  const attempts = state.log.filter(isOwnAttempt);
   const totalAttempts = attempts.length;
-  const goalsFromAttempts = attempts.filter((e) => e.resultaat === "raak").length;
-  const onTarget = attempts.filter((e) => e.resultaat === "raak" || e.resultaat === "korf").length;
+  const goalsFromAttempts = attempts.filter(isMadeAttempt).length;
+  const onTarget = attempts.filter(isDirectedAttempt).length;
   const scorePct = totalAttempts ? goalsFromAttempts / totalAttempts * 100 : 0;
   const quality = totalAttempts ? onTarget / totalAttempts * 100 : 0;
   const reboundsWon = state.log.filter((e) => e.reden === "Rebound" && e.team !== "uit").length;
@@ -4584,7 +6708,7 @@ function MatchReport({
   const historicalEvents = (dbSheets?.events ?? []).filter((e:any) => historicalIds.has(String(e.wedstrijd_id ?? "")));
   const historicalAttacks = (dbSheets?.attacks ?? []).filter((a:any) => historicalIds.has(String(a.wedstrijd_id ?? "")));
   const histIsKorbis = (e:any) => ["korbis", "thuis"].includes(String(e.team ?? "").trim().toLowerCase());
-  const histAttempts = historicalEvents.filter((e:any) => histIsKorbis(e) && attemptActions.has(String(e.actie ?? "")));
+  const histAttempts = historicalEvents.filter((e:any) => histIsKorbis(e) && isAttemptEvent(e));
   const histGoals = histAttempts.filter((e:any) => String(e.uitkomst ?? e.resultaat ?? "").toLowerCase() === "raak").length;
   const histDirected = histAttempts.filter((e:any) => ["raak", "korf"].includes(String(e.uitkomst ?? e.resultaat ?? "").toLowerCase())).length;
   const histWonRebounds = historicalEvents.filter((e:any) => histIsKorbis(e) && String(e.reden ?? "") === "Rebound").length;
@@ -4601,8 +6725,8 @@ function MatchReport({
   const vakStats = ([1, 2] as VakId[]).map((vakId) => {
     const attacksForVak = korbisAttacks.filter((a) => a.vakId === vakId);
     const attackIds = new Set(attacksForVak.map((a) => a.id));
-    const vakAttempts = attempts.filter((e) => e.attackId && attackIds.has(e.attackId));
-    const goals = vakAttempts.filter((e) => e.resultaat === "raak").length;
+    const vakAttempts = attempts.filter((e) => e.vakId === vakId || (e.attackId && attackIds.has(e.attackId)));
+    const goals = vakAttempts.filter(isMadeAttempt).length;
     return { vakId, attacks: attacksForVak.length, attempts: vakAttempts.length, goals, goals10: attacksForVak.length ? goals / attacksForVak.length * 10 : 0 };
   });
 
@@ -4612,22 +6736,27 @@ function MatchReport({
     const ids = periods[0]?.spelerIds ?? [];
     const comboAttacks = korbisAttacks.filter((a) => a.combinatieKey === key);
     const attackIds = new Set(comboAttacks.map((a) => a.id));
-    const comboAttempts = attempts.filter((e) => e.attackId && attackIds.has(e.attackId));
-    const goals = comboAttempts.filter((e) => e.resultaat === "raak").length;
-    const directed = comboAttempts.filter((e) => e.resultaat === "raak" || e.resultaat === "korf").length;
+    const comboAttempts = attempts.filter((e) => e.combinatieKey === key || (e.attackId && attackIds.has(e.attackId)));
+    const goals = comboAttempts.filter(isMadeAttempt).length;
+    const directed = comboAttempts.filter(isDirectedAttempt).length;
+    const knownPlayerNames = new Map<string,string>();
+    state.spelers.forEach((player)=>knownPlayerNames.set(player.id,player.naam));
+    spelersMap.forEach((player,id)=>knownPlayerNames.set(id,player.naam));
+    (dbSheets?.events ?? []).forEach((event:any)=>{const id=String(event.spelerId??"");const name=String(event.spelerNaam??"").trim();if(id&&name&&name!==id)knownPlayerNames.set(id,name);});
+    const readableName = (id:string) => knownPlayerNames.get(id) ?? (id.includes("-") && id.length >= 32 ? "Onbekende speler" : id);
     return { key, ids, seconds, attacks: comboAttacks.length, attempts: comboAttempts.length, goals,
       goalsPer10: comboAttacks.length ? goals / comboAttacks.length * 10 : 0,
       quality: comboAttempts.length ? directed / comboAttempts.length * 100 : 0,
-      names: ids.map((id) => spelersMap.get(id)?.naam ?? id) };
+      names: ids.map(readableName) };
   }).filter((row) => row.ids.length === 4).sort((a,b) => b.goalsPer10-a.goalsPer10 || b.seconds-a.seconds);
 
   const reliabilityLabel = (seconds:number) => seconds >= 3600 ? "Sterke basis" : seconds >= 1800 ? "Redelijke basis" : seconds >= 900 ? "Beperkte basis" : "Zeer beperkte basis";
-  const bestCombination = combinationRows[0] ?? null;
+  const bestCombination = combinationRows.find((row) => row.goals > 0 && row.attacks >= 2) ?? null;
 
   const playerRows = Array.from(spelersMap.values()).map((p) => {
     const logs = state.log.filter((e) => e.spelerId === p.id);
-    const playerAttempts = logs.filter((e) => Boolean(e.actie) && attemptActions.has(String(e.actie)));
-    const goals = playerAttempts.filter((e) => e.resultaat === "Raak" || e.reden === "Doelpunt" || e.reden === "Gescoord").length;
+    const playerAttempts = logs.filter(isOwnAttempt);
+    const goals = playerAttempts.filter(isMadeAttempt).length;
     const rebounds = logs.filter((e) => e.reden === "Rebound").length;
     const defense = logs.filter((e) => ["Schot afgevangen", "Pass Onderschept", "Bal onderschept", "Verdedigd"].includes(String(e.reden ?? ""))).length;
     const impact = goals * 3 + rebounds * 1.5 + defense * 2;
@@ -4671,6 +6800,7 @@ function MatchReport({
   const fixture = state.homeAway === "uit" ? `${opponent} - Korbis` : `Korbis - ${opponent}`;
   return <div className="space-y-5">
     <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Match Report</div><h2 className="mt-1 text-2xl font-bold">Wedstrijdverslag</h2><p className="mt-1 text-sm text-slate-500">Automatische nabespreking van wedstrijdbeeld, spelers, viertallen en seizoen.</p></div><div className="flex items-center gap-4 rounded-2xl border border-blue-100 bg-white px-5 py-3 shadow-sm"><div><div className="text-xs text-slate-500">{fixture}</div><div className="text-3xl font-extrabold text-slate-900">{state.scoreThuis} - {state.scoreUit}</div></div><span className={`rounded-full px-3 py-1 text-xs font-extrabold ${state.scoreThuis>state.scoreUit?"bg-green-100 text-green-800":state.scoreThuis<state.scoreUit?"bg-red-100 text-red-800":"bg-slate-100 text-slate-700"}`}>{state.scoreThuis>state.scoreUit?"Winst":state.scoreThuis<state.scoreUit?"Verlies":"Gelijk"}</span></div></div></div>
+    {state.matchEnded && saveStatus !== "idle" && <div className={`rounded-2xl border p-4 text-sm ${saveStatus==="saved"?"border-emerald-200 bg-emerald-50 text-emerald-900":saveStatus==="error"?"border-red-200 bg-red-50 text-red-900":"border-blue-200 bg-blue-50 text-blue-900"}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><b>{saveStatus==="saved"?"Wedstrijd opgeslagen":saveStatus==="error"?"Opslaan mislukt":"Wedstrijd opslaan"}</b><div className="mt-1">{saveMessage}</div></div>{saveStatus==="error"&&<button type="button" onClick={onRetrySave} className="shrink-0 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white">Opnieuw proberen</button>}</div></div>}
     {!state.matchEnded && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><b>Voorlopig verslag.</b> De wedstrijd is nog niet afgesloten.</div>}
 
     <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-5"><div className="text-xs font-extrabold uppercase tracking-[0.14em] text-blue-600">Wedstrijdbeeld</div><p className="mt-2 text-sm leading-6 text-slate-700">{matchStory}</p></div>
@@ -4689,7 +6819,7 @@ function MatchReport({
 
     <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Scoreverloop</h3><p className="text-xs text-slate-500">Doelpunten in chronologische volgorde.</p><div className="mt-4 flex min-h-16 items-center gap-1.5 overflow-x-auto pb-1">{progression.length?progression.map((e,i)=><div key={e.id+i} className="min-w-[54px] text-center"><div className={`mx-auto flex h-8 w-10 items-center justify-center rounded-lg text-xs font-extrabold text-white ${e.isOpp?'bg-red-500':'bg-green-500'}`}>{e.home}-{e.away}</div><div className="mt-1 text-[9px] text-slate-400">{Math.floor(e.tijdSeconden/60)}'</div></div>):<div className="text-sm text-slate-400">Geen doelpunten geregistreerd.</div>}</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Opvallende spelers</h3><p className="text-xs text-slate-500">Gebaseerd op geregistreerde goals, rebounds en verdedigende acties.</p><div className="mt-4 grid gap-2 sm:grid-cols-2">{playerRows.length?playerRows.map((x)=><div key={x.p.id} className="rounded-xl bg-slate-50 p-3"><div className="font-bold">{x.p.naam}</div><div className="mt-1 text-xs text-slate-600">{x.goals} goals · {x.attempts} kansen · {x.rebounds} reb. · {x.defense} verd.</div></div>):<div className="text-sm text-slate-400">Nog onvoldoende individuele acties.</div>}</div></div></div>
 
-    <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vakcombinaties in deze wedstrijd</h3><p className="text-sm text-slate-500">De werkelijke viertallen, onafhankelijk van de naam Vak 1 of Vak 2. Betrouwbaarheid blijft zichtbaar.</p><div className="mt-4 grid gap-3 lg:grid-cols-2">{combinationRows.length?combinationRows.map((r,i)=><div key={r.key} className="rounded-xl border border-slate-100 bg-slate-50 p-4"><div className="flex items-start justify-between gap-3"><div><div className="font-bold">{r.names.join(" · ")}</div><div className="mt-1 text-xs text-slate-500">{Math.round(r.seconds/60)} min · {reliabilityLabel(r.seconds)}</div></div>{i===0&&<span className="rounded-full bg-green-100 px-2 py-1 text-xs font-bold text-green-800">Beste aanval</span>}</div><div className="mt-3 grid grid-cols-3 gap-2 text-center"><div><b>{r.goalsPer10.toFixed(1)}</b><div className="text-[10px] text-slate-500">Goals / 10 aanv.</div></div><div><b>{r.attempts}</b><div className="text-[10px] text-slate-500">Kansen</div></div><div><b>{r.quality.toFixed(0)}%</b><div className="text-[10px] text-slate-500">Korfgericht</div></div></div></div>):<div className="text-sm text-slate-400">Geen vakperiodes geregistreerd.</div>}</div></div>
+    <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Vakcombinaties in deze wedstrijd</h3><p className="text-sm text-slate-500">De werkelijke viertallen, onafhankelijk van de naam Vak 1 of Vak 2. Betrouwbaarheid blijft zichtbaar.</p><div className="mt-4 grid gap-3 lg:grid-cols-2">{combinationRows.length?combinationRows.map((r)=><div key={r.key} className="rounded-xl border border-slate-100 bg-slate-50 p-4"><div className="flex items-start justify-between gap-3"><div><div className="font-bold">{r.names.join(" · ")}</div><div className="mt-1 text-xs text-slate-500">{Math.round(r.seconds/60)} min · {reliabilityLabel(r.seconds)}</div></div>{r===bestCombination&&<span className="rounded-full bg-green-100 px-2 py-1 text-xs font-bold text-green-800">Beste aanval</span>}</div><div className="mt-3 grid grid-cols-3 gap-2 text-center"><div><b>{r.goalsPer10.toFixed(1)}</b><div className="text-[10px] text-slate-500">Goals / 10 aanv.</div></div><div><b>{r.attempts}</b><div className="text-[10px] text-slate-500">Kansen</div></div><div><b>{r.quality.toFixed(0)}%</b><div className="text-[10px] text-slate-500">Korfgericht</div></div></div></div>):<div className="text-sm text-slate-400">Geen vakperiodes geregistreerd.</div>}</div></div>
 
     <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-bold">Prestatie versus seizoen</h3><p className="text-sm text-slate-500">Vergelijking met eerdere {state.matchType.toLowerCase()}en in {state.season}. De huidige wedstrijd wordt alleen meegenomen als hij al in de database staat.</p><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[
       ["Raak",scorePct,seasonBaseline.scorePct], ["Korfgericht",quality,seasonBaseline.quality], ["Aanv. rebound",reboundPct,seasonBaseline.rebound], ["Kansen / aanval",chancesPerAttack,seasonBaseline.chancesPerAttack]
@@ -4702,7 +6832,7 @@ function MatchReport({
 }
 
 
-function VakcombinatiesDashboard({ dbSheets }: { dbSheets: DatabaseSheetsData | null }) {
+function VakcombinatiesDashboard({ dbSheets, spelers = [] }: { dbSheets: DatabaseSheetsData | null; spelers?: Player[] }) {
   const periods = dbSheets?.vakperiodes ?? [];
   const events = dbSheets?.events ?? [];
   const attacks = dbSheets?.attacks ?? [];
@@ -4720,6 +6850,19 @@ function VakcombinatiesDashboard({ dbSheets }: { dbSheets: DatabaseSheetsData | 
   const isKorf = (row:any) => outcome(row)==="korf" || reason(row)==="korf";
   const isTurnover = (row:any) => ["bal onderschept","bal uit","pass onderschept","overtreding"].includes(reason(row));
   const isDefensivePositive = (row:any) => reason(row)==="verdedigd" || reason(row)==="pass onderschept" || reason(row)==="bal onderschept";
+  const playerNameById = new Map<string,string>();
+  spelers.forEach((player)=>playerNameById.set(player.id,player.naam));
+  (dbSheets?.spelers ?? []).forEach((player:any)=>{const id=String(player.speler_id??player.id??"");const name=String(player.naam??player.speler_naam??"").trim();if(id&&name)playerNameById.set(id,name);});
+  events.forEach((event:any)=>{const id=String(event.spelerId??event.speler_id??"");const name=String(event.spelerNaam??event.speler_naam??"").trim();if(id&&name&&name!==id)playerNameById.set(id,name);});
+  const combinationNamesFor = (row:any) => {
+    let ids:string[]=[];
+    const rawIds=row.combinatie_speler_ids;
+    if(Array.isArray(rawIds)) ids=rawIds.map(String);
+    else { try { const parsed=JSON.parse(String(rawIds??"[]")); if(Array.isArray(parsed))ids=parsed.map(String); } catch {} }
+    const supplied=String(row.combinatie_spelers??"").split(" · ").map((value)=>value.trim()).filter(Boolean);
+    const values=ids.length?ids:supplied;
+    return values.map((value,index)=>playerNameById.get(value) ?? (supplied[index] && !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(supplied[index]) ? supplied[index] : "Onbekende speler"));
+  };
 
   const stats = useMemo(() => {
     const map = new Map<string, CombinationStat>();
@@ -4729,16 +6872,16 @@ function VakcombinatiesDashboard({ dbSheets }: { dbSheets: DatabaseSheetsData | 
     };
     for (const p of periods) {
       const key=String(p.combinatie_key ?? ""); if (!key) continue;
-      const names=String(p.combinatie_spelers ?? "").split(" · ").filter(Boolean);
+      const names=combinationNamesFor(p);
       const r=ensure(key,names); r.seconds += Number(p.duur_seconden ?? 0) || 0; r.matches.add(String(p.wedstrijd_id ?? ""));
     }
     for (const a of attacks) {
       const key=String(a.combinatie_key ?? ""); if (!key || !isKorbis(a)) continue;
-      const names=String(a.combinatie_spelers ?? "").split(" · ").filter(Boolean); ensure(key,names).attacks += 1;
+      const names=combinationNamesFor(a); ensure(key,names).attacks += 1;
     }
     for (const e of events) {
       const key=String(e.combinatie_key ?? ""); if (!key) continue;
-      const names=String(e.combinatie_spelers ?? "").split(" · ").filter(Boolean); const r=ensure(key,names);
+      const names=combinationNamesFor(e); const r=ensure(key,names);
       if (isKorbis(e)) {
         if (isAttempt(e)) { r.attempts += 1; if (isMade(e)) r.goals += 1; if (isMade(e) || isKorf(e)) r.quality += 1; }
         if (action(e)==="rebound" && reason(e)==="rebound") r.reboundsWon += 1;
@@ -4750,7 +6893,7 @@ function VakcombinatiesDashboard({ dbSheets }: { dbSheets: DatabaseSheetsData | 
       }
     }
     return [...map.values()].filter(r=>r.names.length).sort((a,b)=>b.seconds-a.seconds);
-  }, [periods, events, attacks]);
+  }, [periods, events, attacks, spelers]);
 
   const totals=stats.reduce((t,r)=>({seconds:t.seconds+r.seconds,attacks:t.attacks+r.attacks,attempts:t.attempts+r.attempts,goals:t.goals+r.goals,quality:t.quality+r.quality,reboundsWon:t.reboundsWon+r.reboundsWon,reboundsLost:t.reboundsLost+r.reboundsLost,turnovers:t.turnovers+r.turnovers,oppAttempts:t.oppAttempts+r.oppAttempts,oppGoals:t.oppGoals+r.oppGoals,defensive:t.defensive+r.defensive}),{seconds:0,attacks:0,attempts:0,goals:0,quality:0,reboundsWon:0,reboundsLost:0,turnovers:0,oppAttempts:0,oppGoals:0,defensive:0});
   const safePct=(a:number,b:number)=>b?a/b*100:0;
@@ -4998,7 +7141,7 @@ function SeasonDashboard({
 
   return <div className="space-y-5">
     <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4"><div><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Season</div><h2 className="mt-1 text-2xl font-bold">Seizoensdashboard</h2><p className="text-sm text-gray-500">Compact coach-overzicht van resultaten, ontwikkeling, vakken en spelers.</p></div><div className="flex flex-wrap gap-3 items-end"><label className="flex flex-col gap-1"><span className="text-xs font-semibold text-gray-500">Seizoen</span><select value={season} onChange={e=>setSeason(e.target.value)} className="border rounded-xl px-3 py-2 bg-white min-w-[210px]">{seasons.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="flex items-center gap-2 border border-blue-100 rounded-xl px-3 py-2 bg-white/90 text-sm"><input type="checkbox" checked={includeNonCompetition} onChange={e=>setIncludeNonCompetition(e.target.checked)}/> Oefen/toernooi meenemen</label></div></div></div>
-    {!dbSheets ? <div className="border rounded-2xl p-6 bg-white text-sm text-gray-600">Laad eerst de Excel-database. Het seizoensdashboard gebruikt de opgeslagen wedstrijden uit die database.</div> : seasonMatches.length===0 ? <div className="border rounded-2xl p-6 bg-white text-sm text-gray-600">Voor <b>{season||"dit seizoen"}</b> zijn binnen dit filter nog geen wedstrijden gevonden.</div> : <>
+    {!dbSheets ? <div className="border rounded-2xl p-6 bg-white text-sm text-gray-600">De centrale wedstrijdhistorie is nog niet geladen. Probeer het seizoensdashboard opnieuw zodra Supabase beschikbaar is.</div> : seasonMatches.length===0 ? <div className="border rounded-2xl p-6 bg-white text-sm text-gray-600">Voor <b>{season||"dit seizoen"}</b> zijn binnen dit filter nog geen wedstrijden gevonden.</div> : <>
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">{[
         {label:"Wedstrijden",value:seasonMatches.length,tone:"blue"},
         {label:"Winst / gelijk / verlies",value:`${wins} / ${draws} / ${losses}`,tone:wins>=losses?"green":"orange"},
@@ -5018,11 +7161,13 @@ function SeasonDashboard({
 function MatchPreparationDashboard({
   state,
   dbSheets,
+  onSelectOpponent,
   onOpenSettings,
   onOpenMatch,
 }: {
   state: AppState;
   dbSheets: DatabaseSheetsData | null;
+  onSelectOpponent: (opponentName: string) => void;
   onOpenSettings: () => void;
   onOpenMatch: () => void;
 }) {
@@ -5032,6 +7177,24 @@ function MatchPreparationDashboard({
   const attacks = dbSheets?.attacks ?? [];
   const periods = ((dbSheets as any)?.vakperiodes ?? []) as any[];
   const norm = (v:any) => String(v ?? "").trim().toLowerCase();
+  const opponentOptionMap = new Map<string, { name: string; count: number; latest: string }>();
+  matches.forEach((match:any) => {
+    const name = String(match.tegenstander ?? "").trim();
+    const archived = match.gearchiveerd === true || norm(match.gearchiveerd) === "true";
+    if (!name || archived) return;
+    const key = norm(name);
+    const current = opponentOptionMap.get(key) ?? { name, count: 0, latest: "" };
+    const date = formatImportedDate(match.datum);
+    current.count += 1;
+    if (date > current.latest) current.latest = date;
+    opponentOptionMap.set(key, current);
+  });
+  const opponentOptions = Array.from(opponentOptionMap.values()).sort((a,b)=>a.name.localeCompare(b.name,"nl-NL"));
+  const matchingOpponent = opponentOptions.find((item)=>norm(item.name)===norm(opponent));
+  const [manualOpponentMode, setManualOpponentMode] = useState(false);
+  const showManualOpponent = manualOpponentMode || Boolean(opponent && !matchingOpponent);
+  const opponentSelection = showManualOpponent ? "__manual__" : matchingOpponent?.name ?? "";
+  const opponentLocked = !state.matchEnded && (state.klokLoopt || state.tijdSeconden > 0 || state.scoreThuis > 0 || state.scoreUit > 0 || state.log.length > 0 || state.fieldEvents.length > 0 || state.attacks.length > 0);
   const own = (e:any) => ["korbis","thuis"].includes(norm(e.team));
   const result = (e:any) => norm(e.uitkomst ?? e.resultaat);
   const isAttempt = (e:any) => ["schot","doorloop","vrijebal","strafworp"].includes(norm(e.actie));
@@ -5116,6 +7279,49 @@ function MatchPreparationDashboard({
       <h2 className="mt-1 text-2xl font-bold">Wedstrijdvoorbereiding</h2>
       <p className="mt-1 text-sm text-gray-500">Dé analyseplek vóór de wedstrijd: tegenstanderhistorie, patronen, vakcombinaties en coachaandachtspunten.</p>
     </div>
+    <div className="rounded-2xl border border-blue-100 bg-white p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-extrabold uppercase tracking-[.14em] text-blue-700">Tegenstander kiezen</div>
+          <h3 className="mt-1 text-lg font-black">Gebruik een eerder gespeelde tegenstander</h3>
+          <p className="mt-1 text-sm text-slate-500">De keuze wordt direct overgenomen in de wedstrijdinstellingen en laadt hieronder de beschikbare historie.</p>
+        </div>
+        <div className="grid w-full gap-3 sm:grid-cols-2 lg:max-w-2xl">
+          <label className="text-xs font-bold text-slate-600">Opgeslagen tegenstanders
+            <select
+              value={opponentSelection}
+              disabled={opponentLocked}
+              onChange={(event)=>{
+                const value=event.target.value;
+                if(value==="__manual__"){
+                  setManualOpponentMode(true);
+                  if(matchingOpponent) onSelectOpponent("");
+                  return;
+                }
+                setManualOpponentMode(false);
+                onSelectOpponent(value);
+              }}
+              className="mt-1 w-full rounded-xl border bg-white px-3 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:bg-slate-100"
+            >
+              <option value="">Kies een tegenstander…</option>
+              {opponentOptions.map((item)=><option key={norm(item.name)} value={item.name}>{item.name} · {item.count} duel{item.count===1?"":"s"}{item.latest?` · laatst ${item.latest}`:""}</option>)}
+              <option value="__manual__">Andere tegenstander invoeren…</option>
+            </select>
+          </label>
+          <label className={`text-xs font-bold text-slate-600 ${showManualOpponent?"":"opacity-50"}`}>Nieuwe tegenstander
+            <input
+              value={showManualOpponent ? opponent : ""}
+              disabled={!showManualOpponent || opponentLocked}
+              onChange={(event)=>onSelectOpponent(event.target.value)}
+              placeholder="Naam van vereniging of team"
+              className="mt-1 w-full rounded-xl border bg-white px-3 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:bg-slate-100"
+            />
+          </label>
+        </div>
+      </div>
+      {!opponentOptions.length && <div className="mt-4 rounded-xl border border-dashed bg-slate-50 px-4 py-3 text-sm text-slate-500">Voor dit team zijn nog geen eerdere tegenstanders opgeslagen. Kies ‘Andere tegenstander invoeren’ om een nieuwe naam te gebruiken.</div>}
+      {opponentLocked && <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">De tegenstander staat vast omdat de wedstrijd al is begonnen.</div>}
+    </div>
     <div className="rounded-2xl border bg-white p-5">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><div className="text-xs font-bold uppercase tracking-wide text-slate-500">Komende wedstrijd</div><div className="mt-1 text-2xl font-black">{opponent ? `${state.homeAway==="uit"?opponent:"Korbis"} – ${state.homeAway==="uit"?"Korbis":opponent}` : "Tegenstander nog niet gekozen"}</div><div className="mt-1 text-sm text-slate-500">{state.season} · {state.matchType} · {state.homeAway ? (state.homeAway==="thuis"?"Thuis":"Uit") : "Locatie nog kiezen"}</div></div><div className="flex gap-2"><button onClick={onOpenSettings} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold text-slate-700">Instellingen</button><button onClick={onOpenMatch} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Naar wedstrijd</button></div></div>
     </div>
@@ -5141,6 +7347,7 @@ function MatchPreparationDashboard({
 
 
 function OpstellingsassistentDashboard({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
+  const [openAdviceIndex,setOpenAdviceIndex]=useState<number|null>(0);
   const events = dbSheets?.events ?? [];
   const periods = dbSheets?.vakperiodes ?? [];
   const matches = dbSheets?.matches ?? [];
@@ -5198,8 +7405,7 @@ function OpstellingsassistentDashboard({ state, dbSheets }: { state: AppState; d
     <div className="rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-50 via-white to-blue-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-violet-700">KorbIQ Line-up Intelligence</div><h2 className="mt-1 text-2xl font-black">Opstellingsassistent</h2><p className="mt-1 max-w-4xl text-sm text-slate-600">Vergelijkt mogelijke 2 heer / 2 dame-vakken op individuele prestaties, balans tussen beide vakken en werkelijk gespeelde historische combinaties. Het resultaat is coachadvies, geen automatische selectie.</p></div>
     <div className="rounded-2xl border bg-white p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-black">Geselecteerde acht</h3><p className="text-sm text-slate-500">{currentPlayers.length===8?"Gebaseerd op de huidige wedstrijdopstelling.":"Gebaseerd op de actieve basisspelers."}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${usable?"bg-emerald-50 text-emerald-700":"bg-amber-50 text-amber-700"}`}>{men.length} heren · {women.length} dames</span></div><div className="mt-3 flex flex-wrap gap-2">{sourcePlayers.map(p=><span key={p.id} className="rounded-full border bg-slate-50 px-3 py-1.5 text-sm font-semibold">{p.naam}</span>)}</div></div>
     {!usable?<div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900"><b>Nog geen geldige groep van acht.</b><div className="mt-1">De assistent heeft exact 4 actieve heren en 4 actieve dames nodig. Zet acht spelers in de wedstrijdopstelling of zorg dat de actieve basisspelers uit 4 heren en 4 dames bestaan.</div></div>:<>
-      <div className="grid gap-4 md:grid-cols-3">{advices.slice(0,3).map((a,i)=><div key={i} className={`rounded-2xl border p-5 ${i===0?"border-violet-200 bg-violet-50":"bg-white"}`}><div className="flex justify-between"><div className="font-black">{i===0?"🏆 Advies 1":`Alternatief ${i+1}`}</div><div className="text-xl font-black text-violet-700">{a.score.toFixed(0)}</div></div><div className="mt-3 text-xs text-slate-500">KorbIQ score / 100</div><div className="mt-4 space-y-3"><div><div className="text-xs font-bold uppercase text-slate-500">Vak 1</div><div className="font-bold">{a.vak1.map(p=>p.naam).join(" · ")}</div><div className="text-xs text-slate-500">{Math.round(a.h1.minutes)} min samen · {reliabilityLabel(a.h1.minutes)}</div></div><div><div className="text-xs font-bold uppercase text-slate-500">Vak 2</div><div className="font-bold">{a.vak2.map(p=>p.naam).join(" · ")}</div><div className="text-xs text-slate-500">{Math.round(a.h2.minutes)} min samen · {reliabilityLabel(a.h2.minutes)}</div></div></div></div>)}</div>
-      {advices[0]&&<div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Waarom dit advies?</h3><div className="mt-4 grid gap-3 md:grid-cols-3"><div className="rounded-xl bg-blue-50 p-4"><div className="text-xs font-bold text-blue-700">INDIVIDUELE KWALITEIT</div><div className="mt-1 text-2xl font-black">{advices[0].individual.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Scoren, kansen, rendement, rebound, verdediging en balvastheid.</p></div><div className="rounded-xl bg-emerald-50 p-4"><div className="text-xs font-bold text-emerald-700">BALANS TUSSEN VAKKEN</div><div className="mt-1 text-2xl font-black">{advices[0].balance.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Voorkomt dat alle sterke profielen in één vak terechtkomen.</p></div><div className="rounded-xl bg-violet-50 p-4"><div className="text-xs font-bold text-violet-700">COMBINATIEHISTORIE</div><div className="mt-1 text-2xl font-black">{advices[0].history.toFixed(0)}</div><p className="mt-1 text-xs text-slate-600">Werkelijk samengespeelde minuten en rendement tellen mee naar betrouwbaarheid.</p></div></div></div>}
+      <div className="grid items-start gap-4 md:grid-cols-3">{advices.slice(0,3).map((a,i)=>{const open=openAdviceIndex===i;return <div key={i} className={`rounded-2xl border p-5 ${i===0?"border-violet-200 bg-violet-50":"bg-white"}`}><div className="flex justify-between gap-3"><div className="font-black">{i===0?"🏆 Advies 1":`Alternatief ${i+1}`}</div><div title="48% individuele kwaliteit + 22% balans + 30% combinatiehistorie" className="text-xl font-black text-violet-700">{a.score.toFixed(0)}</div></div><div className="mt-1 text-xs text-slate-500">KorbIQ score / 100</div><div className="mt-4 space-y-3"><div><div className="text-xs font-bold uppercase text-slate-500">Vak 1</div><div className="font-bold">{a.vak1.map(p=>p.naam).join(" · ")}</div><div className="text-xs text-slate-500">{Math.round(a.h1.minutes)} min samen · {reliabilityLabel(a.h1.minutes)}</div></div><div><div className="text-xs font-bold uppercase text-slate-500">Vak 2</div><div className="font-bold">{a.vak2.map(p=>p.naam).join(" · ")}</div><div className="text-xs text-slate-500">{Math.round(a.h2.minutes)} min samen · {reliabilityLabel(a.h2.minutes)}</div></div></div><button type="button" onClick={()=>setOpenAdviceIndex(open?null:i)} title="Bekijk de gebruikte prestaties, balans en combinatiehistorie" className="mt-4 w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-extrabold text-violet-700">{open?"Onderbouwing sluiten":"Waarom dit advies?"}</button>{open&&<div className="mt-3 space-y-2 rounded-xl border border-violet-100 bg-white p-3 text-xs text-slate-600"><div><b className="text-blue-700">48% individuele kwaliteit · {a.individual.toFixed(0)}</b><br/>Goals, kansen, rendement, rebounds, verdedigende acties en balvastheid van de acht spelers.</div><div><b className="text-emerald-700">22% vakbalans · {a.balance.toFixed(0)}</b><br/>Hoe kleiner het kwaliteitsverschil tussen Vak 1 en Vak 2, hoe hoger deze score.</div><div><b className="text-violet-700">30% combinatiehistorie · {a.history.toFixed(0)}</b><br/>Vak 1: {a.h1.goals}/{a.h1.attempts} raak uit kansen in {Math.round(a.h1.minutes)} min. Vak 2: {a.h2.goals}/{a.h2.attempts} in {Math.round(a.h2.minutes)} min. Weinig gezamenlijke minuten tellen als lagere betrouwbaarheid.</div><div className="border-t pt-2 font-semibold text-slate-700">Eindscore: 0,48 × {a.individual.toFixed(0)} + 0,22 × {a.balance.toFixed(0)} + 0,30 × {a.history.toFixed(0)} = {a.score.toFixed(1)}</div></div>}</div>})}</div>
       <div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Alle berekende opstellingen</h3><p className="text-sm text-slate-500">Klik op de kolomtitels om te sorteren; de bestaande tabelsortering van KorbIQ blijft actief.</p><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-2">#</th><th className="p-2">Vak 1</th><th className="p-2">Vak 2</th><th className="p-2">Score</th><th className="p-2">Balans</th><th className="p-2">Historie</th></tr></thead><tbody>{advices.map((a,i)=><tr key={i} className="border-b border-slate-100"><td className="p-2 font-bold">{i+1}</td><td className="p-2">{a.vak1.map(p=>p.naam).join(" · ")}</td><td className="p-2">{a.vak2.map(p=>p.naam).join(" · ")}</td><td className="p-2 font-black text-violet-700">{a.score.toFixed(1)}</td><td className="p-2">{a.balance.toFixed(0)}</td><td className="p-2">{a.history.toFixed(0)}</td></tr>)}</tbody></table></div></div>
     </>}
   </div>;
@@ -5255,8 +7461,10 @@ function WedstrijddoelenDashboard({ state, dbSheets }: { state: AppState; dbShee
   </div>;
 }
 
-function SpelersportaalDashboard({ state, dbSheets, selectedPlayerId, onSelectPlayer }: { state: AppState; dbSheets: DatabaseSheetsData | null; selectedPlayerId: string; onSelectPlayer: (id:string)=>void }) {
-  const players = state.spelers.filter(p=>p.actief && p.status === "Basisspeler");
+function SpelersportaalDashboard({ state, dbSheets, selectedPlayerId, onSelectPlayer, locked = false, playerOverride = null }: { state: AppState; dbSheets: DatabaseSheetsData | null; selectedPlayerId: string; onSelectPlayer: (id:string)=>void; locked?: boolean; playerOverride?: Player | null }) {
+  const players = playerOverride
+    ? [playerOverride]
+    : state.spelers.filter(p=>p.actief && p.status === "Basisspeler");
   const player = players.find(p=>p.id===selectedPlayerId) ?? null;
   const events = dbSheets?.events ?? [];
   const matches = dbSheets?.matches ?? [];
@@ -5266,11 +7474,14 @@ function SpelersportaalDashboard({ state, dbSheets, selectedPlayerId, onSelectPl
   const attempts=pe.filter(isAttempt);
   const goals=attempts.filter((e:any)=>String(e.uitkomst??"")==="Raak").length;
   const rebounds=pe.filter((e:any)=>String(e.reden??"").toLowerCase().includes("rebound")).length;
-  const turnovers=pe.filter((e:any)=>String(e.reden??"").toLowerCase().includes("balverlies")).length;
+  const turnovers=pe.filter((e:any)=>{
+    const reason = String(e.reden??"").trim().toLowerCase();
+    return reason.includes("balverlies") || reason === "bal uit" || reason === "pass onderschept";
+  }).length;
   const played = player ? matches.filter((m:any)=>{ try { const d=JSON.parse(String(m.speeltijd_spelers_json??"[]")); return Array.isArray(d)&&d.some((x:any)=>(String(x.spelerId??"")===player.id||String(x.spelerNaam??"")===player.naam)&&Number(x.seconden??0)>0); } catch { return false; }}).length : 0;
   const minutes = player ? matches.reduce((sum:number,m:any)=>{ try { const d=JSON.parse(String(m.speeltijd_spelers_json??"[]")); const r=Array.isArray(d)?d.find((x:any)=>String(x.spelerId??"")===player.id||String(x.spelerNaam??"")===player.naam):null; return sum+Number(r?.seconden??0)/60; } catch { return sum; }},0) : 0;
-  if (!player) return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-6"><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">KorbIQ Player Portal</div><h2 className="mt-1 text-2xl font-black">Spelersportaal</h2><p className="mt-2 max-w-3xl text-sm text-slate-600">Fase 24 legt de spelersomgeving in de app klaar. Kies hieronder een basisspeler om te bekijken wat die speler na een echte login zou zien.</p></div><div className="rounded-2xl border bg-white p-5"><h3 className="font-black">Portaal bekijken als speler</h3><p className="mt-1 text-sm text-slate-500">Gastspelers krijgen standaard geen eigen spelersaccount.</p><select className="mt-4 w-full max-w-md rounded-xl border p-3" value="" onChange={e=>onSelectPlayer(e.target.value)}><option value="">Kies een speler…</option>{players.map(p=><option key={p.id} value={p.id}>{p.naam}</option>)}</select></div><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><b>Belangrijk:</b> dit is de lokale fase-24 basis. Een echte veilige login en echte toegangsbeperking vereisen een backend/authenticatieservice; localStorage alleen is geen beveiliging.</div></div>;
-  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">Mijn KorbIQ</div><h2 className="mt-1 text-2xl font-black">Welkom, {player.naam}</h2><p className="mt-1 text-sm text-slate-600">Jouw eigen prestaties en ontwikkeling. Teambeheer, andere spelers en coachfuncties horen niet in dit portaal.</p></div><button onClick={()=>onSelectPlayer("")} className="rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-600">Andere speler</button></div></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><MetricInsightCard label="Wedstrijden" value={played}/><MetricInsightCard label="Speelminuten" value={`${Math.round(minutes)} min`}/><MetricInsightCard label="Doelpunten" value={goals}/><MetricInsightCard label="Raak" value={attempts.length?`${(goals/attempts.length*100).toFixed(1)}%`:"—"}/><MetricInsightCard label="Rebounds" value={rebounds} sub={`${turnovers} × balverlies`}/></div><div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Mijn ontwikkeling</h3><p className="mt-1 text-sm text-slate-500">De uitgebreide speleranalyse blijft de bron voor vorm, trends en rankings. In de volgende spelersportaalfase kan dit volledig als persoonlijke tijdlijn worden gepresenteerd.</p><div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm"><b>{attempts.length}</b> geregistreerde kansen · <b>{goals}</b> goals · <b>{rebounds}</b> rebounds.</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Privacy & toegang</h3><p className="mt-1 text-sm text-slate-500">Een speleromgeving hoort alleen gegevens van de ingelogde speler te tonen. Coachfuncties en gegevens van teamgenoten blijven buiten beeld.</p><div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Deze versie simuleert de accountkeuze lokaal en is nog geen beveiligde authenticatie. Voor productie is server-side autorisatie nodig.</div></div></div></div>;
+  if (!player) return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-6"><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">KorbIQ Player Portal</div><h2 className="mt-1 text-2xl font-black">Spelersportaal</h2><p className="mt-2 max-w-3xl text-sm text-slate-600">{locked ? "Je account is ingelogd, maar het gekoppelde spelersprofiel kon niet uit Supabase worden geladen." : "Kies hieronder een basisspeler om het spelersportaal als coach te bekijken."}</p></div>{!locked && <div className="rounded-2xl border bg-white p-5"><h3 className="font-black">Portaal bekijken als speler</h3><p className="mt-1 text-sm text-slate-500">Gastspelers krijgen standaard geen eigen spelersaccount.</p><select className="mt-4 w-full max-w-md rounded-xl border p-3" value="" onChange={e=>onSelectPlayer(e.target.value)}><option value="">Kies een speler…</option>{players.map(p=><option key={p.id} value={p.id}>{p.naam}</option>)}</select></div>}{locked && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><b>Nog geen data zichtbaar.</b> Controleer bij Personen of dit loginaccount aan de juiste speler is gekoppeld.</div>}</div>;
+  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-violet-50 via-white to-blue-50 p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">Mijn KorbIQ</div><h2 className="mt-1 text-2xl font-black">Welkom, {player.naam}</h2><p className="mt-1 text-sm text-slate-600">Jouw eigen prestaties en ontwikkeling. Teambeheer, andere spelers en coachfuncties horen niet in dit portaal.</p></div>{!locked && <button onClick={()=>onSelectPlayer("")} className="rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-600">Andere speler</button>}</div></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><MetricInsightCard label="Wedstrijden" value={played}/><MetricInsightCard label="Speelminuten" value={`${Math.round(minutes)} min`}/><MetricInsightCard label="Doelpunten" value={goals}/><MetricInsightCard label="Raak" value={attempts.length?`${(goals/attempts.length*100).toFixed(1)}%`:"—"}/><MetricInsightCard label="Rebounds" value={rebounds} sub={`${turnovers} × balverlies`}/></div><div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Mijn ontwikkeling</h3><p className="mt-1 text-sm text-slate-500">De uitgebreide speleranalyse blijft de bron voor vorm, trends en rankings. In een volgende spelersportaalfase kan dit als persoonlijke tijdlijn worden uitgebreid.</p><div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm"><b>{attempts.length}</b> geregistreerde kansen · <b>{goals}</b> goals · <b>{rebounds}</b> rebounds.</div></div><div className="rounded-2xl border bg-white p-5"><h3 className="text-lg font-black">Privacy & toegang</h3><p className="mt-1 text-sm text-slate-500">Een speleromgeving toont alleen gegevens van de ingelogde speler. Coachfuncties en gegevens van teamgenoten blijven buiten beeld.</p><div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">{locked ? "Je persoonlijke wedstrijdhistorie wordt rechtstreeks en afgeschermd uit Supabase geladen." : "Je bekijkt dit portaal als coach. Een speler krijgt na inloggen alleen zijn eigen gekoppelde portaal te zien."}</div></div></div></div>;
 }
 
 function SpeeltijdWisseladviesDashboard({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
@@ -5322,11 +7533,13 @@ function SpeeltijdWisseladviesDashboard({ state, dbSheets }: { state: AppState; 
 function SpelerprofielenDashboard({
   spelers,
   dbSheets,
+  initialSelectedId,
 }: {
   spelers: Player[];
   dbSheets: DatabaseSheetsData | null;
+  initialSelectedId?: string;
 }) {
-  const [selectedId, setSelectedId] = useState<string>(() => spelers[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState<string>(() => initialSelectedId ?? spelers[0]?.id ?? "");
   const [seasonFilter, setSeasonFilter] = useState<string>("__all__");
 
   useEffect(() => {
@@ -5615,16 +7828,169 @@ function AnalysisHubTabs<T extends string>({ tabs, active, onChange }: { tabs: r
   return <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"><div className="grid gap-2 md:grid-cols-3">{tabs.map((item) => <button key={item.id} type="button" onClick={() => onChange(item.id)} className={`rounded-xl px-4 py-3 text-left transition ${active === item.id ? "bg-blue-600 text-white shadow-sm" : "bg-slate-50 text-slate-700 hover:bg-blue-50"}`}><div className="text-sm font-black">{item.label}</div><div className={`mt-0.5 text-xs ${active === item.id ? "text-blue-100" : "text-slate-500"}`}>{item.hint}</div></button>)}</div></div>;
 }
 
-function SpelerAnalyseHub({ state, spelersMap, dbSheets }: { state: AppState; spelersMap: Map<string, Player>; dbSheets: DatabaseSheetsData | null }) {
-  const [view, setView] = useState<"profiel" | "inzichten">("profiel");
-  const tabs = [{ id: "profiel" as const, label: "Profiel & ontwikkeling", hint: "Rankings, vorm, trends en teamgemiddelden" }, { id: "inzichten" as const, label: "Wedstrijdinzichten", hint: "Gedetailleerde analyse per wedstrijd of periode" }];
-  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Player Intelligence</div><h2 className="mt-1 text-2xl font-black">Spelers</h2><p className="mt-1 max-w-4xl text-sm text-slate-500">Alle individuele inzichten op één plek: profiel, ranking, ontwikkeling én de gedetailleerde wedstrijdanalyse.</p></div><AnalysisHubTabs tabs={tabs} active={view} onChange={setView} />{view === "profiel" ? <SpelerprofielenDashboard spelers={state.spelers} dbSheets={dbSheets} /> : <InsightsTab state={state} spelersMap={spelersMap} opponentName={state.opponentName} dbSheets={dbSheets} forcedMode="speler" />}</div>;
+function subsetDatabaseSheets(dbSheets: DatabaseSheetsData | null, matchIds: Set<string>): DatabaseSheetsData | null {
+  if (!dbSheets) return null;
+  const belongs = (row: any) => matchIds.has(String(row.wedstrijd_id ?? ""));
+  return {
+    ...dbSheets,
+    matches: (dbSheets.matches ?? []).filter(belongs),
+    events: (dbSheets.events ?? []).filter(belongs),
+    attacks: (dbSheets.attacks ?? []).filter(belongs),
+    wissels: (dbSheets.wissels ?? []).filter(belongs),
+    vakperiodes: (dbSheets.vakperiodes ?? []).filter(belongs),
+  };
+}
+
+function LatestMatchSharePanel({ match }: { match: any | null }) {
+  const matchId = String(match?.supabase_match_id ?? "");
+  const [token, setToken] = useState("");
+  const [loading, setLoading] = useState(Boolean(matchId));
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const shareUrl = token ? `${KORBIQ_APP_ORIGIN}/wedstrijd-delen/${token}` : "";
+
+  useEffect(() => {
+    let active = true;
+    if (!matchId) { setLoading(false); setToken(""); return; }
+    setLoading(true);
+    supabase.rpc("get_match_share_status", { p_match_id: matchId }).then(({data,error})=>{
+      if(!active)return;
+      setToken(!error && data?.active && data?.token ? String(data.token) : "");
+      setLoading(false);
+    });
+    return ()=>{active=false;};
+  }, [matchId]);
+
+  const createLink = async () => {
+    if(!matchId)return;
+    setBusy(true); setMessage("");
+    const {data,error}=await supabase.rpc("create_match_share_link",{p_match_id:matchId});
+    if(error){setMessage(error.message.includes("function")?"Voer eerst Query 33 uit in Supabase.":error.message);}
+    else if(data?.token){setToken(String(data.token));setMessage("De openbare link is klaar om te delen.");}
+    setBusy(false);
+  };
+  const copyLink = async () => {
+    if(!shareUrl)return;
+    try{await navigator.clipboard.writeText(shareUrl);setMessage("Link gekopieerd.");}catch{setMessage("Kopiëren lukte niet automatisch. Selecteer de link hieronder.");}
+  };
+  const shareLink = async () => {
+    if(!shareUrl)return;
+    if(navigator.share){try{await navigator.share({title:`${match?.team_naam||"Korbis"} – ${match?.tegenstander||"Tegenstander"}`,text:"Bekijk de wedstrijdsamenvatting in KorbIQ.",url:shareUrl});}catch{}return;}
+    await copyLink();
+  };
+  const revokeLink = async () => {
+    if(!matchId || !window.confirm("Weet je zeker dat je deze openbare link wilt intrekken?"))return;
+    setBusy(true); setMessage("");
+    const {error}=await supabase.rpc("revoke_match_share_link",{p_match_id:matchId});
+    if(error)setMessage(error.message);else{setToken("");setMessage("De openbare link is ingetrokken.");}
+    setBusy(false);
+  };
+
+  return <div className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 via-white to-blue-50 p-5">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div><div className="text-xs font-extrabold uppercase tracking-[.14em] text-indigo-700">Delen met spelers en ouders</div><h3 className="mt-1 text-lg font-black">Laatste wedstrijd delen</h3>{match?<p className="mt-1 text-sm text-slate-600">{formatImportedDate(match.datum)} · {safeDisplayText(match.team_naam,"Korbis")} – {safeDisplayText(match.tegenstander,"Tegenstander")} · {safeDisplayText(match.score_korbis,"0")}–{safeDisplayText(match.score_tegenstander,"0")}</p>:<p className="mt-1 text-sm text-slate-600">Er is nog geen afgesloten Supabase-wedstrijd om te delen.</p>}</div><div className="flex flex-wrap gap-2">{!token?<button type="button" disabled={!matchId||busy||loading} onClick={()=>void createLink()} className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40">{loading?"Controleren…":busy?"Link maken…":"Maak openbare link"}</button>:<><button type="button" onClick={()=>void copyLink()} className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white">Link kopiëren</button><button type="button" onClick={()=>void shareLink()} className="rounded-xl border border-indigo-200 bg-white px-4 py-2.5 text-sm font-bold text-indigo-700">Delen…</button><button type="button" disabled={busy} onClick={()=>void revokeLink()} className="rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-bold text-red-700">Link intrekken</button></>}</div></div>
+    {shareUrl&&<div className="mt-4"><label className="text-xs font-bold text-slate-500">Openbare link<input readOnly value={shareUrl} onFocus={event=>event.currentTarget.select()} className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-700" /></label><p className="mt-2 text-xs text-slate-500">Iedereen met deze link kan de alleen-lezen wedstrijdsamenvatting bekijken. Inloggen is niet nodig.</p></div>}
+    {message&&<div className={`mt-4 rounded-xl px-3 py-2 text-sm font-semibold ${message.toLowerCase().includes("niet")||message.toLowerCase().includes("voer eerst")?"bg-amber-50 text-amber-800":"bg-emerald-50 text-emerald-800"}`}>{message}</div>}
+  </div>;
+}
+
+function StoredMatchSnapshot({ dbSheets }: { dbSheets: DatabaseSheetsData | null }) {
+  const matches=dbSheets?.matches??[];const events=dbSheets?.events??[];const attacks=dbSheets?.attacks??[];const periods=dbSheets?.vakperiodes??[];
+  const norm=(value:any)=>String(value??"").trim().toLowerCase();
+  const own=(row:any)=>["korbis","thuis"].includes(norm(row.team));
+  const attempt=(row:any)=>["schot","doorloop","vrijebal","strafworp"].includes(norm(row.actie));
+  const result=(row:any)=>norm(row.uitkomst??row.resultaat);const reason=(row:any)=>norm(row.reden);
+  const ownEvents=events.filter(own);const attempts=ownEvents.filter(attempt);const goals=attempts.filter(row=>result(row)==="raak");const directed=attempts.filter(row=>["raak","korf"].includes(result(row)));
+  const opponentAttempts=events.filter(row=>!own(row)&&attempt(row));const opponentGoals=opponentAttempts.filter(row=>result(row)==="raak");
+  const wonRebounds=ownEvents.filter(row=>norm(row.actie)==="rebound"&&reason(row)==="rebound").length;const lostRebounds=ownEvents.filter(row=>norm(row.actie)==="rebound"&&reason(row)==="geen rebound").length;
+  const turnovers=ownEvents.filter(row=>["bal uit","pass onderschept","balverlies"].includes(reason(row))).length;const defensive=ownEvents.filter(row=>["verdedigd","bal onderschept","pass onderschept","schot afgevangen"].includes(reason(row))).length;
+  const ownAttacks=attacks.filter(own);const pct=(part:number,total:number)=>total?part/total*100:0;
+  const playerNames=Array.from(new Set(ownEvents.map(row=>String(row.spelerNaam??"").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"nl-NL"));
+  const players=playerNames.map(name=>{const pe=ownEvents.filter(row=>String(row.spelerNaam??"").trim()===name);const pa=pe.filter(attempt);const pg=pa.filter(row=>result(row)==="raak").length;const pk=pa.filter(row=>result(row)==="korf").length;return{name,goals:pg,attempts:pa.length,score:pct(pg,pa.length),quality:pct(pg+pk,pa.length),rebounds:pe.filter(row=>norm(row.actie)==="rebound"&&reason(row)==="rebound").length,defense:pe.filter(row=>["verdedigd","bal onderschept","pass onderschept","schot afgevangen"].includes(reason(row))).length,turnovers:pe.filter(row=>["bal uit","pass onderschept","balverlies"].includes(reason(row))).length}}).sort((a,b)=>b.goals-a.goals||b.quality-a.quality);
+  const actionRows=["Schot","Doorloop","Vrijebal","Strafworp"].map(label=>{const rows=attempts.filter(row=>norm(row.actie)===label.toLowerCase());const made=rows.filter(row=>result(row)==="raak").length;return{label,attempts:rows.length,goals:made,score:pct(made,rows.length)}});
+  const comboMap=new Map<string,{names:string;minutes:number;attacks:number;goals:number;attempts:number}>();
+  periods.forEach((row:any)=>{const key=String(row.combinatie_key??row.combinatie_spelers??"");if(!key)return;const current=comboMap.get(key)??{names:String(row.combinatie_spelers??"Onbekende combinatie"),minutes:0,attacks:0,goals:0,attempts:0};current.minutes+=Number(row.duur_seconden??0)/60;comboMap.set(key,current)});
+  attacks.filter(own).forEach((row:any)=>{const current=comboMap.get(String(row.combinatie_key??row.combinatie_spelers??""));if(current)current.attacks++});
+  attempts.forEach((row:any)=>{const current=comboMap.get(String(row.combinatie_key??row.combinatie_spelers??""));if(current){current.attempts++;if(result(row)==="raak")current.goals++}});
+  const combos=Array.from(comboMap.values()).filter(combo=>combo.names&&!/[0-9a-f]{8}-[0-9a-f-]{27}/i.test(combo.names)).sort((a,b)=>b.minutes-a.minutes).slice(0,6);
+  const matchRows=[...matches].sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??"")));
+  return <div className="space-y-4"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8"><MetricInsightCard label="Goals" value={goals.length}/><MetricInsightCard label="Kansen" value={attempts.length}/><MetricInsightCard label="Raak" value={attempts.length?`${pct(goals.length,attempts.length).toFixed(1)}%`:"—"}/><MetricInsightCard label="Korfgericht" value={attempts.length?`${pct(directed.length,attempts.length).toFixed(1)}%`:"—"}/><MetricInsightCard label="Aanvallen" value={ownAttacks.length}/><MetricInsightCard label="Kansen / aanval" value={ownAttacks.length?(attempts.length/ownAttacks.length).toFixed(2):"—"}/><MetricInsightCard label="Rebound" value={wonRebounds+lostRebounds?`${pct(wonRebounds,wonRebounds+lostRebounds).toFixed(0)}%`:"—"}/><MetricInsightCard label="Balverlies" value={turnovers}/></div>
+  <div className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border bg-white p-5"><h3 className="font-black">Wedstrijdbeeld</h3><p className="mt-2 text-sm leading-6 text-slate-600">{matches.length===1?`${goals.length} doelpunten uit ${attempts.length} kansen in ${ownAttacks.length} aanvallen.`:`${matches.length} wedstrijden: ${goals.length} doelpunten uit ${attempts.length} kansen.`} De tegenstander kwam tot {opponentGoals.length} goals uit {opponentAttempts.length} geregistreerde kansen. Korbis noteerde {wonRebounds} gewonnen rebounds, {defensive} verdedigende acties en {turnovers} momenten van balverlies.</p><div className="mt-4 grid grid-cols-4 gap-2">{actionRows.map(row=><div key={row.label} className="rounded-xl bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">{row.label}</div><div className="mt-1 font-black">{row.goals}/{row.attempts}</div><div className="text-[11px] text-slate-500">{row.attempts?`${row.score.toFixed(0)}% raak`:"geen kans"}</div></div>)}</div></div>
+  <div className="overflow-hidden rounded-2xl border bg-white"><div className="border-b p-4"><h3 className="font-black">Spelersbijdrage</h3><p className="text-xs text-slate-500">Aanval, rebound, verdediging en balverlies naast elkaar.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">Speler</th><th className="p-3 text-right">Goals</th><th className="p-3 text-right">Kansen</th><th className="p-3 text-right">Raak</th><th className="p-3 text-right">Korfgericht</th><th className="p-3 text-right">Reb.</th><th className="p-3 text-right">Verd.</th><th className="p-3 text-right">Balverlies</th></tr></thead><tbody>{players.map(player=><tr key={player.name} className="border-t"><td className="p-3 font-bold">{player.name}</td><td className="p-3 text-right font-black">{player.goals}</td><td className="p-3 text-right">{player.attempts}</td><td className="p-3 text-right">{player.attempts?`${player.score.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{player.attempts?`${player.quality.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{player.rebounds}</td><td className="p-3 text-right">{player.defense}</td><td className="p-3 text-right">{player.turnovers}</td></tr>)}</tbody></table></div></div></div>
+  <div className="grid gap-4 xl:grid-cols-2"><div className="overflow-hidden rounded-2xl border bg-white"><div className="border-b p-4"><h3 className="font-black">Resultaten in selectie</h3></div><div className="divide-y">{matchRows.map((match:any)=><div key={String(match.wedstrijd_id)} className="flex items-center justify-between gap-3 px-4 py-3 text-sm"><div><div className="font-bold">{formatImportedDate(match.datum)} · {safeDisplayText(match.tegenstander??match.wedstrijd_naam,"Onbekend")}</div><div className="text-xs text-slate-500">{safeDisplayText(match.seizoen??match.team_seizoen_naam)}</div></div><div className={`text-lg font-black ${Number(match.score_korbis)>Number(match.score_tegenstander)?"text-emerald-700":Number(match.score_korbis)<Number(match.score_tegenstander)?"text-red-600":"text-amber-700"}`}>{safeDisplayText(match.score_korbis,"0")} – {safeDisplayText(match.score_tegenstander,"0")}</div></div>)}</div></div><div className="overflow-hidden rounded-2xl border bg-white"><div className="border-b p-4"><h3 className="font-black">Meest gebruikte vakcombinaties</h3><p className="text-xs text-slate-500">Rendement wordt alleen getoond als aanvallen zijn geregistreerd.</p></div><div className="divide-y">{combos.map((combo,index)=><div key={`${combo.names}-${index}`} className="px-4 py-3"><div className="font-bold">{safeDisplayText(combo.names,"Onbekende combinatie")}</div><div className="mt-1 text-xs text-slate-500">{Math.round(combo.minutes)} min · {combo.attacks} aanvallen · {combo.goals}/{combo.attempts} raak · {combo.attacks?(combo.goals/combo.attacks*10).toFixed(1):"—"} goals / 10 aanvallen</div></div>)}{!combos.length&&<div className="p-5 text-sm text-slate-500">Geen bruikbare vakcombinaties in deze selectie.</div>}</div></div></div></div>;
+}
+
+function WedstrijdInsightsOverview({ state, spelersMap, dbSheets }: { state: AppState; spelersMap: Map<string, Player>; dbSheets: DatabaseSheetsData | null }) {
+  const [seasonFilter, setSeasonFilter] = useState("__all__");
+  const [periodFilter, setPeriodFilter] = useState<"all" | "veld_najaar" | "zaal" | "veld_voorjaar">("all");
+  const [search, setSearch] = useState("");
+  const [detail, setDetail] = useState<{ type: "match" | "period"; matchId?: string } | null>(null);
+  const matches = dbSheets?.matches ?? [];
+  const latestShareableMatch = [...matches].filter((m:any)=>Boolean(m.supabase_match_id)&&!Boolean(m.gearchiveerd)&&String(m.wedstrijd_afgesloten??"").toLowerCase()==="ja").sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??"")))[0] ?? null;
+  const seasons = Array.from(new Set(matches.map((m:any) => String(m.seizoen ?? m.team_seizoen_naam ?? "").trim()).filter(Boolean))).sort((a,b)=>b.localeCompare(a,"nl-NL"));
+  const periodMatches = matches.filter((m:any) => {
+    const season = String(m.seizoen ?? m.team_seizoen_naam ?? "");
+    if (seasonFilter !== "__all__" && season !== seasonFilter) return false;
+    if (periodFilter === "veld_najaar" && !/veld\s*najaar/i.test(season)) return false;
+    if (periodFilter === "zaal" && !/zaal/i.test(season)) return false;
+    if (periodFilter === "veld_voorjaar" && !/veld\s*voorjaar/i.test(season)) return false;
+    const needle = search.trim().toLowerCase();
+    return !needle || String(m.tegenstander ?? m.wedstrijd_naam ?? "").toLowerCase().includes(needle);
+  }).sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??"")));
+  const selectedIds = new Set(periodMatches.map((m:any)=>String(m.wedstrijd_id ?? "")));
+  const goalsFor = periodMatches.reduce((n:number,m:any)=>n+Number(m.score_korbis??0),0);
+  const goalsAgainst = periodMatches.reduce((n:number,m:any)=>n+Number(m.score_tegenstander??0),0);
+  const wins = periodMatches.filter((m:any)=>Number(m.score_korbis)>Number(m.score_tegenstander)).length;
+  const overviewStats=(matchId:string)=>{const rows=(dbSheets?.events??[]).filter((event:any)=>String(event.wedstrijd_id??"")===matchId&&["korbis","thuis"].includes(String(event.team??"").trim().toLowerCase()));const chanceEvents=rows.filter((event:any)=>["schot","doorloop","vrijebal","strafworp"].includes(String(event.actie??"").trim().toLowerCase()));const goals=chanceEvents.filter((event:any)=>String(event.uitkomst??event.resultaat??"").trim().toLowerCase()==="raak").length;const directed=chanceEvents.filter((event:any)=>["raak","korf"].includes(String(event.uitkomst??event.resultaat??"").trim().toLowerCase())).length;const matchAttacks=(dbSheets?.attacks??[]).filter((attack:any)=>String(attack.wedstrijd_id??"")===matchId&&["korbis","thuis"].includes(String(attack.team??"").trim().toLowerCase())).length;return{chances:chanceEvents.length,score:chanceEvents.length?goals/chanceEvents.length*100:0,quality:chanceEvents.length?directed/chanceEvents.length*100:0,perAttack:matchAttacks?chanceEvents.length/matchAttacks:0}};
+
+  if (detail) {
+    const ids = detail.type === "match" ? new Set([detail.matchId ?? ""]) : selectedIds;
+    const selectedSheets = subsetDatabaseSheets(dbSheets, ids);
+    const selectedMatch = detail.type === "match" ? matches.find((m:any)=>String(m.wedstrijd_id)===detail.matchId) : null;
+    return <div className="space-y-5">
+      <button type="button" onClick={()=>setDetail(null)} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Terug naar wedstrijdoverzicht</button>
+      <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5"><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">Wedstrijdinzichten</div><h2 className="mt-1 text-2xl font-black">{selectedMatch ? `${formatImportedDate(selectedMatch.datum)} · ${safeDisplayText(selectedMatch.tegenstander??selectedMatch.wedstrijd_naam,"Onbekende tegenstander")}` : "Analyse van geselecteerde periode"}</h2><p className="mt-1 text-sm text-slate-500">{selectedMatch ? "Detailanalyse van deze wedstrijd." : `${periodMatches.length} wedstrijden binnen je huidige selectie.`}</p></div>
+      <StoredMatchSnapshot dbSheets={selectedSheets}/>
+      <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3"><div className="font-black text-blue-900">Verdiepende trends en vergelijkingen</div><div className="text-xs text-blue-700">Onderstaande analyse voegt verloop, teamgemiddelden, vaktrends en ontwikkelpunten toe.</div></div>
+      <InsightsTab state={state} spelersMap={spelersMap} opponentName={state.opponentName} dbSheets={selectedSheets} forcedMode="team" initialMatchId={detail.type === "match" ? detail.matchId : "__all__"} />
+    </div>;
+  }
+
+  return <div className="space-y-5">
+    <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">KorbIQ Match Intelligence</div><h2 className="mt-1 text-2xl font-black">Wedstrijdinzichten</h2><p className="mt-1 max-w-3xl text-sm text-slate-500">Begin met het wedstrijdoverzicht. Filter eventueel op periode en open daarna één wedstrijd of analyseer de hele selectie.</p></div>
+    <LatestMatchSharePanel match={latestShareableMatch} />
+    <div className="rounded-2xl border bg-white p-4"><div className="grid gap-3 md:grid-cols-3"><label className="text-xs font-bold text-slate-600">Seizoen<select value={seasonFilter} onChange={e=>setSeasonFilter(e.target.value)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm"><option value="__all__">Alle seizoenen</option>{seasons.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="text-xs font-bold text-slate-600">Periode<select value={periodFilter} onChange={e=>setPeriodFilter(e.target.value as typeof periodFilter)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm"><option value="all">Alle perioden</option><option value="veld_najaar">Veld najaar</option><option value="zaal">Zaal</option><option value="veld_voorjaar">Veld voorjaar</option></select></label><label className="text-xs font-bold text-slate-600">Tegenstander zoeken<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Bijv. PKC" className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm" /></label></div></div>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><MetricInsightCard label="Wedstrijden" value={periodMatches.length}/><MetricInsightCard label="Gewonnen" value={wins}/><MetricInsightCard label="Voor" value={goalsFor}/><MetricInsightCard label="Tegen" value={goalsAgainst}/></div>
+    <div className="rounded-2xl border bg-white overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><div><h3 className="font-black">Alle wedstrijden</h3><p className="text-xs text-slate-500">Vergelijk kerncijfers direct of open een wedstrijd voor de volledige analyse.</p></div><button type="button" disabled={!periodMatches.length} onClick={()=>setDetail({type:"period"})} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">Analyseer selectie</button></div><div className="overflow-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Datum</th><th className="p-3 text-left">Tegenstander</th><th className="p-3 text-left">Seizoen</th><th className="p-3 text-right">Uitslag</th><th className="p-3 text-right">Kansen</th><th className="p-3 text-right">Raak</th><th className="p-3 text-right">Korfgericht</th><th className="p-3 text-right">Kansen / aanv.</th><th className="p-3 text-right"></th></tr></thead><tbody>{periodMatches.map((m:any)=>{const id=String(m.wedstrijd_id??"");const own=Number(m.score_korbis??0),opp=Number(m.score_tegenstander??0);const stats=overviewStats(id);return <tr key={id} className="border-t hover:bg-blue-50/40"><td className="p-3 whitespace-nowrap">{formatImportedDate(m.datum)}</td><td className="p-3 font-bold">{safeDisplayText(m.tegenstander??m.wedstrijd_naam,"Onbekend")}</td><td className="p-3 text-slate-500">{safeDisplayText(m.seizoen??m.team_seizoen_naam)}</td><td className={`p-3 text-right font-black ${own>opp?"text-emerald-700":own<opp?"text-red-600":"text-amber-700"}`}>{own} – {opp}</td><td className="p-3 text-right">{stats.chances}</td><td className="p-3 text-right">{stats.chances?`${stats.score.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{stats.chances?`${stats.quality.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{stats.perAttack?stats.perAttack.toFixed(2):"—"}</td><td className="p-3 text-right"><button type="button" onClick={()=>setDetail({type:"match",matchId:id})} className="rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-bold text-blue-700">Bekijk analyse →</button></td></tr>})}{!periodMatches.length&&<tr><td colSpan={9} className="p-8 text-center text-slate-500">Geen wedstrijden binnen deze selectie.</td></tr>}</tbody></table></div></div>
+  </div>;
+}
+
+function SpelerAnalyseHub({ state, dbSheets }: { state: AppState; dbSheets: DatabaseSheetsData | null }) {
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const events = dbSheets?.events ?? [];
+  const matches = dbSheets?.matches ?? [];
+  const isOwn = (e:any) => ["korbis","thuis"].includes(String(e.team??"").trim().toLowerCase());
+  const isAttempt = (e:any) => ["schot","doorloop","vrijebal","strafworp"].includes(String(e.actie??"").trim().toLowerCase());
+  const eventResult=(e:any)=>String(e.uitkomst??e.resultaat??"").trim().toLowerCase();
+  const eventReason=(e:any)=>String(e.reden??"").trim().toLowerCase();
+  const rows = state.spelers.filter(p=>p.actief).map(player=>{
+    const pe=events.filter((e:any)=>isOwn(e)&&(String(e.spelerId??"")===player.id||String(e.spelerNaam??"")===player.naam));
+    const attempts=pe.filter(isAttempt); const goals=attempts.filter((e:any)=>eventResult(e)==="raak").length;const directed=attempts.filter((e:any)=>["raak","korf"].includes(eventResult(e))).length;
+    const rebounds=pe.filter((e:any)=>String(e.actie??"").trim().toLowerCase()==="rebound"&&eventReason(e)==="rebound").length;
+    const defense=pe.filter((e:any)=>["verdedigd","bal onderschept","pass onderschept","schot afgevangen"].includes(eventReason(e))).length;
+    const turnovers=pe.filter((e:any)=>["bal uit","pass onderschept","balverlies"].includes(eventReason(e))).length;
+    const playedIds=new Set(pe.map((e:any)=>String(e.wedstrijd_id??"")));
+    let minutes=0; matches.forEach((m:any)=>{let data:any[]=[];try{data=JSON.parse(String(m.speeltijd_spelers_json??"[]"));}catch{}const row=data.find((x:any)=>String(x.spelerId??x.id??"")===player.id||String(x.spelerNaam??x.naam??"")===player.naam);const seconds=Number(row?.seconden??row?.seconds??0);minutes+=seconds/60;if(seconds>0)playedIds.add(String(m.wedstrijd_id??""));});
+    return {player,played:playedIds.size,minutes,goals,attempts:attempts.length,pct:attempts.length?goals/attempts.length*100:0,quality:attempts.length?directed/attempts.length*100:0,rebounds,defense,turnovers,goals60:minutes?goals/minutes*60:0};
+  }).sort((a,b)=>a.player.naam.localeCompare(b.player.naam,"nl-NL"));
+  const totalGoals=rows.reduce((sum,row)=>sum+row.goals,0);const totalAttempts=rows.reduce((sum,row)=>sum+row.attempts,0);const totalMinutes=rows.reduce((sum,row)=>sum+row.minutes,0);const leader=[...rows].sort((a,b)=>b.goals-a.goals||b.pct-a.pct)[0];
+  if (selectedPlayerId) return <div className="space-y-5"><button type="button" onClick={()=>setSelectedPlayerId(null)} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Terug naar spelersoverzicht</button><SpelerprofielenDashboard spelers={state.spelers} dbSheets={dbSheets} initialSelectedId={selectedPlayerId} /></div>;
+  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[.16em] text-blue-700">KorbIQ Player Intelligence</div><h2 className="mt-1 text-2xl font-black">Spelerinzichten</h2><p className="mt-1 max-w-3xl text-sm text-slate-500">Vergelijk het volledige team op speeltijd, aanval, rebound en verdediging. Open daarna één speler voor diens ontwikkeling per wedstrijd.</p></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><MetricInsightCard label="Actieve spelers" value={rows.length}/><MetricInsightCard label="Teamproductie" value={`${totalGoals} / ${totalAttempts}`} sub={totalAttempts?`${(totalGoals/totalAttempts*100).toFixed(1)}% raak`:"Nog geen kansen"}/><MetricInsightCard label="Totaal speeltijd" value={`${Math.round(totalMinutes)} min`}/><MetricInsightCard label="Meeste goals" value={leader?.player.naam??"—"} sub={leader?`${leader.goals} goals · ${leader.goals60.toFixed(1)} per 60 min`:"Nog geen data"}/></div><div className="rounded-2xl border bg-white overflow-hidden"><div className="border-b p-4"><h3 className="font-black">Alle spelers</h3><p className="text-xs text-slate-500">Alle zichtbare wedstrijden van het gekozen analyseteam. Klik op kolomtitels om te sorteren.</p></div><div className="overflow-auto"><table className="w-full min-w-[1180px] text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">Speler</th><th className="p-3 text-left">Status</th><th className="p-3 text-right">Wedstr.</th><th className="p-3 text-right">Min.</th><th className="p-3 text-right">Goals</th><th className="p-3 text-right">Kansen</th><th className="p-3 text-right">Raak</th><th className="p-3 text-right">Korfgericht</th><th className="p-3 text-right">Goals / 60</th><th className="p-3 text-right">Reb.</th><th className="p-3 text-right">Verd.</th><th className="p-3 text-right">Balverlies</th><th className="p-3 text-right"></th></tr></thead><tbody>{rows.map(r=><tr key={r.player.id} className="border-t hover:bg-blue-50/40"><td className="p-3 font-bold">{r.player.naam}</td><td className="p-3 text-slate-500">{r.player.status}</td><td className="p-3 text-right">{r.played}</td><td className="p-3 text-right">{Math.round(r.minutes)}</td><td className="p-3 text-right font-black">{r.goals}</td><td className="p-3 text-right">{r.attempts}</td><td className="p-3 text-right">{r.attempts?`${r.pct.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{r.attempts?`${r.quality.toFixed(1)}%`:"—"}</td><td className="p-3 text-right">{r.minutes?r.goals60.toFixed(1):"—"}</td><td className="p-3 text-right">{r.rebounds}</td><td className="p-3 text-right">{r.defense}</td><td className="p-3 text-right">{r.turnovers}</td><td className="p-3 text-right"><button type="button" onClick={()=>setSelectedPlayerId(r.player.id)} className="rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-bold text-blue-700">Bekijk speler →</button></td></tr>)}</tbody></table></div></div></div>;
 }
 
 function TeamAnalyseHub({ state, spelersMap, dbSheets }: { state: AppState; spelersMap: Map<string, Player>; dbSheets: DatabaseSheetsData | null }) {
   const [view, setView] = useState<"team" | "vakken" | "seizoen">("team");
-  const tabs = [{ id: "team" as const, label: "Team Insights", hint: "Aanval, verdediging en wedstrijdanalyse" }, { id: "vakken" as const, label: "Vakken & combinaties", hint: "Viertallen, duo's en betrouwbaarheid" }, { id: "seizoen" as const, label: "Seizoen", hint: "Ontwikkeling en trends door het seizoen" }];
-  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Team Intelligence</div><h2 className="mt-1 text-2xl font-black">Team & Vakken</h2><p className="mt-1 max-w-4xl text-sm text-slate-500">Teamprestaties, vakcombinaties en seizoenstrends zijn samengebracht in één analyseomgeving.</p></div><AnalysisHubTabs tabs={tabs} active={view} onChange={setView} />{view === "team" && <InsightsTab state={state} spelersMap={spelersMap} opponentName={state.opponentName} dbSheets={dbSheets} forcedMode="team" />}{view === "vakken" && <VakcombinatiesDashboard dbSheets={dbSheets} />}{view === "seizoen" && <SeasonDashboard state={state} dbSheets={dbSheets} />}</div>;
+  const tabs = [{ id: "team", label: "Team Insights", hint: "Aanval, verdediging en wedstrijdanalyse" }, { id: "vakken", label: "Vakken & combinaties", hint: "Viertallen, duo's en betrouwbaarheid" }, { id: "seizoen", label: "Seizoen", hint: "Ontwikkeling en trends door het seizoen" }] as const;
+  return <div className="space-y-5"><div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-cyan-50 p-5 shadow-sm"><div className="text-xs font-extrabold uppercase tracking-[0.16em] text-blue-600">KorbIQ Team Intelligence</div><h2 className="mt-1 text-2xl font-black">Team & Vakken</h2><p className="mt-1 max-w-4xl text-sm text-slate-500">Teamprestaties, vakcombinaties en seizoenstrends zijn samengebracht in één analyseomgeving.</p></div><AnalysisHubTabs<"team" | "vakken" | "seizoen"> tabs={tabs} active={view} onChange={setView} />{view === "team" && <InsightsTab state={state} spelersMap={spelersMap} opponentName={state.opponentName} dbSheets={dbSheets} forcedMode="team" />}{view === "vakken" && <VakcombinatiesDashboard dbSheets={dbSheets} spelers={state.spelers} />}{view === "seizoen" && <SeasonDashboard state={state} dbSheets={dbSheets} />}</div>;
 }
 
 function InsightsTab({
@@ -5633,18 +7999,20 @@ function InsightsTab({
   opponentName,
   dbSheets,
   forcedMode,
+  initialMatchId,
 }: {
   state: AppState;
   spelersMap: Map<string, Player>;
   opponentName: string;
   dbSheets: { events: any[]; attacks: any[]; wissels: any[]; matches: any[] } | null;
   forcedMode?: "speler" | "team";
+  initialMatchId?: string;
 }) {
   const ACTIONS = ["Schot", "Doorloop", "Vrijebal", "Strafworp"] as const;
   type ActionKind = (typeof ACTIONS)[number];
 
   const [analysisMode, setAnalysisMode] = useState<"speler" | "team">(() => forcedMode ?? "speler");
-  const [insightMatchId, setInsightMatchId] = useState<string>("__live__");
+  const [insightMatchId, setInsightMatchId] = useState<string>(() => initialMatchId ?? "__live__");
   const [historyPlayerName, setHistoryPlayerName] = useState<string>("");
   const [historySeason, setHistorySeason] = useState<string>("__all__");
   const [historyMatchType, setHistoryMatchType] = useState<string>("__all__");
@@ -5702,7 +8070,7 @@ function InsightsTab({
       <span className="text-xs font-semibold text-gray-500">Wedstrijd</span>
       <select value={insightMatchId} onChange={(e) => setInsightMatchId(e.target.value)} className="border rounded-xl px-3 py-2 bg-white text-sm">
         <option value="__live__">Huidige / live wedstrijd</option>
-        {databaseMatches.length > 0 && <option value="__all__">Alle geïmporteerde wedstrijden</option>}
+        {databaseMatches.length > 0 && <option value="__all__">Alle wedstrijden</option>}
         {databaseMatches.map((m: any, i: number) => <option key={String(m.wedstrijd_id ?? i)} value={String(m.wedstrijd_id ?? i)}>{formatImportedDate(m.datum)} · {m.seizoen ? `${m.seizoen} · ` : ""}{m.wedstrijd_naam || m.tegenstander || `Wedstrijd ${i+1}`} · {m.score_korbis ?? "?"}-{m.score_tegenstander ?? "?"}</option>)}
       </select>
     </label>
@@ -6134,8 +8502,8 @@ function InsightsTab({
           <h2 className="mt-1 text-2xl font-bold">{analysisMode === "speler" ? "Insights per speler" : "Team Insights"}</h2>
           <p className="text-sm text-gray-500 mt-1">
             {all
-              ? "Analyse op basis van de geselecteerde wedstrijden uit de geladen database."
-              : "Analyse van de geselecteerde wedstrijd uit de geladen database."}
+              ? "Analyse op basis van de geselecteerde wedstrijdhistorie."
+              : "Analyse van de geselecteerde wedstrijd."}
           </p>
         </div>
         <div className="grid gap-3 grid-cols-1 md:grid-cols-[minmax(280px,1.8fr)_250px_minmax(190px,1fr)_165px] items-end">
@@ -6977,7 +9345,7 @@ function InsightsTab({
         : state.aanval;
     return ids
       .filter((id): id is string => Boolean(id))
-      .map((id) => spelersMap.get(id)?.naam ?? id);
+      .map((id, index) => spelersMap.get(id)?.naam ?? (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) ? `Onbekende speler ${index + 1}` : id));
   };
 
   const buildVakStats = (vakId: VakId) => {
