@@ -1432,14 +1432,13 @@ export default function App() {
   const actualIsTc = userRoles.some((r) => r.role === "tc" && r.actief);
   const actualIsCoachRole = userRoles.some((r) => r.role === "coach" && r.actief);
   const actualHasStaffRole = actualIsAdmin || actualIsTc || actualIsCoachRole;
-  const [adminViewAs, setAdminViewAs] = useState<"admin" | "tc" | "coach" | "speler">("admin");
   const [showTestTeams, setShowTestTeams] = useState(() => localStorage.getItem("korbiq-show-test-teams") === "true");
 
   // Admin-testweergave is bewust alleen een UI-preview. De echte Supabase/RLS-rechten
   // blijven die van het ingelogde adminaccount. Gebruik echte testaccounts voor securitytests.
-  const isAdmin = actualIsAdmin ? adminViewAs === "admin" : false;
-  const isTc = actualIsAdmin ? adminViewAs === "tc" : actualIsTc;
-  const isCoachRole = actualIsAdmin ? adminViewAs === "coach" : actualIsCoachRole;
+  const isAdmin = actualIsAdmin;
+  const isTc = actualIsTc;
+  const isCoachRole = actualIsCoachRole;
   const hasStaffRole = isAdmin || isTc || isCoachRole;
   const isTruePlayerAccount = authProfile?.role === "speler" && !actualHasStaffRole;
   const canManageOrganisation = isAdmin || isTc;
@@ -3758,24 +3757,6 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
 
   if (actualIsCoachRole && !actualIsAdmin && !actualIsTc && !activeTeamId) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-amber-200 bg-white p-6 shadow-sm"><KorbIQLogo /><div className="mt-6 inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-amber-800">Nog geen teamtoegang</div><h2 className="mt-3 text-xl font-black">Je coachaccount is nog niet aan een team gekoppeld</h2><p className="mt-2 text-sm leading-6 text-slate-600">Totdat een TC-lid of beheerder je aan minimaal één team koppelt, toont KorbIQ geen spelers, wedstrijden, lokale cache of analyses.</p><div className="mt-5 flex flex-wrap gap-3"><button onClick={()=>void refreshAccess()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Toegang opnieuw controleren</button><button onClick={()=>void supabase.auth.signOut()} className="rounded-xl border bg-white px-4 py-2 text-sm font-bold text-slate-600">Uitloggen</button></div></div></div>;
 
-  if (actualIsAdmin && adminViewAs === "speler") return <div className="min-h-screen bg-[#f6f8fc] text-slate-900">
-    <header className="sticky top-0 z-40 border-b border-violet-200 bg-violet-50/95 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div>
-          <div className="text-[10px] font-extrabold uppercase tracking-[.14em] text-violet-700">Admin testweergave</div>
-          <div className="text-sm font-black text-slate-900">Je bekijkt KorbIQ als speler</div>
-          <div className="text-xs text-slate-500">Alleen de interface wordt nagebootst; je echte database-rechten blijven Admin.</div>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {(["admin","tc","coach","speler"] as const).map(role=><button key={role} onClick={()=>setAdminViewAs(role)} className={`rounded-lg px-3 py-1.5 text-xs font-extrabold ${adminViewAs===role?"bg-violet-600 text-white":"border border-violet-200 bg-white text-violet-700"}`}>{role==="admin"?"Admin":role==="tc"?"TC":role==="coach"?"Coach":"Speler"}</button>)}
-        </div>
-      </div>
-    </header>
-    <main className="mx-auto max-w-6xl p-4 sm:p-6">
-      <SpelersportaalDashboard state={state} dbSheets={dbSheets} selectedPlayerId={portalPlayerId} onSelectPlayer={setPortalPlayerId} />
-    </main>
-  </div>;
-
   if (isTruePlayerAccount) return <div className="min-h-screen bg-[#f6f8fc] text-slate-900"><header className="border-b bg-white"><div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4"><KorbIQLogo /><div className="flex items-center gap-3"><div className="hidden text-right sm:block"><div className="text-xs font-bold uppercase tracking-wide text-blue-700">Speleraccount</div><div className="text-sm font-semibold text-slate-600">{authProfile.speler_naam || authProfile.email}</div></div><button onClick={()=>void supabase.auth.signOut()} className="rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">Uitloggen</button></div></div></header><main className="mx-auto max-w-6xl p-4 sm:p-6">{supabaseHistoryStatus === "loading" && <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">Persoonlijke wedstrijdhistorie veilig laden…</div>}{supabaseHistoryStatus === "error" && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{supabaseHistoryMessage}</div>}<SpelersportaalDashboard state={state} dbSheets={verifiedPortalPlayer && supabaseHistoryStatus === "ready" ? activeTeamDbSheets : emptyHistoryDatabase()} selectedPlayerId={authProfile.speler_id ?? ""} onSelectPlayer={()=>{}} locked playerOverride={verifiedPortalPlayer} /></main></div>;
 
   if (!hasStaffRole) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-amber-200 bg-white p-6 shadow-sm"><KorbIQLogo /><h2 className="mt-6 text-xl font-black">Nog geen actieve KorbIQ-rol</h2><p className="mt-2 text-sm text-slate-600">Dit account is ingelogd, maar heeft nog geen actieve Admin-, TC- of Coachrol in de nieuwe rechtenstructuur.</p><button onClick={()=>void supabase.auth.signOut()} className="mt-5 rounded-xl border px-4 py-2 text-sm font-bold">Uitloggen</button></div></div>;
@@ -3796,13 +3777,6 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
       <div className="flex min-h-screen w-full items-start">
         <aside className="korbiq-desktop-sidebar sticky top-0 h-screen w-[250px] shrink-0 overflow-y-auto overscroll-contain border-r border-slate-200/90 bg-white px-4 py-5 shadow-[2px_0_16px_rgba(15,23,42,0.025)]">
           <div className="px-2 pb-4"><KorbIQLogo /></div>
-          {actualIsAdmin && <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-2.5">
-            <div className="text-[10px] font-extrabold uppercase tracking-[.12em] text-violet-700">Testweergave</div>
-            <div className="mt-2 grid grid-cols-2 gap-1.5">
-              {(["admin","tc","coach","speler"] as const).map(role=><button key={role} onClick={()=>setAdminViewAs(role)} className={`rounded-lg px-2 py-1.5 text-[11px] font-extrabold transition ${adminViewAs===role?"bg-violet-600 text-white shadow-sm":"border border-violet-200 bg-white text-violet-700 hover:bg-violet-100"}`}>{role==="admin"?"Admin":role==="tc"?"TC":role==="coach"?"Coach":"Speler"}</button>)}
-            </div>
-            {adminViewAs!=="admin"&&<div className="mt-2 text-[10px] leading-snug text-violet-700">Previewmodus · je echte account blijft Admin.</div>}
-          </div>}
           <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
             <div className="flex items-center justify-between gap-2"><div className="text-[10px] font-extrabold uppercase tracking-wide text-blue-700">{roleLabel(primaryRole)}</div><span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-200">Korbis</span></div>
             <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{authProfile.email ?? authUser.email}</div>
@@ -3944,10 +3918,6 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           <main className="korbiq-main mx-auto w-full max-w-[1500px] px-4 py-5 md:px-6 md:py-7 xl:px-8">
       {(teamRosterLoading || teamRosterError) && <div className={`mb-4 rounded-xl border px-3 py-2 text-xs font-semibold ${teamRosterError?"border-red-200 bg-red-50 text-red-700":"border-blue-100 bg-blue-50 text-blue-700"}`}>{teamRosterError?`Teamselectie kon niet uit Supabase worden geladen: ${teamRosterError}`:"Teamselectie uit Supabase laden…"}</div>}
       {supabaseHistoryStatus === "error" && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"><span>{supabaseHistoryMessage} De lokaal bewaarde historie blijft beschikbaar.</span><button type="button" onClick={()=>setHistoryRefreshVersion(version=>version+1)} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold">Opnieuw proberen</button></div>}
-      {actualIsAdmin && adminViewAs !== "admin" && <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
-        <div><div className="text-[10px] font-extrabold uppercase tracking-[.14em] text-violet-700">Admin testweergave</div><div className="text-sm font-black">Bekijken als {adminViewAs === "tc" ? "TC-lid" : adminViewAs === "coach" ? "Coach" : "Speler"}</div><div className="text-xs text-slate-500">UI-preview; Supabase/RLS blijft onder je echte Admin-account draaien.</div></div>
-        <button onClick={()=>setAdminViewAs("admin")} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-extrabold text-white">Terug naar Admin</button>
-      </div>}
       {analysisTabs.includes(tab) && (
         <div className="mb-5 rounded-2xl border border-blue-100 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
