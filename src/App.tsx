@@ -2382,11 +2382,28 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
       );
       const local = dbSheetsCacheRef.current ?? localFallbackDbSheets ?? emptyHistoryDatabase();
       const accessibleTeamIdSet = new Set(accessibleTeamIds);
-      const keepLocalMatch = (row: any) =>
-        !accessibleTeamIdSet.has(String(row.team_id ?? "")) ||
-        !remoteMatchIds.has(String(row.wedstrijd_id ?? ""));
-      const keepLocalDetail = (row: any) =>
-        !remoteMatchIds.has(String(row.wedstrijd_id ?? ""));
+      // Rijen met een supabase_match_id zijn alleen een browsercache van de
+      // centrale historie. Wanneer een wedstrijd centraal is verwijderd, mag
+      // die oude cachekopie niet opnieuw in het overzicht terechtkomen.
+      const cachedRemoteMatchIds = new Set(
+        (local.matches ?? [])
+          .filter((row: any) =>
+            Boolean(String(row.supabase_match_id ?? "").trim()) &&
+            accessibleTeamIdSet.has(String(row.team_id ?? ""))
+          )
+          .map((row: any) => String(row.wedstrijd_id ?? "").trim())
+          .filter(Boolean)
+      );
+      const keepLocalMatch = (row: any) => {
+        const teamId = String(row.team_id ?? "");
+        const matchId = String(row.wedstrijd_id ?? "").trim();
+        if (accessibleTeamIdSet.has(teamId) && Boolean(String(row.supabase_match_id ?? "").trim())) return false;
+        return !accessibleTeamIdSet.has(teamId) || !remoteMatchIds.has(matchId);
+      };
+      const keepLocalDetail = (row: any) => {
+        const matchId = String(row.wedstrijd_id ?? "").trim();
+        return !remoteMatchIds.has(matchId) && !cachedRemoteMatchIds.has(matchId);
+      };
 
       const merged: DatabaseSheetsData = {
         ...local,
