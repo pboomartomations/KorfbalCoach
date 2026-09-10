@@ -2201,6 +2201,11 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(
     () => localStorage.getItem("korbiq-desktop-sidebar-collapsed") === "true"
   );
+  useEffect(() => {
+    const shouldCollapse = tab === "wedstrijd";
+    setDesktopSidebarCollapsed(shouldCollapse);
+    localStorage.setItem("korbiq-desktop-sidebar-collapsed", String(shouldCollapse));
+  }, [tab]);
   const [navSectionsOpen, setNavSectionsOpen] = useState({
     wedstrijd: false,
     analyse: true,
@@ -6137,13 +6142,13 @@ const attackUitPct =
       <div className="relative space-y-4">
     
         {showOverlay && (
-          <div className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto overscroll-contain bg-black/60 p-2 sm:p-4" data-no-pause>
+          <div className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto overscroll-contain rounded-2xl bg-black/60 p-2 sm:p-4" data-no-pause>
     
             {/* dim layer */}
             <div className="absolute inset-0" />
     
             {/* card */}
-            <div className="relative z-10 my-auto w-full max-w-xl max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl text-center sm:max-h-[calc(100dvh-2rem)] sm:p-6">
+            <div className="sticky top-2 z-10 w-full max-w-xl max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl text-center sm:top-4 sm:max-h-[calc(100dvh-2rem)] sm:p-6">
     
               <div className="text-3xl font-extrabold mb-2">
                 {overlayTitle}
@@ -6203,17 +6208,16 @@ const attackUitPct =
         {/* Compacte wedstrijdstatus: datum en competitie maken plaats voor live coaching. */}
         <div className="sticky top-[50px] z-20 overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm lg:static">
           <div className="flex min-w-0 items-stretch divide-x divide-slate-100">
-            <div className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 sm:px-3">
+            <div className="flex min-w-0 flex-[0.8] items-center gap-2 px-2.5 py-2 sm:px-3">
               <MatchInfoGlyph type="shirt" />
               <div className="min-w-0"><div className="truncate text-xs font-extrabold text-slate-800 sm:text-sm">{fixtureLabel}</div><div className="text-[9px] font-semibold text-slate-400 sm:text-[10px]">{state.currentHalf}e helft</div></div>
             </div>
-            <div className="flex shrink-0 items-center gap-2 px-2.5 py-2 sm:px-3"><MatchInfoGlyph type="clock" /><div><div className="text-[9px] uppercase tracking-wide text-slate-400">Resterend</div><div className="text-sm font-extrabold tabular-nums text-blue-700 sm:text-base">{formatTime(resterend)}</div></div></div>
             <button type="button" onClick={openScoreEditor} className="group shrink-0 px-2 py-1.5 hover:bg-blue-50 sm:px-3" title="Stand aanpassen"><div className="rounded-lg bg-[#124a98] px-2.5 py-2 text-base font-extrabold text-white tabular-nums shadow-sm sm:text-lg">{state.scoreThuis}-{state.scoreUit}</div></button>
 
             {wedstrijdGestart && !wedstrijdAfgelopen && (
-              <div className="hidden min-w-0 flex-[1.7] items-center gap-3 px-3 py-2 lg:flex">
-                <div className="min-w-[120px] flex-1"><div className="flex items-center justify-between gap-2 text-[10px]"><span className="font-bold text-slate-500">Momentum</span><span className={`truncate font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</span></div><div className="relative mt-1 h-1.5 rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400"><div className="absolute top-1/2 h-3.5 w-1 -translate-y-1/2 rounded-full bg-slate-900" style={{ left: `calc(${momentumPct}% - 2px)` }} /></div></div>
-                <details className="group relative min-w-0 flex-[1.4]">
+              <div className="hidden min-w-0 flex-[2.4] items-center gap-3 px-3 py-2 lg:flex">
+                <div className="min-w-[160px] flex-1"><div className="flex items-center justify-between gap-2 text-[10px]"><span className="font-bold text-slate-500">Momentum</span><span className={`truncate font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</span></div><div className="relative mt-1 h-1.5 rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400"><div className="absolute top-1/2 h-3.5 w-1 -translate-y-1/2 rounded-full bg-slate-900" style={{ left: `calc(${momentumPct}% - 2px)` }} /></div></div>
+                <details className="group relative min-w-0 flex-[1.8]">
                   <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg bg-blue-50 px-2.5 py-2 text-xs marker:hidden"><SignalDot tone={visibleLiveCoachSignals[0]?.tone === "goed" ? "green" : visibleLiveCoachSignals[0]?.tone === "letop" && visibleLiveCoachSignals[0]?.priority === 1 ? "red" : visibleLiveCoachSignals[0]?.tone === "letop" ? "orange" : "blue"}/><span className="shrink-0 font-extrabold text-blue-900">Coach</span><span className="min-w-0 flex-1 truncate text-blue-800">{visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}</span><span className="text-blue-400">⌄</span></summary>
                   <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-[min(440px,70vw)] rounded-xl border border-slate-200 bg-white p-3 shadow-2xl"><div className="space-y-1.5">{visibleLiveCoachSignals.map((signal, i) => <div key={`${signal.text}-${i}`} className="flex gap-2 rounded-lg bg-slate-50 px-2.5 py-2 text-xs font-medium"><SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"}/><span>{signal.text}</span></div>)}</div><div className="mt-2 text-[10px] text-slate-400">Laatste {finishedHomeAttacks.length}/5 aanvallen · {recentHomeGoals} goals · {recentHomeAttempts.length} kansen · rebound {recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</div></div>
                 </details>
@@ -6241,6 +6245,7 @@ const attackUitPct =
               }`}
             >
               {state.klokLoopt ? "Ⅱ  PAUZEER WEDSTRIJD" : "▶  HERVAT WEDSTRIJD"}
+              <span className="ml-2 font-semibold text-sm opacity-70">{formatTime(resterend)}<span className="hidden sm:inline"> resterend</span></span>
             </button>
             <details ref={matchActionsRef} className="group relative">
               <summary className={`flex h-full min-w-[52px] cursor-pointer list-none items-center justify-center rounded-r-xl border px-4 text-xl font-black marker:hidden ${state.klokLoopt ? "border-amber-200 bg-amber-100 text-amber-900 hover:bg-amber-200" : "border-blue-200 bg-blue-100 text-blue-800 hover:bg-blue-200"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
