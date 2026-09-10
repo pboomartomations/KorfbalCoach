@@ -3700,7 +3700,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
 
   const SideNavButton = ({ id, label, icon }: { id: typeof tab; label: string; icon: "match" | "insights" | "season" | "players" | "settings" }) => (
     <button
-      onClick={() => setTab(id)}
+      onClick={() => { setTab(id); setMobileMenuOpen(false); }}
       className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${
         tab === id
           ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-100"
@@ -3780,6 +3780,17 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
   if (isTruePlayerAccount) return <div className="min-h-screen bg-[#f6f8fc] text-slate-900"><header className="border-b bg-white"><div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4"><KorbIQLogo /><div className="flex items-center gap-3"><div className="hidden text-right sm:block"><div className="text-xs font-bold uppercase tracking-wide text-blue-700">Speleraccount</div><div className="text-sm font-semibold text-slate-600">{authProfile.speler_naam || authProfile.email}</div></div><button onClick={()=>void supabase.auth.signOut()} className="rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">Uitloggen</button></div></div></header><main className="mx-auto max-w-6xl p-4 sm:p-6">{supabaseHistoryStatus === "loading" && <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">Persoonlijke wedstrijdhistorie veilig laden…</div>}{supabaseHistoryStatus === "error" && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{supabaseHistoryMessage}</div>}<SpelersportaalDashboard state={state} dbSheets={verifiedPortalPlayer && supabaseHistoryStatus === "ready" ? activeTeamDbSheets : emptyHistoryDatabase()} selectedPlayerId={authProfile.speler_id ?? ""} onSelectPlayer={()=>{}} locked playerOverride={verifiedPortalPlayer} /></main></div>;
 
   if (!hasStaffRole) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-amber-200 bg-white p-6 shadow-sm"><KorbIQLogo /><h2 className="mt-6 text-xl font-black">Nog geen actieve KorbIQ-rol</h2><p className="mt-2 text-sm text-slate-600">Dit account is ingelogd, maar heeft nog geen actieve Admin-, TC- of Coachrol in de nieuwe rechtenstructuur.</p><button onClick={()=>void supabase.auth.signOut()} className="mt-5 rounded-xl border px-4 py-2 text-sm font-bold">Uitloggen</button></div></div>;
+
+  const compactHalfTotal = (Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
+  const compactHalfStart = state.currentHalf === 1 ? 0 : compactHalfTotal;
+  const compactElapsed = Math.max(0, Math.min(compactHalfTotal, state.tijdSeconden - compactHalfStart));
+  const compactRemaining = Math.max(0, compactHalfTotal - compactElapsed);
+  const compactOwnTeam = state.matchTeamName || activeTeamContext?.teamName || "Korbis";
+  const compactFixture = state.homeAway === "uit"
+    ? `${state.opponentName || "Tegenstander"} – ${compactOwnTeam}`
+    : `${compactOwnTeam} – ${state.opponentName || "Tegenstander"}`;
+  const compactMatchDateSource = state.matchDate ? new Date(`${state.matchDate}T12:00:00`) : new Date();
+  const compactMatchDate = (Number.isNaN(compactMatchDateSource.getTime()) ? new Date() : compactMatchDateSource).toLocaleDateString("nl-NL", { day: "2-digit", month: "2-digit", year: "2-digit" });
 
   return (
     <div className="korbiq-app min-h-screen bg-[#f6f8fc] text-slate-900">
@@ -3882,6 +3893,13 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
             {mobileMenuOpen && (
               <div className="lg:hidden max-h-[calc(100vh-70px)] overflow-y-auto overscroll-contain border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
                 <div className="mx-auto max-w-xl space-y-4">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0"><div className="text-[10px] font-extrabold uppercase tracking-wide text-blue-700">{roleLabel(primaryRole)}</div><div className="truncate text-xs font-semibold text-slate-600">{authProfile.email ?? authUser.email}</div></div>
+                      <button onClick={()=>void supabase.auth.signOut()} className="shrink-0 rounded-lg border bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Uitloggen</button>
+                    </div>
+                    {teamOptions.length > 0 && <label className="mt-3 block text-[10px] font-bold uppercase tracking-wide text-slate-500">Actief team<select value={activeTeamId} onChange={e=>selectTeam(e.target.value)} disabled={currentMatchHasDataForTeamLock && !state.matchEnded && Boolean(state.matchTeamId)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm font-bold normal-case text-slate-700 disabled:bg-slate-100 disabled:text-slate-400">{teamOptions.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
+                  </div>
                   <CollapsibleNavSection section="wedstrijd" label="Wedstrijd" mobile>
                     <button onClick={() => { setMobileMenuOpen(false); requestNieuweWedstrijd(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><span className="text-xl leading-none font-light">＋</span><span>Nieuwe wedstrijd</span></button>
                     <SideNavButton id="wedstrijd" label="Huidige wedstrijd" icon="match" />
@@ -3922,17 +3940,16 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
               </div>
             )}
 
-            <div className="overflow-x-auto border-t border-slate-100 lg:hidden">
-              <div className="grid min-w-[650px] grid-cols-5 bg-white px-3">
-                {([
-                  { id: "dashboard", label: "Dashboard" },
-                  { id: "spelersanalyse", label: "Spelers" },
-                  { id: "teamanalyse", label: "Team" },
-                  { id: "wedstrijd", label: "Wedstrijd" },
-                  { id: "wisseladvies", label: "Wissels" },
-                ] as const).map((t) => <button key={t.id} onClick={() => setTab(t.id)} className={`border-b-2 px-3 py-3 text-sm font-semibold ${tab === t.id ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}>{t.label}</button>)}
+            {tab === "wedstrijd" && !mobileMenuOpen && (
+              <div className="border-t border-slate-100 bg-white px-2 py-1.5 lg:hidden" data-no-pause>
+                <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(78px,.75fr)_minmax(76px,.7fr)_auto] items-center divide-x divide-slate-100 rounded-xl border border-slate-100 bg-slate-50/70 text-[10px] shadow-sm sm:grid-cols-[minmax(0,2fr)_minmax(110px,1fr)_minmax(100px,.8fr)_auto] sm:text-xs">
+                  <div className="min-w-0 px-2 py-1.5 sm:px-3"><div className="truncate font-extrabold text-slate-800">{compactFixture}</div><div className="truncate text-[9px] text-slate-400 sm:text-[10px]">{state.matchType} · {state.season}</div></div>
+                  <div className="px-2 py-1.5 text-center"><div className="text-[9px] uppercase tracking-wide text-slate-400">Datum</div><div className="font-bold tabular-nums">{compactMatchDate}</div></div>
+                  <div className="px-2 py-1.5 text-center"><div className="text-[9px] uppercase tracking-wide text-slate-400">Resterend</div><div className="font-extrabold tabular-nums text-blue-700">{formatTime(compactRemaining)}</div><div className="text-[9px] text-slate-400">{state.currentHalf}e helft</div></div>
+                  <div className="m-1.5 whitespace-nowrap rounded-lg bg-[#124a98] px-2.5 py-2 text-sm font-extrabold text-white tabular-nums sm:px-3 sm:text-base">{state.scoreThuis}-{state.scoreUit}</div>
+                </div>
               </div>
-            </div>
+            )}
           </header>
 
           <main className="korbiq-main mx-auto w-full max-w-[1500px] px-4 py-5 md:px-6 md:py-7 xl:px-8">
@@ -5747,7 +5764,8 @@ function WedstrijdTab({
   }, [state.log]);
 
   const latestActions = state.log.filter((e) => e.soort !== "Wissel").slice(0, 5);
-  const matchDateLabel = new Date().toLocaleDateString("nl-NL", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const matchDateSource = state.matchDate ? new Date(`${state.matchDate}T12:00:00`) : new Date();
+  const matchDateLabel = (Number.isNaN(matchDateSource.getTime()) ? new Date() : matchDateSource).toLocaleDateString("nl-NL", { day: "2-digit", month: "2-digit", year: "numeric" });
 
   // Fase 5: compacte live coachinformatie. We kijken bewust vooral naar
   // recente aanvallen, zodat een signaal tijdens de wedstrijd bruikbaar is.
@@ -6184,7 +6202,7 @@ const attackUitPct =
         )}
       {/* Wedstrijdheader in KorbIQ-stijl */}
       <div className="space-y-3" data-no-pause>
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="hidden rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden lg:block">
           <div className="grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-slate-100">
             <div className="flex items-center gap-3 p-4 min-w-0">
               <MatchInfoGlyph type="shirt" />
@@ -6243,6 +6261,7 @@ const attackUitPct =
             <div className="rounded-xl border border-red-100 bg-red-50/70 px-3 py-2"><span className="font-semibold text-red-800">Tegenstander aanvalstijd</span><span className="float-right font-bold">{totalAttackSec > 0 ? attackUitPct.toFixed(1) : "0.0"}% · {formatTime(attackUitSec)}</span></div>
           </div>
           <div className="flex gap-2 flex-wrap">
+            <Button size="md" variant="secondary" className="lg:hidden" onClick={openScoreEditor}>Stand aanpassen</Button>
             <Button
               size="md"
               variant="secondary"
@@ -6278,6 +6297,41 @@ const attackUitPct =
             <div className="mt-5 flex gap-3"><Button className="flex-1" onClick={() => setScoreEditorOpen(false)}>Annuleren</Button><Button variant="primary" className="flex-1" onClick={() => { setState((s) => ({ ...s, scoreThuis: draftScoreThuis, scoreUit: draftScoreUit })); setScoreEditorOpen(false); }}>Stand opslaan</Button></div>
           </div>
         </div>
+      )}
+
+      {/* Op smalle schermen blijft alleen het belangrijkste coachsignaal zwevend zichtbaar. */}
+      {wedstrijdGestart && !wedstrijdAfgelopen && (
+        <details className="group fixed bottom-3 right-3 z-30 w-[min(calc(100vw-1.5rem),440px)] lg:hidden" data-no-pause>
+          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs shadow-xl marker:hidden">
+            <SignalDot tone={visibleLiveCoachSignals[0]?.tone === "goed" ? "green" : visibleLiveCoachSignals[0]?.tone === "letop" && visibleLiveCoachSignals[0]?.priority === 1 ? "red" : visibleLiveCoachSignals[0]?.tone === "letop" ? "orange" : "blue"} />
+            <span className="shrink-0 font-extrabold text-slate-800">Coach</span>
+            <span className="min-w-0 flex-1 truncate text-slate-600">{visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}</span>
+            <span className="text-slate-400 transition group-open:rotate-180">⌃</span>
+          </summary>
+          <div className="absolute bottom-[calc(100%+0.5rem)] right-0 w-full rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl">
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-extrabold text-slate-900">Live coachsignalen</div>
+              <div className={`text-xs font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</div>
+            </div>
+            <div className="relative mt-2 h-1.5 rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400">
+              <div className="absolute top-1/2 h-3.5 w-1 -translate-y-1/2 rounded-full bg-slate-900" style={{ left: `calc(${momentumPct}% - 2px)` }} />
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-600">
+              <span className="rounded-full bg-slate-100 px-2 py-1">{finishedHomeAttacks.length}/5 aanvallen</span>
+              <span className="rounded-full bg-slate-100 px-2 py-1">{recentHomeGoals} goals</span>
+              <span className="rounded-full bg-slate-100 px-2 py-1">{recentHomeAttempts.length} kansen</span>
+              <span className="rounded-full bg-slate-100 px-2 py-1">Rebound {recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</span>
+            </div>
+            <div className="mt-2 max-h-[38dvh] space-y-1.5 overflow-y-auto">
+              {visibleLiveCoachSignals.map((signal, i) => (
+                <div key={`${signal.text}-${i}`} className={`flex gap-2 rounded-lg border px-2.5 py-2 text-xs font-medium ${signal.tone === "goed" ? "border-green-200 bg-green-50 text-green-800" : signal.tone === "letop" && signal.priority === 1 ? "border-red-200 bg-red-50 text-red-900" : signal.tone === "letop" ? "border-orange-200 bg-orange-50 text-orange-900" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
+                  <SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"} />
+                  <span>{signal.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
       )}
 
           {/* Alles hieronder wordt grijs + niet klikbaar zolang wedstrijdNietGestart */}
@@ -6554,7 +6608,7 @@ const attackUitPct =
               {/* Compacte coachdock onder de velden: kerninformatie zichtbaar, details op verzoek. */}
               {wedstrijdGestart && !wedstrijdAfgelopen && (
                 <div className="mt-3 grid gap-2 lg:grid-cols-2" data-no-pause>
-                  <details className="group rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <details className="group hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block">
                     <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm marker:hidden">
                       <SignalDot tone={visibleLiveCoachSignals[0]?.tone === "goed" ? "green" : visibleLiveCoachSignals[0]?.tone === "letop" && visibleLiveCoachSignals[0]?.priority === 1 ? "red" : visibleLiveCoachSignals[0]?.tone === "letop" ? "orange" : "blue"} />
                       <span className="shrink-0 font-extrabold">Coachsignaal</span>
