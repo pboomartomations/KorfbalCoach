@@ -1797,7 +1797,10 @@ export default function App() {
       const roster: Player[] = teamMemberships
         .flatMap<Player>((membership) => {
           const player = playerById.get(String(membership.player_id));
-          if (!player || !player.actief) return [];
+          // Een actieve teamkoppeling is leidend voor wedstrijdbeschikbaarheid.
+          // Een ouder/inconsistent players.actief=false-record mag een gekoppelde
+          // gastspeler niet uit de bank of wisselkeuze laten verdwijnen.
+          if (!player) return [];
 
           const person = player.person_id ? peopleById.get(player.person_id) : null;
           if (person && !person.actief) return [];
@@ -4269,8 +4272,8 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
       )}
 
       {databaseSetupOpen && databaseReady && (
-        <div className="fixed inset-0 z-[100] bg-black/40 flex items-center justify-center p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl border border-gray-200 p-6">
+        <div className="fixed inset-0 z-[100] bg-black/40 flex items-center justify-center overflow-y-auto overscroll-contain p-2 sm:p-4">
+          <div className="my-auto w-full max-w-xl max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-gray-200 p-4 sm:max-h-[calc(100dvh-2rem)] sm:p-6">
             <div className="flex items-start gap-3">
               <div className="h-10 w-10 shrink-0 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold">!</div>
               <div>
@@ -4688,7 +4691,19 @@ function OrganisationManagementDashboard({
     setBusy(false);
   };
   const createTeam=async()=>{const naam=newTeamName.trim();if(!naam)return;setBusy(true);setMessage("");const {error}=await supabase.rpc("create_team_for_all_competitions",{p_naam:naam});if(error)setMessage(error.message);else{setNewTeamName("");setMessage(`${naam} aangemaakt en automatisch aan alle actieve competitieperioden gekoppeld.`);await onRefreshAccess();await load()}setBusy(false)};
-  const archiveTeam=async(id:string)=>{if(!confirm("Dit team voor dit seizoen archiveren?"))return;setBusy(true);const {error}=await supabase.rpc("archive_team_season",{p_team_season_id:id});if(error)setMessage(error.message);else{setMessage("Team-seizoen gearchiveerd.");await onRefreshAccess();await load()}setBusy(false)};
+  const archiveTeam=async(teamId:string)=>{
+    const teamName=teamContexts.find(context=>context.teamId===teamId)?.teamName??"dit team";
+    if(!teamId||teamId==="__all__"){setMessage("Kies eerst één team om te archiveren.");return}
+    if(!confirm(`${teamName} archiveren?\n\nAlle actieve competitieperioden van dit team worden gearchiveerd. De bestaande wedstrijdhistorie blijft bewaard.`))return;
+    setBusy(true);setMessage("");
+    const {error}=await supabase.rpc("set_team_active",{p_team_id:teamId,p_actief:false});
+    if(error){setMessage(`Team kon niet worden gearchiveerd: ${error.message}`);setBusy(false);return}
+    setManagedTeamId("__all__");
+    await onRefreshAccess();
+    await load();
+    setMessage(`${teamName} is voor alle actieve competitieperioden gearchiveerd. De wedstrijdhistorie is behouden.`);
+    setBusy(false);
+  };
 
   const uniqueTeams=useMemo(()=>{
     const map=new Map<string,{id:string;name:string}>();
@@ -4906,7 +4921,7 @@ function OrganisationManagementDashboard({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-wrap items-center gap-3">
           <select value={managedTeamId} onChange={e=>{setManagedTeamId(e.target.value);setTeamPersonId("");setTeamPlayerSearch("")}} className="min-w-[260px] rounded-xl border px-3 py-2.5 font-bold"><option value="__all__">Alle teams</option>{uniqueTeams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select>
-          {activeContext&&<button onClick={()=>void archiveTeam(activeContext.id)} className="rounded-xl border border-orange-200 px-3 py-2 text-xs font-bold text-orange-700">Team archiveren</button>}
+          {activeContext&&<button disabled={busy} onClick={()=>void archiveTeam(managedTeamId)} className="rounded-xl border border-orange-200 px-3 py-2 text-xs font-bold text-orange-700 disabled:opacity-50">Team archiveren</button>}
         </div>
         {(isAdmin||isTcMember)&&<div className="min-w-0 lg:w-[420px]">
           <div className="text-sm font-black">Nieuw team</div>
@@ -5395,7 +5410,7 @@ function VakindelingTab({
       <div className="flex flex-col gap-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div className="text-sm text-gray-600">
-            Bank: {beschikbare.map((s) => s.naam).join(", ") || "—"}
+            Bank: {beschikbare.map((s) => `${s.naam}${s.status === "Gast" ? " (Gast)" : ""}`).join(", ") || "—"}
           </div>
 
           <div className="flex flex-wrap items-center gap-4">
@@ -5615,7 +5630,7 @@ function VakBox({
                 <option value="">— Kies speler —</option>
                 {opties.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.naam} ({s.geslacht})
+                    {s.naam} ({s.geslacht}{s.status === "Gast" ? " · Gast" : ""})
                   </option>
                 ))}
               </select>
@@ -6106,13 +6121,13 @@ const attackUitPct =
       <div className="relative space-y-4">
     
         {showOverlay && (
-          <div className="absolute inset-0 z-40 flex items-start justify-center pt-20 rounded-2xl overflow-hidden">
+          <div className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto overscroll-contain bg-black/60 p-2 sm:p-4" data-no-pause>
     
             {/* dim layer */}
-            <div className="absolute inset-0 bg-black/60" />
+            <div className="absolute inset-0" />
     
             {/* card */}
-            <div className="relative z-10 w-full max-w-xl mx-4 rounded-2xl bg-white p-6 shadow-2xl text-center">
+            <div className="relative z-10 my-auto w-full max-w-xl max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl text-center sm:max-h-[calc(100dvh-2rem)] sm:p-6">
     
               <div className="text-3xl font-extrabold mb-2">
                 {overlayTitle}
@@ -6141,7 +6156,7 @@ const attackUitPct =
               {!wedstrijdAfgelopen && (
                 <Button
                   variant="primary"
-                  className="w-full text-3xl font-extrabold py-7 min-h-[88px] rounded-2xl"
+                  className="w-full text-2xl sm:text-3xl font-extrabold py-4 sm:py-6 min-h-[64px] sm:min-h-[80px] rounded-2xl"
                   onClick={() =>
                     eersteHelftAfgelopen
                       ? startTweedeHelft()
@@ -6192,6 +6207,19 @@ const attackUitPct =
               <div className="rounded-xl bg-[#124a98] px-4 py-2 text-xl font-extrabold text-white tabular-nums shadow-sm whitespace-nowrap">{state.scoreThuis} - {state.scoreUit}</div>
             </button>
           </div>
+          {wedstrijdGestart && !wedstrijdAfgelopen && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-slate-100 px-3 py-2 text-xs">
+              <div className="flex shrink-0 items-center gap-2 font-bold text-slate-700">
+                <SignalDot tone={momentumTone}/>
+                <span>Momentum</span>
+              </div>
+              <div className="relative h-2 min-w-[140px] flex-1 overflow-visible rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400" title="Recente wedstrijdstroom">
+                <div className="absolute top-1/2 h-4 w-1 -translate-y-1/2 rounded-full bg-slate-900 shadow" style={{ left: `calc(${momentumPct}% - 2px)` }} />
+              </div>
+              <div className={`shrink-0 font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</div>
+              <div className="shrink-0 text-slate-500">recent: {recentHomeGoals}-{recentAwayGoals} goals · {recentHomeAttempts.length}-{recentAwayAttempts.length} kansen</div>
+            </div>
+          )}
         </div>
 
         {!wedstrijdNietGestart && !wedstrijdAfgelopen && !eersteHelftAfgelopen && (
@@ -6236,8 +6264,8 @@ const attackUitPct =
       </div>
 
       {scoreEditorOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-4" data-no-pause onMouseDown={(e) => { if (e.target === e.currentTarget) setScoreEditorOpen(false); }}>
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto overscroll-contain bg-slate-950/55 p-2 sm:p-4" data-no-pause onMouseDown={(e) => { if (e.target === e.currentTarget) setScoreEditorOpen(false); }}>
+          <div className="my-auto w-full max-w-md max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-3xl bg-white p-4 shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:p-6">
             <div className="flex items-start justify-between gap-4 mb-5"><div><div className="text-xs font-bold uppercase tracking-[0.16em] text-blue-600">Stand aanpassen</div><div className="mt-1 text-xl font-extrabold">{fixtureLabel}</div></div><button className="h-9 w-9 rounded-full bg-slate-100 text-xl" onClick={() => setScoreEditorOpen(false)}>×</button></div>
             <div className="grid grid-cols-2 gap-4">
               {[{label:"Korbis",value:draftScoreThuis,set:setDraftScoreThuis,tone:"blue"},{label:opponentName || "Tegenstander",value:draftScoreUit,set:setDraftScoreUit,tone:"slate"}].map((team) => (
@@ -6252,70 +6280,6 @@ const attackUitPct =
         </div>
       )}
 
-          {/* Fase 15: live momentum. Geeft de recente wedstrijdstroom visueel weer. */}
-          {wedstrijdGestart && !wedstrijdAfgelopen && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-no-pause>
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <div className="flex items-center gap-2"><SignalDot tone={momentumTone}/><div className="font-bold">Live momentum</div></div>
-                  <div className="mt-1 text-xs text-slate-500">Laatste fase op basis van goals, kansen, aanvallende rebounds en balverlies.</div>
-                </div>
-                <div className="text-left lg:text-right">
-                  <div className={`text-sm font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</div>
-                  <div className="text-xs text-slate-500">{recentHomeGoals}-{recentAwayGoals} goals · {recentHomeAttempts.length}-{recentAwayAttempts.length} kansen in recente aanvallen</div>
-                </div>
-              </div>
-              <div className="mt-4">
-                <div className="mb-1 flex justify-between text-[11px] font-bold text-slate-500"><span>{opponentName || "Tegenstander"}</span><span>Korbis</span></div>
-                <div className="relative h-3 overflow-hidden rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400">
-                  <div className="absolute top-1/2 h-5 w-1 -translate-y-1/2 rounded-full bg-slate-900 shadow" style={{ left: `calc(${momentumPct}% - 2px)` }} />
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="text-slate-500">Korfgericht</span><div className="font-bold">{recentHomeAttempts.length ? `${((recentHomeGoals + recentHomeAttempts.filter((e) => e.resultaat === "Korf").length) / recentHomeAttempts.length * 100).toFixed(0)}%` : "–"}</div></div>
-                  <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="text-slate-500">Rebound</span><div className="font-bold">{recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</div></div>
-                  <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="text-slate-500">Balverlies</span><div className="font-bold">{recentHomeTurnovers}</div></div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Fase 5: live coachsignalen, compact en altijd op dezelfde plek */}
-          {wedstrijdGestart && !wedstrijdAfgelopen && (
-            <div className="rounded-2xl border bg-white p-4" data-no-pause>
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                <div>
-                  <div className="font-bold">Live coachsignalen</div>
-                  <div className="text-xs text-gray-500">Gebaseerd op de meest recente aanvallen; bedoeld als snelle aanwijzing, niet als eindconclusie.</div>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs min-w-0 lg:min-w-[520px]">
-                  <div className="rounded-xl bg-gray-50 border px-2 py-2"><div className="text-gray-500">Laatste aanvallen</div><div className="font-bold text-base">{finishedHomeAttacks.length}/5</div></div>
-                  <div className="rounded-xl bg-gray-50 border px-2 py-2"><div className="text-gray-500">Goals Korbis</div><div className="font-bold text-base">{recentHomeGoals}</div></div>
-                  <div className="rounded-xl bg-gray-50 border px-2 py-2"><div className="text-gray-500">Kansen</div><div className="font-bold text-base">{recentHomeAttempts.length}</div></div>
-                  <div className="rounded-xl bg-gray-50 border px-2 py-2"><div className="text-gray-500">Aanv. rebound</div><div className="font-bold text-base">{recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</div></div>
-                </div>
-              </div>
-              <div className="mt-3 grid gap-2 lg:grid-cols-3">
-                {visibleLiveCoachSignals.map((signal, i) => (
-                  <div
-                    key={`${signal.text}-${i}`}
-                    className={`flex gap-2 rounded-xl border px-3 py-2 text-sm font-medium ${
-                      signal.tone === "goed"
-                        ? "bg-green-50 border-green-200 text-green-800"
-                        : signal.tone === "letop" && signal.priority === 1
-                        ? "bg-red-50 border-red-200 text-red-900"
-                        : signal.tone === "letop"
-                        ? "bg-orange-50 border-orange-200 text-orange-900"
-                        : "bg-blue-50 border-blue-200 text-blue-800"
-                    }`}
-                  >
-                    <SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"} />
-                    <span>{signal.text}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Alles hieronder wordt grijs + niet klikbaar zolang wedstrijdNietGestart */}
           <div
             className={
@@ -6324,11 +6288,11 @@ const attackUitPct =
                 : "transition"
             }
           >
-            {/* Vakken met daarnaast maximaal vijf laatste acties */}
+            {/* De twee velden krijgen de volledige beschikbare breedte. */}
             <div className="relative mt-4" data-no-pause>
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,0.82fr)] mb-4 items-stretch">
+              <div className="mb-4">
                 {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
-                <div className="relative flex gap-4 min-w-0">
+                <div className="relative grid min-w-0 grid-cols-2 gap-3 xl:gap-5">
                 {state.aanvalLinks ? (
                   <>
                     {/* LINKS: Aanvallend veld */}
@@ -6408,51 +6372,6 @@ const attackUitPct =
                   </button>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm min-h-full" data-no-pause>
-                  <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                    <div>
-                      <div className="font-extrabold">Laatste acties</div>
-                      <div className="text-xs text-slate-500">Maximaal 5 · inclusief stand</div>
-                    </div>
-                    <div className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500">{latestActions.length}/5</div>
-                  </div>
-                  {latestActions.length > 0 ? (
-                    <div className="divide-y divide-slate-100">
-                      {latestActions.map((e) => {
-                        const score = scoreAtEvent.get(e.id);
-                        const playerName = e.spelerId ? spelersMap.get(e.spelerId)?.naam : undefined;
-                        const isGoal = (e.soort === "Kans" && (e.reden === "Gescoord" || e.reden === "Doelpunt")) || (e.soort === "Gemis" && (e.reden === "Doorgelaten" || e.reden === "Doelpunt"));
-                        const label = e.actie || e.soort || "Actie";
-                        const tone = isGoal
-                          ? e.team === "uit"
-                            ? "bg-red-50 text-red-700 border-red-200"
-                            : "bg-green-50 text-green-700 border-green-200"
-                          : e.resultaat === "Verdedigd" || e.reden === "Schot afgevangen" || e.reden === "Pass Onderschept" || e.reden === "Bal onderschept"
-                          ? "bg-blue-50 text-blue-700 border-blue-200"
-                          : e.soort === "Rebound"
-                          ? "bg-orange-50 text-orange-700 border-orange-200"
-                          : "bg-slate-50 text-slate-700 border-slate-200";
-                        return (
-                          <div key={e.id} className="px-4 py-3 text-sm">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span className="w-[44px] shrink-0 text-xs font-semibold tabular-nums text-slate-400">{formatTime(e.tijdSeconden)}</span>
-                                <span className={`inline-flex max-w-[150px] truncate rounded-lg border px-2 py-1 text-[10px] font-extrabold uppercase ${tone}`}>{label}</span>
-                              </div>
-                              <div className="rounded-lg bg-slate-900 px-2.5 py-1 font-extrabold text-white tabular-nums whitespace-nowrap">{score ? `${score.thuis} - ${score.uit}` : `${state.scoreThuis} - ${state.scoreUit}`}</div>
-                            </div>
-                            <div className="mt-2 min-w-0 pl-[52px]">
-                              <div className="font-semibold truncate">{playerName || (e.team === "uit" ? opponentName || "Tegenstander" : "Teamactie")}</div>
-                              <div className="text-xs text-slate-500 truncate">{e.vakId ? `Vak ${e.vakId}` : ""}{e.vak ? ` · ${e.vak === "aanvallend" ? "Aanval" : "Verdediging"}` : ""}{e.reden ? ` · ${e.reden}` : ""}</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="flex min-h-[180px] items-center justify-center p-6 text-center text-sm text-slate-400">De laatste acties verschijnen hier zodra je begint met registreren.</div>
-                  )}
-                </div>
               </div>
 
               {/* ONDER: vakken met spelers en wisselknoppen */}
@@ -6631,6 +6550,69 @@ const attackUitPct =
                   </>
                 )}
               </div>
+
+              {/* Compacte coachdock onder de velden: kerninformatie zichtbaar, details op verzoek. */}
+              {wedstrijdGestart && !wedstrijdAfgelopen && (
+                <div className="mt-3 grid gap-2 lg:grid-cols-2" data-no-pause>
+                  <details className="group rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm marker:hidden">
+                      <SignalDot tone={visibleLiveCoachSignals[0]?.tone === "goed" ? "green" : visibleLiveCoachSignals[0]?.tone === "letop" && visibleLiveCoachSignals[0]?.priority === 1 ? "red" : visibleLiveCoachSignals[0]?.tone === "letop" ? "orange" : "blue"} />
+                      <span className="shrink-0 font-extrabold">Coachsignaal</span>
+                      <span className="min-w-0 flex-1 truncate text-slate-600">{visibleLiveCoachSignals[0]?.text || "Nog geen live signaal."}</span>
+                      <span className="hidden shrink-0 text-[11px] text-slate-400 sm:inline">{finishedHomeAttacks.length}/5 aanv. · {recentHomeGoals} goals · {recentHomeAttempts.length} kansen</span>
+                      <span className="text-slate-400 transition group-open:rotate-180">⌄</span>
+                    </summary>
+                    <div className="border-t border-slate-100 p-3">
+                      <div className="mb-2 flex flex-wrap gap-1.5 text-[11px] font-semibold">
+                        <span className="rounded-full bg-slate-100 px-2 py-1">Korfgericht {recentKorfgerichtPct == null ? "–" : `${recentKorfgerichtPct.toFixed(0)}%`}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-1">Rebound {recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-1">Balverlies {recentHomeTurnovers}</span>
+                      </div>
+                      <div className="grid gap-2">
+                        {visibleLiveCoachSignals.map((signal, i) => (
+                          <div key={`${signal.text}-${i}`} className={`flex gap-2 rounded-lg border px-2.5 py-2 text-xs font-medium ${signal.tone === "goed" ? "border-green-200 bg-green-50 text-green-800" : signal.tone === "letop" && signal.priority === 1 ? "border-red-200 bg-red-50 text-red-900" : signal.tone === "letop" ? "border-orange-200 bg-orange-50 text-orange-900" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
+                            <SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"} />
+                            <span>{signal.text}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-400">Gebaseerd op de laatste aanvallen; bedoeld als snelle aanwijzing.</div>
+                    </div>
+                  </details>
+
+                  <details className="group rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm marker:hidden">
+                      <span className="shrink-0 font-extrabold">Laatste acties</span>
+                      {latestActions[0] ? (
+                        <span className="min-w-0 flex-1 truncate text-slate-600">{formatTime(latestActions[0].tijdSeconden)} · {latestActions[0].actie || latestActions[0].soort || "Actie"} · {latestActions[0].spelerId ? spelersMap.get(latestActions[0].spelerId)?.naam || "Onbekende speler" : latestActions[0].team === "uit" ? opponentName || "Tegenstander" : "Teamactie"}</span>
+                      ) : (
+                        <span className="min-w-0 flex-1 truncate text-slate-400">Nog geen acties geregistreerd</span>
+                      )}
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-500">{latestActions.length}/5</span>
+                      <span className="text-slate-400 transition group-open:rotate-180">⌄</span>
+                    </summary>
+                    <div className="border-t border-slate-100 p-2">
+                      {latestActions.length > 0 ? (
+                        <div className="grid gap-1 sm:grid-cols-2">
+                          {latestActions.map((e) => {
+                            const score = scoreAtEvent.get(e.id);
+                            const playerName = e.spelerId ? spelersMap.get(e.spelerId)?.naam : undefined;
+                            return (
+                              <div key={e.id} className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-50 px-2.5 py-2 text-xs">
+                                <span className="shrink-0 font-semibold tabular-nums text-slate-400">{formatTime(e.tijdSeconden)}</span>
+                                <span className="min-w-0 flex-1 truncate font-semibold">{e.actie || e.soort || "Actie"} · {playerName || (e.team === "uit" ? opponentName || "Tegenstander" : "Teamactie")}</span>
+                                <span className="shrink-0 rounded-md bg-slate-900 px-2 py-0.5 font-extrabold text-white tabular-nums">{score ? `${score.thuis}-${score.uit}` : `${state.scoreThuis}-${state.scoreUit}`}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="px-2 py-3 text-xs text-slate-400">De laatste acties verschijnen hier zodra je begint met registreren.</div>
+                      )}
+                    </div>
+                  </details>
+                </div>
+              )}
 
             </div>
           </div>
@@ -10461,7 +10443,7 @@ function SpelerCircleRow({
                   detailsRef.current?.removeAttribute("open");
                 }}
               >
-                {b.naam}
+                {b.naam}{b.status === "Gast" ? " (Gast)" : ""}
               </button>
             ))}
           </div>
@@ -10514,21 +10496,21 @@ function VakActionModal({
 
   return (
     <div
-      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+      className="fixed inset-0 bg-black/60 flex items-center justify-center overflow-y-auto overscroll-contain p-2 sm:p-4 z-50"
       role="dialog"
       aria-modal="true"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-white w-full max-w-3xl md:rounded-2xl md:m-6 p-4 md:p-6 space-y-6 max-h-[90vh] overflow-auto">
+      <div className="my-auto bg-white w-full max-w-3xl rounded-2xl p-3 sm:p-4 md:p-5 space-y-3 md:space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-2xl">
         {/* Duidelijke vakstatus + stappenindicator */}
-        <div className={`rounded-xl border-2 p-4 ${vak === "aanvallend" ? "border-green-500 bg-green-50" : "border-red-500 bg-red-50"}`}>
+        <div className={`rounded-xl border-2 p-3 ${vak === "aanvallend" ? "border-green-500 bg-green-50" : "border-red-500 bg-red-50"}`}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className={`text-sm font-extrabold uppercase tracking-[0.18em] ${vak === "aanvallend" ? "text-green-700" : "text-red-700"}`}>
                 {vak === "aanvallend" ? "Aanval" : "Verdediging"}
               </div>
-              <div className="text-3xl font-extrabold text-gray-900 mt-1">{vakLabel}</div>
-              <div className="text-sm font-semibold text-gray-600 mt-1">Actie registreren in het {titelVak.toLowerCase()}</div>
+              <div className="text-2xl font-extrabold text-gray-900 mt-0.5">{vakLabel}</div>
+              <div className="text-xs font-semibold text-gray-600 mt-0.5">Actie registreren in het {titelVak.toLowerCase()}</div>
             </div>
             <button
               className="text-sm text-gray-500 hover:text-gray-800"
@@ -10537,7 +10519,7 @@ function VakActionModal({
               ✕
             </button>
           </div>
-          <div className="text-sm text-gray-600 mt-3">
+          <div className="text-xs text-gray-600 mt-2">
             Stap {step} van 3 –{" "}
             {step === 1
               ? "Kies een actie"
@@ -10549,16 +10531,16 @@ function VakActionModal({
 
         {/* Stap 1: Actie */}
         {step === 1 && (
-          <div className="space-y-6 w-full">
-            <div className="text-2xl font-bold text-center">Kies een actie</div>
+          <div className="space-y-3 w-full">
+            <div className="text-xl font-bold text-center">Kies een actie</div>
 
-            <div className="flex flex-col gap-4 w-full h-[70vh]">
-              <div className="grid grid-cols-2 grid-rows-2 gap-4 flex-1">
+            <div className="flex flex-col gap-3 w-full h-[min(55dvh,500px)] min-h-[280px]">
+              <div className="grid grid-cols-2 grid-rows-2 gap-3 flex-1">
                 {(["Schot", "Doorloop", "Vrijebal", "Strafworp"] as const).map(
                   (a) => {
                     const selected = actie === a;
                     const base =
-                      "w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 active:scale-95 transition";
+                      "w-full h-full text-2xl md:text-4xl font-extrabold rounded-2xl border-4 active:scale-95 transition";
 
                     const colorClasses =
                       vak === "aanvallend"
@@ -10588,8 +10570,8 @@ function VakActionModal({
 
               <button
                 className={`
-                  w-full h-24
-                  text-3xl md:text-4xl
+                  w-full h-16 md:h-20
+                  text-2xl md:text-3xl
                   font-extrabold
                   rounded-2xl
                   border-4
@@ -10615,17 +10597,17 @@ function VakActionModal({
 
         {/* Stap 2: Speler */}
         {step === 2 && (
-          <div className="w-full flex flex-col gap-4 h-[70vh]">
-            <div className="text-2xl font-bold text-center">Kies speler</div>
+          <div className="w-full flex flex-col gap-3 h-[min(55dvh,500px)] min-h-[280px]">
+            <div className="text-xl font-bold text-center">Kies speler</div>
 
             <div className="flex flex-col gap-4 flex-1 min-h-0">
-              <div className="grid grid-cols-2 grid-rows-2 gap-4 flex-1 min-h-0">
+              <div className="grid grid-cols-2 grid-rows-2 gap-3 flex-1 min-h-0">
                 {spelers.slice(0, 4).map((p) => (
                   <button
                     key={p.id}
                     className="
                       w-full h-full
-                      text-3xl md:text-5xl
+                      text-2xl md:text-4xl
                       font-extrabold
                       rounded-2xl
                       border-4
@@ -10653,8 +10635,8 @@ function VakActionModal({
 
               <button
                 className="
-                  w-full h-20 shrink-0
-                  text-2xl
+                  w-full h-14 md:h-16 shrink-0
+                  text-xl md:text-2xl
                   font-bold
                   rounded-2xl
                   border-2
@@ -10680,33 +10662,33 @@ function VakActionModal({
 
         {/* Stap 3: Uitkomst */}
         {step === 3 && (
-          <div className="space-y-6 w-full">
-            <div className="text-2xl font-bold text-center">Uitkomst</div>
+          <div className="space-y-3 w-full">
+            <div className="text-xl font-bold text-center">Uitkomst</div>
 
-            <div className="grid grid-cols-2 grid-rows-2 gap-4 w-full h-[70vh]">
+            <div className="grid grid-cols-2 grid-rows-2 gap-3 w-full h-[min(55dvh,500px)] min-h-[280px]">
               <button
-                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-green-500 text-white border-green-600 active:scale-95 transition"
+                className="w-full h-full text-2xl md:text-4xl font-extrabold rounded-2xl border-4 bg-green-500 text-white border-green-600 active:scale-95 transition"
                 onClick={() => handleFinish("Raak")}
               >
                 Raak
               </button>
 
               <button
-                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-red-500 text-white border-red-600 active:scale-95 transition"
+                className="w-full h-full text-2xl md:text-4xl font-extrabold rounded-2xl border-4 bg-red-500 text-white border-red-600 active:scale-95 transition"
                 onClick={() => handleFinish("Mis")}
               >
                 Mis
               </button>
 
               <button
-                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-orange-400 text-white border-orange-500 active:scale-95 transition"
+                className="w-full h-full text-2xl md:text-4xl font-extrabold rounded-2xl border-4 bg-orange-400 text-white border-orange-500 active:scale-95 transition"
                 onClick={() => handleFinish("Korf")}
               >
                 Korf
               </button>
 
               <button
-                className="w-full h-full text-3xl md:text-5xl font-extrabold rounded-2xl border-4 bg-slate-500 text-white border-slate-600 active:scale-95 transition"
+                className="w-full h-full text-2xl md:text-4xl font-extrabold rounded-2xl border-4 bg-slate-500 text-white border-slate-600 active:scale-95 transition"
                 onClick={() => handleFinish("Verdedigd")}
               >
                 Verdedigd
@@ -10759,8 +10741,8 @@ function PossessionModal({
       : ["Pass Onderschept", "Bal uit", "Vrije bal tegen", "Strafworp tegen"];
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-xl">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center overflow-y-auto overscroll-contain p-2 sm:p-4 z-50">
+      <div className="my-auto bg-white rounded-2xl p-4 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl">
       <div className="text-2xl font-semibold mb-4">
         Nieuw balbezit –{" "}
         {getTeamDisplayName(team, opponentName)}
@@ -10832,8 +10814,8 @@ function StealModal({
   onSave: (spelerId?: string) => void;
 }) {
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-3xl shadow-xl space-y-6">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center overflow-y-auto overscroll-contain p-2 sm:p-4 z-50">
+      <div className="my-auto bg-white rounded-2xl p-4 sm:p-6 w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl space-y-4 sm:space-y-6">
         {/* Titel */}
         <div className="flex items-start justify-between gap-2">
           <div>
@@ -10923,8 +10905,8 @@ function ReboundModal({
   onSave: (spelerId?: string) => void;
 }) {
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-3xl shadow-xl space-y-6">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center overflow-y-auto overscroll-contain p-2 sm:p-4 z-50">
+      <div className="my-auto bg-white rounded-2xl p-4 sm:p-6 w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl space-y-4 sm:space-y-6">
 
         <div className="flex items-start justify-between">
           <div>
@@ -10944,7 +10926,7 @@ function ReboundModal({
           </button>
         </div>
 
-        <div className="flex flex-col gap-4 h-[70vh]">
+        <div className="flex flex-col gap-3 h-[min(58dvh,520px)] min-h-[280px]">
 
           {/* Vier spelers */}
           <div className="grid grid-cols-2 grid-rows-2 gap-4 flex-1">
@@ -10953,7 +10935,7 @@ function ReboundModal({
                 key={p.id}
                 className="
                   w-full h-full
-                  text-3xl md:text-5xl
+                  text-2xl md:text-4xl
                   font-extrabold
                   rounded-2xl
                   border-4
@@ -10972,8 +10954,8 @@ function ReboundModal({
           {/* Geen rebound */}
           <button
             className="
-              w-full h-24
-              text-3xl md:text-4xl
+              w-full h-16 md:h-20
+              text-2xl md:text-3xl
               font-extrabold
               rounded-2xl
               border-4
@@ -11004,8 +10986,8 @@ function ShotReboundModal({
   const [speler, setSpeler] = useState<string | undefined>(undefined);
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-xl">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center overflow-y-auto overscroll-contain p-2 sm:p-4 z-50">
+      <div className="my-auto bg-white rounded-2xl p-4 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl">
         <div className="text-2xl font-semibold mb-4">
           {type} – aanvallend vak
         </div>
