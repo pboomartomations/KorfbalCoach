@@ -3705,9 +3705,23 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
     portaal: "Spelersportaal",
   };
 
+  const requestMatchFullscreen = () => {
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+      void document.documentElement.requestFullscreen().catch(() => {
+        // De vaste fullscreenknop blijft beschikbaar als de browser dit moment blokkeert.
+      });
+    }
+  };
+
+  const openCurrentMatch = () => {
+    requestMatchFullscreen();
+    setTab("wedstrijd");
+    setMobileMenuOpen(false);
+  };
+
   const SideNavButton = ({ id, label, icon }: { id: typeof tab; label: string; icon: "match" | "insights" | "season" | "players" | "settings" }) => (
     <button
-      onClick={() => { setTab(id); setMobileMenuOpen(false); }}
+      onClick={() => { if (id === "wedstrijd") requestMatchFullscreen(); setTab(id); setMobileMenuOpen(false); }}
       className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${
         tab === id
           ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-100"
@@ -4069,7 +4083,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
                 : s.season,
             }))
           }
-          onOpenMatch={() => setTab("wedstrijd")}
+          onOpenMatch={openCurrentMatch}
         />
       )}
 
@@ -4100,7 +4114,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
             saveStatus={matchSaveStatus}
             saveMessage={matchSaveMessage}
             onRetrySave={retrySupabaseMatchSave}
-            onBackToMatch={() => setTab("wedstrijd")}
+            onBackToMatch={openCurrentMatch}
           />
           {state.matchEnded && matchSaveStatus === "saved" && <LatestMatchSharePanel match={latestShareableDatabaseMatch} />}
         </div>
@@ -4112,7 +4126,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           dbSheets={activeTeamDbSheets}
           onSelectOpponent={(opponentName) => setState((current) => ({ ...current, opponentName }))}
           onOpenSettings={() => setTab("vakken")}
-          onOpenMatch={() => setTab("wedstrijd")}
+          onOpenMatch={openCurrentMatch}
         />
       )}
 
@@ -4120,7 +4134,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
         <CoachDashboard
           state={state}
           dbSheets={analysisDbSheets}
-          onNavigate={setTab}
+          onNavigate={(nextTab) => nextTab === "wedstrijd" ? openCurrentMatch() : setTab(nextTab)}
         />
       )}
 
@@ -6208,7 +6222,7 @@ const attackUitPct =
         {/* Compacte wedstrijdstatus: datum en competitie maken plaats voor live coaching. */}
         <div className="sticky top-[50px] z-20 overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm lg:static">
           <div className="flex min-w-0 items-stretch divide-x divide-slate-100">
-            <div className="flex min-w-0 flex-[0.8] items-center gap-2 px-2.5 py-2 sm:px-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 lg:max-w-[230px] lg:flex-[0_1_230px]">
               <MatchInfoGlyph type="shirt" />
               <div className="min-w-0"><div className="truncate text-xs font-extrabold text-slate-800 sm:text-sm">{fixtureLabel}</div><div className="text-[9px] font-semibold text-slate-400 sm:text-[10px]">{state.currentHalf}e helft</div></div>
             </div>
@@ -6223,6 +6237,18 @@ const attackUitPct =
                 </details>
               </div>
             )}
+            <button
+              type="button"
+              onClick={() => void toggleFullscreen()}
+              className="m-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-700 shadow-sm transition hover:bg-blue-50"
+              title={isFullscreen ? "Volledig scherm verlaten" : "Volledig scherm openen"}
+              aria-label={isFullscreen ? "Volledig scherm verlaten" : "Volledig scherm openen"}
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" />
+                <path d="M3 3l6 6M21 3l-6 6M3 21l6-6M21 21l-6-6" />
+              </svg>
+            </button>
           </div>
 
           {wedstrijdGestart && !wedstrijdAfgelopen && (
@@ -6250,8 +6276,6 @@ const attackUitPct =
             <details ref={matchActionsRef} className="group relative">
               <summary className={`flex h-full min-w-[52px] cursor-pointer list-none items-center justify-center rounded-r-xl border px-4 text-xl font-black marker:hidden ${state.klokLoopt ? "border-amber-200 bg-amber-100 text-amber-900 hover:bg-amber-200" : "border-blue-200 bg-blue-100 text-blue-800 hover:bg-blue-200"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
               <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
-                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); void toggleFullscreen(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-blue-700 hover:bg-blue-50">{isFullscreen ? "Volledig scherm verlaten" : "Volledig scherm openen"}</button>
-                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); openScoreEditor(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-700 hover:bg-slate-50 lg:hidden">Stand aanpassen</button>
                 <button
                   type="button"
                   disabled={state.currentHalf === 2}
