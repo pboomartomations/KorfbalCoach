@@ -3652,7 +3652,6 @@ const clearWedstrijd = (
 const spelersAanval = state.aanval.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
 const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id) : undefined)).filter((x): x is Player => Boolean(x));
 const databaseMatches = dbSheets?.matches ?? [];
-const latestDatabaseMatch = (activeTeamDbSheets?.matches ?? []).slice().sort((a:any,b:any)=>{ const av = typeof a.datum === "number" ? a.datum : Date.parse(String(a.datum ?? "")); const bv = typeof b.datum === "number" ? b.datum : Date.parse(String(b.datum ?? "")); return av - bv; }).at(-1);
 const latestShareableDatabaseMatch = (activeTeamDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.supabase_match_id)&&!Boolean(m.gearchiveerd)&&String(m.wedstrijd_afgesloten??"").toLowerCase()==="ja").slice().sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??"")))[0] ?? null;
 const archivedHistoryCount = (activeTeamHistoryDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.gearchiveerd)).length;
 const activeSupabaseHistoryCount = (activeTeamDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.supabase_match_id)).length;
@@ -3861,28 +3860,13 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
         </aside>
 
         <div className="min-w-0 flex-1">
-          <header className="sticky top-0 z-30 border-b border-slate-200/90 bg-white/95 backdrop-blur">
-            <div className="flex min-h-[70px] items-center justify-between gap-4 px-4 md:px-6 xl:px-8">
-              <div className="flex min-w-0 items-center gap-4">
-                <div className="lg:hidden"><KorbIQLogo compact /></div>
-                <div className="hidden h-8 w-px bg-slate-200 lg:block" />
-                <div className="min-w-0">
-                  <div className="truncate text-lg font-bold text-slate-900">{sectionTitle[tab]}</div>
-                  <div className="mt-0.5 hidden truncate text-xs text-slate-500 md:block">
-                    {state.matchTeamSeasonId && currentMatchHasDataForTeamLock ? `${state.matchTeamName || activeTeamContext?.teamName || "Korbis"} · ${state.matchSeasonName || activeTeamContext?.seasonName || ""}${state.opponentName ? ` · ${state.opponentName}` : ""}` : activeTeamContext ? `${activeTeamContext.teamName}${state.opponentName ? ` · ${state.opponentName}` : ""}` : (state.opponentName ? `Korbis · ${state.opponentName}` : "KorbIQ · wedstrijddata en coaching")}
-                  </div>
-                </div>
-              </div>
-              <div className="hidden items-center gap-3 text-xs md:flex">
-                {latestDatabaseMatch && <span className="text-slate-500">Laatste: {formatImportedDate(latestDatabaseMatch.datum)}{latestDatabaseMatch.tegenstander ? ` · ${latestDatabaseMatch.tegenstander}` : ""}</span>}
-                <span title={supabaseHistoryMessage} className={`rounded-full px-3 py-1.5 font-semibold ${historySourceReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                  {historySourceLabel}
-                </span>
-              </div>
+          <header className="sticky top-0 z-30 border-b border-slate-200/90 bg-white/95 backdrop-blur lg:hidden">
+            <div className="flex min-h-[50px] items-center justify-between gap-3 px-3 sm:px-4">
+              <KorbIQLogo compact />
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen((open) => !open)}
-                className="lg:hidden flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm"
                 aria-label={mobileMenuOpen ? "Menu sluiten" : "Menu openen"}
                 aria-expanded={mobileMenuOpen}
               >
@@ -3891,9 +3875,10 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
             </div>
 
             {mobileMenuOpen && (
-              <div className="lg:hidden max-h-[calc(100vh-70px)] overflow-y-auto overscroll-contain border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
+              <div className="lg:hidden max-h-[calc(100dvh-50px)] overflow-y-auto overscroll-contain border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
                 <div className="mx-auto max-w-xl space-y-4">
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-3 border-b border-slate-200 pb-2"><div className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">Huidige pagina</div><div className="text-sm font-black text-slate-800">{sectionTitle[tab]}</div></div>
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0"><div className="text-[10px] font-extrabold uppercase tracking-wide text-blue-700">{roleLabel(primaryRole)}</div><div className="truncate text-xs font-semibold text-slate-600">{authProfile.email ?? authUser.email}</div></div>
                       <button onClick={()=>void supabase.auth.signOut()} className="shrink-0 rounded-lg border bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Uitloggen</button>
@@ -3952,7 +3937,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
             )}
           </header>
 
-          <main className="korbiq-main mx-auto w-full max-w-[1500px] px-4 py-5 md:px-6 md:py-7 xl:px-8">
+          <main className={`korbiq-main mx-auto w-full max-w-[1500px] ${tab === "wedstrijd" ? "px-2 py-2 sm:px-4 sm:py-3 xl:px-6 xl:py-4" : "px-4 py-5 md:px-6 md:py-7 xl:px-8"}`}>
       {(teamRosterLoading || teamRosterError) && <div className={`mb-4 rounded-xl border px-3 py-2 text-xs font-semibold ${teamRosterError?"border-red-200 bg-red-50 text-red-700":"border-blue-100 bg-blue-50 text-blue-700"}`}>{teamRosterError?`Teamselectie kon niet uit Supabase worden geladen: ${teamRosterError}`:"Teamselectie uit Supabase laden…"}</div>}
       {supabaseHistoryStatus === "error" && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"><span>{supabaseHistoryMessage} De lokaal bewaarde historie blijft beschikbaar.</span><button type="button" onClick={()=>setHistoryRefreshVersion(version=>version+1)} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold">Opnieuw proberen</button></div>}
       {analysisTabs.includes(tab) && (
@@ -5742,6 +5727,7 @@ function WedstrijdTab({
   const [scoreEditorOpen, setScoreEditorOpen] = useState(false);
   const [draftScoreThuis, setDraftScoreThuis] = useState(state.scoreThuis);
   const [draftScoreUit, setDraftScoreUit] = useState(state.scoreUit);
+  const matchActionsRef = useRef<HTMLDetailsElement>(null);
 
   const openScoreEditor = () => {
     setDraftScoreThuis(state.scoreThuis);
@@ -6236,50 +6222,50 @@ const attackUitPct =
               </div>
               <div className={`shrink-0 font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</div>
               <div className="shrink-0 text-slate-500">recent: {recentHomeGoals}-{recentAwayGoals} goals · {recentHomeAttempts.length}-{recentAwayAttempts.length} kansen</div>
+              <div className="min-w-[220px] max-w-[420px] flex-1 truncate rounded-lg bg-blue-50 px-2 py-1 font-semibold text-blue-800" title={visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}>Coach: {visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}</div>
             </div>
           )}
         </div>
 
         {!wedstrijdNietGestart && !wedstrijdAfgelopen && !eersteHelftAfgelopen && (
-          <button
-            type="button"
-            onClick={() => toggleKlok(!state.klokLoopt)}
-            className={`w-full rounded-xl border px-4 py-3 text-center font-extrabold tracking-wide transition ${
-              state.klokLoopt
-                ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
-                : "border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100"
-            }`}
-          >
-            {state.klokLoopt ? "Ⅱ  PAUZEER WEDSTRIJD" : "▶  HERVAT WEDSTRIJD"}
-            <span className="ml-3 font-semibold text-sm opacity-70">{formatTime(resterend)} resterend</span>
-          </button>
-        )}
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="grid grid-cols-2 gap-2 text-sm flex-1 min-w-[320px]">
-            <div className="rounded-xl border border-green-100 bg-green-50/70 px-3 py-2"><span className="font-semibold text-green-800">Korbis aanvalstijd</span><span className="float-right font-bold">{totalAttackSec > 0 ? attackThuisPct.toFixed(1) : "0.0"}% · {formatTime(attackThuisSec)}</span></div>
-            <div className="rounded-xl border border-red-100 bg-red-50/70 px-3 py-2"><span className="font-semibold text-red-800">Tegenstander aanvalstijd</span><span className="float-right font-bold">{totalAttackSec > 0 ? attackUitPct.toFixed(1) : "0.0"}% · {formatTime(attackUitSec)}</span></div>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <Button size="md" variant="secondary" className="lg:hidden" onClick={openScoreEditor}>Stand aanpassen</Button>
-            <Button
-              size="md"
-              variant="secondary"
-              disabled={state.currentHalf === 2}
-              onClick={() =>
-                setState((s) => {
-                  const halfMinuten = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten;
-                  const halfTotal = halfMinuten * 60;
-                  return { ...s, currentHalf: 2, tijdSeconden: Math.max(s.tijdSeconden, halfTotal), klokLoopt: false, aanvalLinks: !s.aanvalLinks, markerGroup: s.markerGroup + 1 };
-                })
-              }
+          <div className="relative flex w-full" data-no-pause>
+            <button
+              type="button"
+              onClick={() => toggleKlok(!state.klokLoopt)}
+              className={`min-w-0 flex-1 rounded-l-xl border border-r-0 px-4 py-2.5 text-center font-extrabold tracking-wide transition ${
+                state.klokLoopt
+                  ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                  : "border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100"
+              }`}
             >
-              2e helft
-            </Button>
-            <Button size="md" variant="danger" onClick={onEndMatch}>Einde wedstrijd</Button>
-            <Button size="md" variant="secondary" onClick={onCancelMatch}>Wedstrijd annuleren</Button>
+              {state.klokLoopt ? "Ⅱ  PAUZEER WEDSTRIJD" : "▶  HERVAT WEDSTRIJD"}
+              <span className="ml-2 hidden font-semibold text-sm opacity-70 sm:inline">{formatTime(resterend)} resterend</span>
+            </button>
+            <details ref={matchActionsRef} className="group relative">
+              <summary className={`flex h-full min-w-[52px] cursor-pointer list-none items-center justify-center rounded-r-xl border px-4 text-xl font-black marker:hidden ${state.klokLoopt ? "border-amber-200 bg-amber-100 text-amber-900 hover:bg-amber-200" : "border-blue-200 bg-blue-100 text-blue-800 hover:bg-blue-200"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
+              <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
+                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); openScoreEditor(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-700 hover:bg-slate-50 lg:hidden">Stand aanpassen</button>
+                <button
+                  type="button"
+                  disabled={state.currentHalf === 2}
+                  onClick={() => {
+                    matchActionsRef.current?.removeAttribute("open");
+                    setState((s) => {
+                      const halfMinuten = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten;
+                      const halfTotal = halfMinuten * 60;
+                      return { ...s, currentHalf: 2, tijdSeconden: Math.max(s.tijdSeconden, halfTotal), klokLoopt: false, aanvalLinks: !s.aanvalLinks, markerGroup: s.markerGroup + 1 };
+                    });
+                  }}
+                  className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                >
+                  Naar 2e helft
+                </button>
+                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); onEndMatch(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-red-700 hover:bg-red-50">Einde wedstrijd</button>
+                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); onCancelMatch(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-600 hover:bg-slate-50">Wedstrijd annuleren</button>
+              </div>
+            </details>
           </div>
-        </div>
+        )}
       </div>
 
       {scoreEditorOpen && (
@@ -6353,6 +6339,7 @@ const attackUitPct =
                     <FieldImageCard
                       title={`${state.vak1Aanvallend ? "Vak 1" : "Vak 2"} (aanvallend)`}
                       imgSrc="/VeldLinks.jpg"
+                      timeSummary={`Aanvalstijd ${totalAttackSec > 0 ? attackThuisPct.toFixed(1) : "0.0"}% · ${formatTime(attackThuisSec)}`}
                       active={state.activeVak === "aanvallend"}
                       onClick={() => handleVakClick("aanvallend")}
                       markers={aanvalMarkers}
@@ -6368,6 +6355,7 @@ const attackUitPct =
                     <FieldImageCard
                       title={`${state.vak1Aanvallend ? "Vak 2" : "Vak 1"} (verdedigend)`}
                       imgSrc="/VeldRechts.jpg"
+                      timeSummary={`Aanvalstijd ${totalAttackSec > 0 ? attackUitPct.toFixed(1) : "0.0"}% · ${formatTime(attackUitSec)}`}
                       active={state.activeVak === "verdedigend"}
                       onClick={() => handleVakClick("verdedigend")}
                       markers={verdedigMarkers}
@@ -6386,6 +6374,7 @@ const attackUitPct =
                     <FieldImageCard
                       title={`${state.vak1Aanvallend ? "Vak 2" : "Vak 1"} (verdedigend)`}
                       imgSrc="/VeldLinks.jpg"
+                      timeSummary={`Aanvalstijd ${totalAttackSec > 0 ? attackUitPct.toFixed(1) : "0.0"}% · ${formatTime(attackUitSec)}`}
                       active={state.activeVak === "verdedigend"}
                       onClick={() => handleVakClick("verdedigend")}
                       markers={verdedigMarkers}
@@ -6402,6 +6391,7 @@ const attackUitPct =
                     <FieldImageCard
                       title={`${state.vak1Aanvallend ? "Vak 1" : "Vak 2"} (aanvallend)`}
                       imgSrc="/VeldRechts.jpg"
+                      timeSummary={`Aanvalstijd ${totalAttackSec > 0 ? attackThuisPct.toFixed(1) : "0.0"}% · ${formatTime(attackThuisSec)}`}
                       active={state.activeVak === "aanvallend"}
                       onClick={() => handleVakClick("aanvallend")}
                       markers={aanvalMarkers}
@@ -11101,6 +11091,7 @@ function ShotReboundModal({
 type FieldImageCardProps = {
   title: string;
   imgSrc: string;
+  timeSummary?: string;
   active: boolean;
   onClick: () => void;
   onFieldClick?: (xPct: number, yPct: number) => void;
@@ -11111,6 +11102,7 @@ type FieldImageCardProps = {
 function FieldImageCard({
   title,
   imgSrc,
+  timeSummary,
   active,
   onClick,
   onFieldClick,
@@ -11172,9 +11164,9 @@ function FieldImageCard({
         </button>
       </div>
 
-      <div className={`mt-3 w-full border-t px-4 py-2.5 text-center text-sm font-extrabold ${active ? (isAttack ? "border-green-200 bg-green-100 text-green-800" : "border-red-200 bg-red-100 text-red-800") : "border-slate-200 bg-white/70 text-slate-500"}`}>
-        <span className={`mr-2 inline-block h-2 w-2 rounded-full ${active ? (isAttack ? "bg-green-600" : "bg-red-600") : "bg-slate-300"}`} />
-        {active ? "Actief vak" : "Niet actief"}
+      <div className={`mt-3 flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t px-3 py-2 text-xs font-extrabold sm:px-4 sm:text-sm ${active ? (isAttack ? "border-green-200 bg-green-100 text-green-800" : "border-red-200 bg-red-100 text-red-800") : "border-slate-200 bg-white/70 text-slate-500"}`}>
+        <span className="whitespace-nowrap"><span className={`mr-2 inline-block h-2 w-2 rounded-full ${active ? (isAttack ? "bg-green-600" : "bg-red-600") : "bg-slate-300"}`} />{active ? "Actief vak" : "Niet actief"}</span>
+        {timeSummary && <span className="ml-auto whitespace-nowrap tabular-nums opacity-80">{timeSummary}</span>}
       </div>
     </div>
   );
