@@ -2198,6 +2198,9 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
   const [databaseReady, setDatabaseReady] = useState(false);
   const [databaseSetupOpen, setDatabaseSetupOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(
+    () => localStorage.getItem("korbiq-desktop-sidebar-collapsed") === "true"
+  );
   const [navSectionsOpen, setNavSectionsOpen] = useState({
     wedstrijd: false,
     analyse: true,
@@ -3780,17 +3783,6 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
 
   if (!hasStaffRole) return <div className="min-h-screen bg-[#f6f8fc] p-6"><div className="mx-auto mt-16 max-w-xl rounded-3xl border border-amber-200 bg-white p-6 shadow-sm"><KorbIQLogo /><h2 className="mt-6 text-xl font-black">Nog geen actieve KorbIQ-rol</h2><p className="mt-2 text-sm text-slate-600">Dit account is ingelogd, maar heeft nog geen actieve Admin-, TC- of Coachrol in de nieuwe rechtenstructuur.</p><button onClick={()=>void supabase.auth.signOut()} className="mt-5 rounded-xl border px-4 py-2 text-sm font-bold">Uitloggen</button></div></div>;
 
-  const compactHalfTotal = (Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
-  const compactHalfStart = state.currentHalf === 1 ? 0 : compactHalfTotal;
-  const compactElapsed = Math.max(0, Math.min(compactHalfTotal, state.tijdSeconden - compactHalfStart));
-  const compactRemaining = Math.max(0, compactHalfTotal - compactElapsed);
-  const compactOwnTeam = state.matchTeamName || activeTeamContext?.teamName || "Korbis";
-  const compactFixture = state.homeAway === "uit"
-    ? `${state.opponentName || "Tegenstander"} – ${compactOwnTeam}`
-    : `${compactOwnTeam} – ${state.opponentName || "Tegenstander"}`;
-  const compactMatchDateSource = state.matchDate ? new Date(`${state.matchDate}T12:00:00`) : new Date();
-  const compactMatchDate = (Number.isNaN(compactMatchDateSource.getTime()) ? new Date() : compactMatchDateSource).toLocaleDateString("nl-NL", { day: "2-digit", month: "2-digit", year: "2-digit" });
-
   return (
     <div className="korbiq-app min-h-screen bg-[#f6f8fc] text-slate-900">
       <style>{`
@@ -3805,8 +3797,24 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
       `}</style>
 
       <div className="flex min-h-screen w-full items-start">
-        <aside className="korbiq-desktop-sidebar sticky top-0 h-screen w-[250px] shrink-0 overflow-y-auto overscroll-contain border-r border-slate-200/90 bg-white px-4 py-5 shadow-[2px_0_16px_rgba(15,23,42,0.025)]">
-          <div className="px-2 pb-4"><KorbIQLogo /></div>
+        <aside className={`korbiq-desktop-sidebar sticky top-0 h-screen shrink-0 overflow-y-auto overscroll-contain border-r border-slate-200/90 bg-white py-4 shadow-[2px_0_16px_rgba(15,23,42,0.025)] transition-[width,padding] duration-200 ${desktopSidebarCollapsed ? "w-[72px] px-2" : "w-[250px] px-4"}`}>
+          <div className={`flex gap-2 pb-4 ${desktopSidebarCollapsed ? "flex-col items-center" : "items-center justify-between px-2"}`}>
+            <KorbIQLogo compact={desktopSidebarCollapsed} />
+            <button
+              type="button"
+              onClick={() => setDesktopSidebarCollapsed((collapsed) => {
+                const next = !collapsed;
+                localStorage.setItem("korbiq-desktop-sidebar-collapsed", String(next));
+                return next;
+              })}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-lg font-black text-slate-500 shadow-sm hover:bg-blue-50 hover:text-blue-700"
+              title={desktopSidebarCollapsed ? "Menu uitklappen" : "Menu inklappen"}
+              aria-label={desktopSidebarCollapsed ? "Menu uitklappen" : "Menu inklappen"}
+            >
+              {desktopSidebarCollapsed ? "›" : "‹"}
+            </button>
+          </div>
+          {!desktopSidebarCollapsed && <>
           <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
             <div className="flex items-center justify-between gap-2"><div className="text-[10px] font-extrabold uppercase tracking-wide text-blue-700">{roleLabel(primaryRole)}</div><span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-200">Korbis</span></div>
             <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{authProfile.email ?? authUser.email}</div>
@@ -3857,6 +3865,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
               {historySourceLabel}
             </div>
           </div>
+          </>}
         </aside>
 
         <div className="min-w-0 flex-1">
@@ -3925,16 +3934,6 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
               </div>
             )}
 
-            {tab === "wedstrijd" && !mobileMenuOpen && (
-              <div className="border-t border-slate-100 bg-white px-2 py-1.5 lg:hidden" data-no-pause>
-                <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(78px,.75fr)_minmax(76px,.7fr)_auto] items-center divide-x divide-slate-100 rounded-xl border border-slate-100 bg-slate-50/70 text-[10px] shadow-sm sm:grid-cols-[minmax(0,2fr)_minmax(110px,1fr)_minmax(100px,.8fr)_auto] sm:text-xs">
-                  <div className="min-w-0 px-2 py-1.5 sm:px-3"><div className="truncate font-extrabold text-slate-800">{compactFixture}</div><div className="truncate text-[9px] text-slate-400 sm:text-[10px]">{state.matchType} · {state.season}</div></div>
-                  <div className="px-2 py-1.5 text-center"><div className="text-[9px] uppercase tracking-wide text-slate-400">Datum</div><div className="font-bold tabular-nums">{compactMatchDate}</div></div>
-                  <div className="px-2 py-1.5 text-center"><div className="text-[9px] uppercase tracking-wide text-slate-400">Resterend</div><div className="font-extrabold tabular-nums text-blue-700">{formatTime(compactRemaining)}</div><div className="text-[9px] text-slate-400">{state.currentHalf}e helft</div></div>
-                  <div className="m-1.5 whitespace-nowrap rounded-lg bg-[#124a98] px-2.5 py-2 text-sm font-extrabold text-white tabular-nums sm:px-3 sm:text-base">{state.scoreThuis}-{state.scoreUit}</div>
-                </div>
-              </div>
-            )}
           </header>
 
           <main className={`korbiq-main mx-auto w-full max-w-[1500px] ${tab === "wedstrijd" ? "px-2 py-2 sm:px-4 sm:py-3 xl:px-6 xl:py-4" : "px-4 py-5 md:px-6 md:py-7 xl:px-8"}`}>
@@ -5728,6 +5727,22 @@ function WedstrijdTab({
   const [draftScoreThuis, setDraftScoreThuis] = useState(state.scoreThuis);
   const [draftScoreUit, setDraftScoreUit] = useState(state.scoreUit);
   const matchActionsRef = useRef<HTMLDetailsElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(() => Boolean(document.fullscreenElement));
+
+  useEffect(() => {
+    const syncFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      alert("Volledig scherm wordt door deze browser of tablet niet ondersteund. Probeer eventueel de app aan het beginscherm toe te voegen.");
+    }
+  };
 
   const openScoreEditor = () => {
     setDraftScoreThuis(state.scoreThuis);
@@ -5750,9 +5765,6 @@ function WedstrijdTab({
   }, [state.log]);
 
   const latestActions = state.log.filter((e) => e.soort !== "Wissel").slice(0, 5);
-  const matchDateSource = state.matchDate ? new Date(`${state.matchDate}T12:00:00`) : new Date();
-  const matchDateLabel = (Number.isNaN(matchDateSource.getTime()) ? new Date() : matchDateSource).toLocaleDateString("nl-NL", { day: "2-digit", month: "2-digit", year: "numeric" });
-
   // Fase 5: compacte live coachinformatie. We kijken bewust vooral naar
   // recente aanvallen, zodat een signaal tijdens de wedstrijd bruikbaar is.
   const liveAttemptEvents = state.log.filter((e) =>
@@ -6188,42 +6200,32 @@ const attackUitPct =
         )}
       {/* Wedstrijdheader in KorbIQ-stijl */}
       <div className="space-y-3" data-no-pause>
-        <div className="hidden rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden lg:block">
-          <div className="grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-slate-100">
-            <div className="flex items-center gap-3 p-4 min-w-0">
+        {/* Compacte wedstrijdstatus: datum en competitie maken plaats voor live coaching. */}
+        <div className="sticky top-[50px] z-20 overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm lg:static">
+          <div className="flex min-w-0 items-stretch divide-x divide-slate-100">
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 sm:px-3">
               <MatchInfoGlyph type="shirt" />
-              <div className="min-w-0"><div className="text-xs text-slate-500">Wedstrijd</div><div className="font-bold truncate">{fixtureLabel}</div></div>
+              <div className="min-w-0"><div className="truncate text-xs font-extrabold text-slate-800 sm:text-sm">{fixtureLabel}</div><div className="text-[9px] font-semibold text-slate-400 sm:text-[10px]">{state.currentHalf}e helft</div></div>
             </div>
-            <div className="flex items-center gap-3 p-4 min-w-0">
-              <MatchInfoGlyph type="trophy" />
-              <div className="min-w-0"><div className="text-xs text-slate-500">Competitie</div><div className="font-bold truncate">{state.matchType}</div><div className="text-[11px] text-slate-400 truncate">{state.season}</div></div>
-            </div>
-            <div className="flex items-center gap-3 p-4 min-w-0">
-              <MatchInfoGlyph type="calendar" />
-              <div><div className="text-xs text-slate-500">Datum</div><div className="font-bold">{matchDateLabel}</div></div>
-            </div>
-            <div className="flex items-center gap-3 p-4 min-w-0">
-              <MatchInfoGlyph type="clock" />
-              <div><div className="text-xs text-slate-500">Resterend</div><div className="font-bold tabular-nums">{formatTime(resterend)}</div><div className="text-[11px] text-slate-400">{state.currentHalf}e helft</div></div>
-            </div>
-            <button type="button" onClick={openScoreEditor} className="group flex items-center justify-between gap-3 p-4 text-left hover:bg-blue-50/60 transition" title="Klik om de stand aan te passen">
-              <div className="flex items-center gap-3"><MatchInfoGlyph type="score" /><div><div className="text-xs text-slate-500">Stand</div><div className="text-[11px] text-blue-600 group-hover:underline">Klik om aan te passen</div></div></div>
-              <div className="rounded-xl bg-[#124a98] px-4 py-2 text-xl font-extrabold text-white tabular-nums shadow-sm whitespace-nowrap">{state.scoreThuis} - {state.scoreUit}</div>
-            </button>
+            <div className="flex shrink-0 items-center gap-2 px-2.5 py-2 sm:px-3"><MatchInfoGlyph type="clock" /><div><div className="text-[9px] uppercase tracking-wide text-slate-400">Resterend</div><div className="text-sm font-extrabold tabular-nums text-blue-700 sm:text-base">{formatTime(resterend)}</div></div></div>
+            <button type="button" onClick={openScoreEditor} className="group shrink-0 px-2 py-1.5 hover:bg-blue-50 sm:px-3" title="Stand aanpassen"><div className="rounded-lg bg-[#124a98] px-2.5 py-2 text-base font-extrabold text-white tabular-nums shadow-sm sm:text-lg">{state.scoreThuis}-{state.scoreUit}</div></button>
+
+            {wedstrijdGestart && !wedstrijdAfgelopen && (
+              <div className="hidden min-w-0 flex-[1.7] items-center gap-3 px-3 py-2 lg:flex">
+                <div className="min-w-[120px] flex-1"><div className="flex items-center justify-between gap-2 text-[10px]"><span className="font-bold text-slate-500">Momentum</span><span className={`truncate font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</span></div><div className="relative mt-1 h-1.5 rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400"><div className="absolute top-1/2 h-3.5 w-1 -translate-y-1/2 rounded-full bg-slate-900" style={{ left: `calc(${momentumPct}% - 2px)` }} /></div></div>
+                <details className="group relative min-w-0 flex-[1.4]">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg bg-blue-50 px-2.5 py-2 text-xs marker:hidden"><SignalDot tone={visibleLiveCoachSignals[0]?.tone === "goed" ? "green" : visibleLiveCoachSignals[0]?.tone === "letop" && visibleLiveCoachSignals[0]?.priority === 1 ? "red" : visibleLiveCoachSignals[0]?.tone === "letop" ? "orange" : "blue"}/><span className="shrink-0 font-extrabold text-blue-900">Coach</span><span className="min-w-0 flex-1 truncate text-blue-800">{visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}</span><span className="text-blue-400">⌄</span></summary>
+                  <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-[min(440px,70vw)] rounded-xl border border-slate-200 bg-white p-3 shadow-2xl"><div className="space-y-1.5">{visibleLiveCoachSignals.map((signal, i) => <div key={`${signal.text}-${i}`} className="flex gap-2 rounded-lg bg-slate-50 px-2.5 py-2 text-xs font-medium"><SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"}/><span>{signal.text}</span></div>)}</div><div className="mt-2 text-[10px] text-slate-400">Laatste {finishedHomeAttacks.length}/5 aanvallen · {recentHomeGoals} goals · {recentHomeAttempts.length} kansen · rebound {recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</div></div>
+                </details>
+              </div>
+            )}
           </div>
+
           {wedstrijdGestart && !wedstrijdAfgelopen && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-slate-100 px-3 py-2 text-xs">
-              <div className="flex shrink-0 items-center gap-2 font-bold text-slate-700">
-                <SignalDot tone={momentumTone}/>
-                <span>Momentum</span>
-              </div>
-              <div className="relative h-2 min-w-[140px] flex-1 overflow-visible rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400" title="Recente wedstrijdstroom">
-                <div className="absolute top-1/2 h-4 w-1 -translate-y-1/2 rounded-full bg-slate-900 shadow" style={{ left: `calc(${momentumPct}% - 2px)` }} />
-              </div>
-              <div className={`shrink-0 font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</div>
-              <div className="shrink-0 text-slate-500">recent: {recentHomeGoals}-{recentAwayGoals} goals · {recentHomeAttempts.length}-{recentAwayAttempts.length} kansen</div>
-              <div className="min-w-[220px] max-w-[420px] flex-1 truncate rounded-lg bg-blue-50 px-2 py-1 font-semibold text-blue-800" title={visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}>Coach: {visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}</div>
-            </div>
+            <details className="group border-t border-slate-100 lg:hidden">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11px] marker:hidden"><SignalDot tone={visibleLiveCoachSignals[0]?.tone === "goed" ? "green" : visibleLiveCoachSignals[0]?.tone === "letop" && visibleLiveCoachSignals[0]?.priority === 1 ? "red" : visibleLiveCoachSignals[0]?.tone === "letop" ? "orange" : "blue"}/><span className="shrink-0 font-extrabold text-blue-900">Coach</span><span className="min-w-0 flex-1 truncate text-blue-800">{visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}</span><span className="text-blue-400 transition group-open:rotate-180">⌄</span></summary>
+              <div className="border-t border-slate-100 p-2"><div className="mb-2 flex items-center gap-2"><span className={`shrink-0 text-[10px] font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</span><div className="relative h-1.5 flex-1 rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400"><div className="absolute top-1/2 h-3 w-1 -translate-y-1/2 rounded-full bg-slate-900" style={{ left: `calc(${momentumPct}% - 2px)` }} /></div></div><div className="grid gap-1">{visibleLiveCoachSignals.map((signal, i) => <div key={`${signal.text}-${i}`} className="flex gap-2 rounded-lg bg-slate-50 px-2 py-1.5 text-[11px] font-medium"><SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"}/><span>{signal.text}</span></div>)}</div></div>
+            </details>
           )}
         </div>
 
@@ -6239,11 +6241,11 @@ const attackUitPct =
               }`}
             >
               {state.klokLoopt ? "Ⅱ  PAUZEER WEDSTRIJD" : "▶  HERVAT WEDSTRIJD"}
-              <span className="ml-2 hidden font-semibold text-sm opacity-70 sm:inline">{formatTime(resterend)} resterend</span>
             </button>
             <details ref={matchActionsRef} className="group relative">
               <summary className={`flex h-full min-w-[52px] cursor-pointer list-none items-center justify-center rounded-r-xl border px-4 text-xl font-black marker:hidden ${state.klokLoopt ? "border-amber-200 bg-amber-100 text-amber-900 hover:bg-amber-200" : "border-blue-200 bg-blue-100 text-blue-800 hover:bg-blue-200"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
               <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
+                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); void toggleFullscreen(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-blue-700 hover:bg-blue-50">{isFullscreen ? "Volledig scherm verlaten" : "Volledig scherm openen"}</button>
                 <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); openScoreEditor(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-700 hover:bg-slate-50 lg:hidden">Stand aanpassen</button>
                 <button
                   type="button"
@@ -6283,41 +6285,6 @@ const attackUitPct =
             <div className="mt-5 flex gap-3"><Button className="flex-1" onClick={() => setScoreEditorOpen(false)}>Annuleren</Button><Button variant="primary" className="flex-1" onClick={() => { setState((s) => ({ ...s, scoreThuis: draftScoreThuis, scoreUit: draftScoreUit })); setScoreEditorOpen(false); }}>Stand opslaan</Button></div>
           </div>
         </div>
-      )}
-
-      {/* Op smalle schermen blijft alleen het belangrijkste coachsignaal zwevend zichtbaar. */}
-      {wedstrijdGestart && !wedstrijdAfgelopen && (
-        <details className="group fixed bottom-3 right-3 z-30 w-[min(calc(100vw-1.5rem),440px)] lg:hidden" data-no-pause>
-          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs shadow-xl marker:hidden">
-            <SignalDot tone={visibleLiveCoachSignals[0]?.tone === "goed" ? "green" : visibleLiveCoachSignals[0]?.tone === "letop" && visibleLiveCoachSignals[0]?.priority === 1 ? "red" : visibleLiveCoachSignals[0]?.tone === "letop" ? "orange" : "blue"} />
-            <span className="shrink-0 font-extrabold text-slate-800">Coach</span>
-            <span className="min-w-0 flex-1 truncate text-slate-600">{visibleLiveCoachSignals[0]?.text || "Geen opvallend live signaal."}</span>
-            <span className="text-slate-400 transition group-open:rotate-180">⌃</span>
-          </summary>
-          <div className="absolute bottom-[calc(100%+0.5rem)] right-0 w-full rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl">
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-extrabold text-slate-900">Live coachsignalen</div>
-              <div className={`text-xs font-extrabold ${momentumTone === "green" ? "text-emerald-700" : momentumTone === "red" ? "text-red-700" : "text-blue-700"}`}>{momentumLabel}</div>
-            </div>
-            <div className="relative mt-2 h-1.5 rounded-full bg-gradient-to-r from-red-400 via-slate-200 to-emerald-400">
-              <div className="absolute top-1/2 h-3.5 w-1 -translate-y-1/2 rounded-full bg-slate-900" style={{ left: `calc(${momentumPct}% - 2px)` }} />
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-600">
-              <span className="rounded-full bg-slate-100 px-2 py-1">{finishedHomeAttacks.length}/5 aanvallen</span>
-              <span className="rounded-full bg-slate-100 px-2 py-1">{recentHomeGoals} goals</span>
-              <span className="rounded-full bg-slate-100 px-2 py-1">{recentHomeAttempts.length} kansen</span>
-              <span className="rounded-full bg-slate-100 px-2 py-1">Rebound {recentReboundPct == null ? "–" : `${recentReboundPct.toFixed(0)}%`}</span>
-            </div>
-            <div className="mt-2 max-h-[38dvh] space-y-1.5 overflow-y-auto">
-              {visibleLiveCoachSignals.map((signal, i) => (
-                <div key={`${signal.text}-${i}`} className={`flex gap-2 rounded-lg border px-2.5 py-2 text-xs font-medium ${signal.tone === "goed" ? "border-green-200 bg-green-50 text-green-800" : signal.tone === "letop" && signal.priority === 1 ? "border-red-200 bg-red-50 text-red-900" : signal.tone === "letop" ? "border-orange-200 bg-orange-50 text-orange-900" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
-                  <SignalDot tone={signal.tone === "goed" ? "green" : signal.tone === "letop" && signal.priority === 1 ? "red" : signal.tone === "letop" ? "orange" : "blue"} />
-                  <span>{signal.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </details>
       )}
 
           {/* Alles hieronder wordt grijs + niet klikbaar zolang wedstrijdNietGestart */}
@@ -11143,9 +11110,13 @@ function FieldImageCard({
 
   return (
     <div className={`w-full overflow-hidden rounded-2xl border ${isAttack ? "border-green-200 bg-green-50/80" : "border-red-200 bg-red-50/80"}`}>
-      <div className="px-4 pt-3 pb-2 text-center">
-        <div className={`text-sm md:text-base font-extrabold uppercase tracking-[0.16em] ${isAttack ? "text-green-700" : "text-red-700"}`}>{isAttack ? "Aanval" : "Verdediging"}</div>
-        <div className="mt-0.5 text-sm font-bold text-slate-700">{vakLabel}</div>
+      <div className="grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-3 py-2">
+        <span />
+        <div className="text-center">
+          <div className={`text-sm md:text-base font-extrabold uppercase tracking-[0.16em] ${isAttack ? "text-green-700" : "text-red-700"}`}>{isAttack ? "Aanval" : "Verdediging"}</div>
+          <div className="mt-0.5 text-sm font-bold text-slate-700">{vakLabel}</div>
+        </div>
+        {timeSummary ? <div className={`min-w-0 justify-self-end text-right text-[9px] font-bold leading-tight sm:text-[10px] ${isAttack ? "text-green-700" : "text-red-700"}`}><div className="opacity-70">Aanvalstijd</div><div className="mt-0.5 whitespace-nowrap tabular-nums">{timeSummary.replace(/^Aanvalstijd\s*/, "")}</div></div> : <span />}
       </div>
 
       <div className="px-3">
@@ -11164,9 +11135,8 @@ function FieldImageCard({
         </button>
       </div>
 
-      <div className={`mt-3 flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t px-3 py-2 text-xs font-extrabold sm:px-4 sm:text-sm ${active ? (isAttack ? "border-green-200 bg-green-100 text-green-800" : "border-red-200 bg-red-100 text-red-800") : "border-slate-200 bg-white/70 text-slate-500"}`}>
-        <span className="whitespace-nowrap"><span className={`mr-2 inline-block h-2 w-2 rounded-full ${active ? (isAttack ? "bg-green-600" : "bg-red-600") : "bg-slate-300"}`} />{active ? "Actief vak" : "Niet actief"}</span>
-        {timeSummary && <span className="ml-auto whitespace-nowrap tabular-nums opacity-80">{timeSummary}</span>}
+      <div className={`mt-3 w-full border-t px-4 py-2 text-center text-xs font-extrabold sm:text-sm ${active ? (isAttack ? "border-green-200 bg-green-100 text-green-800" : "border-red-200 bg-red-100 text-red-800") : "border-slate-200 bg-white/70 text-slate-500"}`}>
+        <span className={`mr-2 inline-block h-2 w-2 rounded-full ${active ? (isAttack ? "bg-green-600" : "bg-red-600") : "bg-slate-300"}`} />{active ? "Actief vak" : "Niet actief"}
       </div>
     </div>
   );
