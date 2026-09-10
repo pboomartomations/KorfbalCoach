@@ -3955,7 +3955,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
 
           </header>
 
-          <main className={`korbiq-main mx-auto w-full max-w-[1500px] ${tab === "wedstrijd" ? "px-2 py-2 sm:px-4 sm:py-3 xl:px-6 xl:py-4" : "px-4 py-5 md:px-6 md:py-7 xl:px-8"}`}>
+          <main className={`korbiq-main w-full max-w-none ${tab === "wedstrijd" ? "px-2 py-2 sm:px-4 sm:py-3 xl:px-6 xl:py-4" : "px-4 py-5 md:px-6 md:py-7 xl:px-8"}`}>
       {(teamRosterLoading || teamRosterError) && <div className={`mb-4 rounded-xl border px-3 py-2 text-xs font-semibold ${teamRosterError?"border-red-200 bg-red-50 text-red-700":"border-blue-100 bg-blue-50 text-blue-700"}`}>{teamRosterError?`Teamselectie kon niet uit Supabase worden geladen: ${teamRosterError}`:"Teamselectie uit Supabase laden…"}</div>}
       {supabaseHistoryStatus === "error" && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"><span>{supabaseHistoryMessage} De lokaal bewaarde historie blijft beschikbaar.</span><button type="button" onClick={()=>setHistoryRefreshVersion(version=>version+1)} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold">Opnieuw proberen</button></div>}
       {analysisTabs.includes(tab) && (
