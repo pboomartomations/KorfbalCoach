@@ -1298,6 +1298,25 @@ export default function App() {
   const [activeTeamSeasonId, setActiveTeamSeasonId] = useState("");
 
   useEffect(() => {
+    // Browsers staan fullscreen bij het eerste laden meestal pas toe na een
+    // bewuste gebruikersactie. Daarom proberen we het direct en opnieuw bij
+    // iedere eerste klik/toetsaanslag nadat fullscreen is verlaten.
+    const requestFullscreen = () => {
+      if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+      void document.documentElement.requestFullscreen().catch(() => {
+        // De browser kan dit buiten een gebruikersactie blokkeren.
+      });
+    };
+    requestFullscreen();
+    window.addEventListener("pointerdown", requestFullscreen, true);
+    window.addEventListener("keydown", requestFullscreen, true);
+    return () => {
+      window.removeEventListener("pointerdown", requestFullscreen, true);
+      window.removeEventListener("keydown", requestFullscreen, true);
+    };
+  }, []);
+
+  useEffect(() => {
     let active = true;
     const loadUser = async (user: User | null) => {
       if (!active) return;
@@ -4717,7 +4736,7 @@ function OrganisationManagementDashboard({
     if(!confirm(`${teamName} archiveren?\n\nAlle actieve competitieperioden van dit team worden gearchiveerd. De bestaande wedstrijdhistorie blijft bewaard.`))return;
     setBusy(true);setMessage("");
     const {error}=await supabase.rpc("set_team_active",{p_team_id:teamId,p_actief:false});
-    if(error){setMessage(`Team kon niet worden gearchiveerd: ${error.message}`);setBusy(false);return}
+    if(error){const missingFunction=error.message.includes("set_team_active")&&error.message.toLowerCase().includes("schema cache");setMessage(missingFunction?"Team kan nog niet worden gearchiveerd. Voer eerst Query 35 uit in de SQL Editor van Supabase en probeer het daarna opnieuw.":`Team kon niet worden gearchiveerd: ${error.message}`);setBusy(false);return}
     setManagedTeamId("__all__");
     await onRefreshAccess();
     await load();
@@ -7614,16 +7633,23 @@ function SpelerprofielenDashboard({
     return base.length >= 2 ? base : spelers.filter((p) => p.actief);
   })();
   const playerStats = rankingPlayers.map((p) => {
-    const pe = events.filter((e:any) => matchIds.has(String(e.wedstrijd_id ?? "")) && own(e) && (String(e.spelerId ?? "") === p.id || String(e.spelerNaam ?? "") === p.naam));
+    const playerEvent = (e:any) => String(e.spelerId ?? "") === p.id || String(e.spelerNaam ?? "") === p.naam;
+    const allPlayerEvents = events.filter((e:any) => matchIds.has(String(e.wedstrijd_id ?? "")) && playerEvent(e));
+    const pe = allPlayerEvents.filter((e:any) => own(e));
     const pa = pe.filter(isAttempt);
     const pg = pa.filter((e:any) => result(e) === "raak").length;
     const pk = pa.filter((e:any) => result(e) === "korf").length;
+    const ownDefended = pa.filter((e:any) => result(e) === "verdedigd").length;
     const shot = pa.filter((e:any) => String(e.actie ?? "").trim().toLowerCase() === "schot");
     const shotGoals = shot.filter((e:any) => result(e) === "raak").length;
     const run = pa.filter((e:any) => String(e.actie ?? "").trim().toLowerCase() === "doorloop");
     const runGoals = run.filter((e:any) => result(e) === "raak").length;
     const reb = pe.filter((e:any) => String(e.actie ?? "").toLowerCase() === "rebound" && String(e.reden ?? "").toLowerCase() === "rebound").length;
-    const def = pe.filter((e:any) => ["verdedigd","bal onderschept","pass onderschept"].includes(String(e.reden ?? "").trim().toLowerCase())).length;
+    const opponentAttemptsForPlayer = allPlayerEvents.filter((e:any) => !own(e) && isAttempt(e));
+    const defendedAgainst = opponentAttemptsForPlayer.filter((e:any) => result(e) === "verdedigd").length;
+    const goalsAgainst = opponentAttemptsForPlayer.filter((e:any) => result(e) === "raak").length;
+    const steals = allPlayerEvents.filter((e:any) => ["bal onderschept","pass onderschept","schot afgevangen"].includes(String(e.reden ?? "").trim().toLowerCase())).length;
+    const def = defendedAgainst + steals;
     const tov = pe.filter((e:any) => ["bal uit","pass onderschept"].includes(String(e.reden ?? "").trim().toLowerCase())).length;
     let minutes = 0;
     selectedMatches.forEach((m:any) => {
@@ -7635,9 +7661,13 @@ function SpelerprofielenDashboard({
     });
     if (!minutes && vakperiodes.length) vakperiodes.filter((v:any) => matchIds.has(String(v.wedstrijd_id ?? "")) && String(v.combinatie_speler_ids ?? "").includes(p.id)).forEach((v:any) => { minutes += (Number(v.duur_seconden ?? 0) || 0) / 60; });
     const per60 = (n:number) => minutes > 0 ? n / minutes * 60 : 0;
+    const defenseImpactPoints = defendedAgainst + steals - goalsAgainst * 2;
+    const impactPoints = pg * 2 - goalsAgainst * 2 + pk + defendedAgainst + steals + reb * .5 - ownDefended - tov * .5;
     return {
       id:p.id, name:p.naam, minutes, attempts:pa.length, goals:pg, rebounds:reb, defense:def, turnovers:tov,
+      goalsAgainst, defendedAgainst, steals, ownDefended, impactPoints,
       goals60:per60(pg), attempts60:per60(pa.length), rebounds60:per60(reb), defense60:per60(def), turnovers60:per60(tov),
+      defenseImpact60:per60(defenseImpactPoints), impact60:per60(impactPoints),
       scorePct:pa.length ? pg/pa.length*100 : 0, qualityPct:pa.length ? (pg+pk)/pa.length*100 : 0,
       shotScore:shot.length ? shotGoals/shot.length*100 : 0, shotVolume:per60(shot.length),
       runScore:run.length ? runGoals/run.length*100 : 0, runVolume:per60(run.length),
@@ -7658,9 +7688,9 @@ function SpelerprofielenDashboard({
   const shotComposite = percentileScore("shotScore")*.65 + percentileScore("shotVolume")*.35;
   const runComposite = percentileScore("runScore")*.65 + percentileScore("runVolume")*.35;
   const reboundComposite = percentileScore("rebounds60");
-  const defenseComposite = percentileScore("defense60");
+  const defenseComposite = percentileScore("defenseImpact60");
   const attackComposite = percentileScore("qualityPct")*.40 + percentileScore("attempts60")*.25 + percentileScore("goals60")*.25 + percentileScore("turnovers60",true)*.10;
-  const overallComposite = scoringComposite*.25 + shotComposite*.12 + runComposite*.10 + reboundComposite*.18 + defenseComposite*.18 + attackComposite*.17;
+  const overallComposite = percentileScore("impact60");
   const compositeRank = (getter:(p:typeof playerStats[number])=>number) => {
     const scored=rankedPool.map((p)=>({id:p.id,score:getter(p)})).sort((a,b)=>b.score-a.score);
     const pos=scored.findIndex((x)=>x.id===selectedId); return pos>=0 ? pos+1 : null;
@@ -7675,20 +7705,21 @@ function SpelerprofielenDashboard({
     const runC=rankScore("runScore")*.65+rankScore("runVolume")*.35;
     const attackC=rankScore("qualityPct")*.40+rankScore("attempts60")*.25+rankScore("goals60")*.25+rankScore("turnovers60",true)*.10;
     if(kind==="scoring")return scoring; if(kind==="shot")return shotC; if(kind==="run")return runC; if(kind==="attack")return attackC;
-    return scoring*.25+shotC*.12+runC*.10+rankScore("rebounds60")*.18+rankScore("defense60")*.18+attackC*.17;
+    return rankScore("impact60");
   };
   const rankings = [
-    {label:"Overall", icon:"🏆", rank:compositeRank(p=>compositeFor(p,"overall")), score:overallComposite},
+    {label:"Overall", icon:"🏆", rank:rankOf("impact60"), score:overallComposite},
     {label:"Scorend", icon:"🎯", rank:compositeRank(p=>compositeFor(p,"scoring")), score:scoringComposite},
     {label:"Schot", icon:"🏹", rank:compositeRank(p=>compositeFor(p,"shot")), score:shotComposite},
     {label:"Doorloop", icon:"⚡", rank:compositeRank(p=>compositeFor(p,"run")), score:runComposite},
     {label:"Rebound", icon:"🧲", rank:rankOf("rebounds60"), score:reboundComposite},
-    {label:"Verdedigend", icon:"🛡️", rank:rankOf("defense60"), score:defenseComposite},
+    {label:"Verdedigend", icon:"🛡️", rank:rankOf("defenseImpact60"), score:defenseComposite},
     {label:"Aanvallend", icon:"💎", rank:compositeRank(p=>compositeFor(p,"attack")), score:attackComposite},
     {label:"Balvastheid", icon:"🔒", rank:rankOf("turnovers60",true), score:percentileScore("turnovers60",true)},
   ];
   const selectedStat = playerStats.find((p)=>p.id===selectedId);
   const benchmarkCards = [
+    {label:"Impact / 60", value:selectedStat?.impact60 ?? 0, team:avg("impact60"), suffix:""},
     {label:"Goals / 60", value:selectedStat?.goals60 ?? 0, team:avg("goals60"), suffix:""},
     {label:"Kansen / 60", value:selectedStat?.attempts60 ?? 0, team:avg("attempts60"), suffix:""},
     {label:"Raak", value:selectedStat?.scorePct ?? 0, team:avg("scorePct"), suffix:"%"},
@@ -7800,7 +7831,7 @@ function SpelerprofielenDashboard({
         <label><div className="mb-1 text-xs font-semibold text-gray-500">Seizoen</div><select value={seasonFilter} onChange={e=>setSeasonFilter(e.target.value)} className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-semibold text-slate-800"><option value="__all__">Alle seizoenen</option>{seasons.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
       </div>
     </div>
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
       {benchmarkCards.map((m)=><MetricInsightCard key={m.label} label={m.label} value={`${m.value.toFixed(1)}${m.suffix}`} metric={m.value} benchmark={m.team} sub={<>Teamgem.: <span className="font-bold text-slate-700">{m.team.toFixed(1)}{m.suffix}</span></>} series={profileSeriesForLabel(m.label)} />)}
     </div>
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -7810,7 +7841,8 @@ function SpelerprofielenDashboard({
       <MetricInsightCard label="Totaal kansen" value={attempts.length} sub="Pogingen in de geselecteerde periode" series={profileSeries("attempts")} />
     </div>
     <div className="rounded-2xl border bg-white p-5">
-      <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-bold">Teamranking</h3><p className="text-sm text-slate-500">Vergelijking met {rankedPool.length} basisspelers met voldoende data. Volume is omgerekend per 60 minuten.</p></div><div className="text-xs font-semibold text-slate-500">Minimaal 60 minuten voor de standaardranking</div></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-bold">Teamranking</h3><p className="text-sm text-slate-500">Vergelijking met {rankedPool.length} basisspelers met voldoende data. Overall combineert aanval én verdediging in gelijke gebeurtenissen.</p></div><div className="text-xs font-semibold text-slate-500">Minimaal 60 minuten voor de standaardranking</div></div>
+      <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs leading-5 text-blue-900"><b>Impactscore per 60:</b> goal +2 · tegengoal −2 · korf geraakt +1 · tegenstanderspoging verdedigd +1 · steal +1 · eigen poging verdedigd −1 · rebound +0,5 · balverlies −0,5.</div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{rankings.map(r=><div key={r.label} className={`rounded-xl border p-3 ${r.rank===1?'border-amber-200 bg-amber-50':r.rank && r.rank<=3?'border-blue-200 bg-blue-50':'bg-slate-50'}`}><div className="flex items-center justify-between gap-2"><div className="font-bold text-slate-800">{r.icon} {r.label}</div><div className="text-lg font-black text-slate-900">{r.rank ? `#${r.rank} / ${rankedPool.length}` : '—'}</div></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600" style={{width:`${Math.max(0,Math.min(100,r.score))}%`}} /></div></div>)}</div>
     </div>
     <div className="rounded-2xl border bg-white p-5">
