@@ -1317,6 +1317,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!("serviceWorker" in navigator) || !import.meta.env.PROD) return;
+    const registerPwa = () => {
+      void navigator.serviceWorker.register("/sw.js").catch((error) => {
+        console.warn("KorbIQ kon de PWA-serviceworker niet registreren", error);
+      });
+    };
+    if (document.readyState === "complete") registerPwa();
+    else window.addEventListener("load", registerPwa, { once:true });
+    return () => window.removeEventListener("load", registerPwa);
+  }, []);
+
+  useEffect(() => {
     let active = true;
     const loadUser = async (user: User | null) => {
       if (!active) return;
