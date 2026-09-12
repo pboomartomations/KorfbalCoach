@@ -6876,6 +6876,73 @@ const attackUitPct =
 }
 
 
+type MatchComparisonAttempt = {
+  goals: number;
+  attempts: number;
+  dames: number;
+  heren: number;
+  ongekoppeld: number;
+};
+
+function MatchComparisonAttemptValue({ stat }: { stat: MatchComparisonAttempt }) {
+  return <div className="text-center">
+    <div className="text-lg font-black tabular-nums text-blue-950 sm:text-2xl">{stat.goals} / {stat.attempts}</div>
+    <div className="text-[10px] font-bold text-blue-600 sm:text-xs">{stat.attempts ? `${(stat.goals/stat.attempts*100).toFixed(0)}% kansen raak` : "geen kansen"}</div>
+  </div>;
+}
+
+function MatchStatisticsSummary({
+  state,
+  opponent,
+  comparisonRows,
+  reboundsWon,
+  reboundsOpponent,
+  stealsKorbis,
+  stealsOpponent,
+}: {
+  state: AppState;
+  opponent: string;
+  comparisonRows: Array<{ key:string; label:string; korbis:MatchComparisonAttempt; opponent:MatchComparisonAttempt; showGender?:boolean }>;
+  reboundsWon: number;
+  reboundsOpponent: number;
+  stealsKorbis: number;
+  stealsOpponent: number;
+}) {
+  const shotRow = comparisonRows.find((row)=>row.key==="schot");
+  const unknownShotLinks = shotRow?.korbis.ongekoppeld ?? 0;
+  const unknownShotRights = shotRow?.opponent.ongekoppeld ?? 0;
+  return <section className="overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-sm">
+    <div className="border-b border-blue-100 bg-gradient-to-r from-blue-700 via-blue-600 to-blue-700 px-4 py-5 text-white sm:px-6">
+      <div className="text-center text-[10px] font-extrabold uppercase tracking-[.2em] text-blue-100">Wedstrijdsamenvatting</div>
+      <div className="mt-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 text-center">
+        <div className="min-w-0"><div className="truncate text-lg font-black sm:text-2xl">Korbis</div><div className="mt-1 text-4xl font-black tabular-nums sm:text-5xl">{state.scoreThuis}</div></div>
+        <div><div className="text-sm font-black uppercase tracking-[.16em] text-blue-100">tegen</div><div className="mt-1 h-px w-10 bg-blue-300 sm:w-16"/></div>
+        <div className="min-w-0"><div className="truncate text-lg font-black sm:text-2xl" title={opponent}>{opponent}</div><div className="mt-1 text-4xl font-black tabular-nums sm:text-5xl">{state.scoreUit}</div></div>
+      </div>
+      <div className="mt-4 text-center text-xs text-blue-100">{[formatImportedDate(state.matchDate),state.matchType,state.season].filter(Boolean).join(" · ")}</div>
+    </div>
+
+    <div className="divide-y divide-blue-50 px-3 sm:px-6">
+      {comparisonRows.map((row)=><div key={row.key} className="py-4">
+        <div className="grid grid-cols-[minmax(70px,1fr)_minmax(105px,1.1fr)_minmax(70px,1fr)] items-center gap-2 sm:gap-5">
+          <MatchComparisonAttemptValue stat={row.korbis}/>
+          <div className="text-center text-sm font-black text-blue-800 sm:text-lg">{row.label}</div>
+          <MatchComparisonAttemptValue stat={row.opponent}/>
+        </div>
+        {row.showGender&&<div className="mt-3 rounded-2xl bg-blue-50/70 px-2 py-2.5 text-xs text-slate-600">
+          <div className="grid grid-cols-[1fr_minmax(72px,.7fr)_1fr] items-center gap-2 text-center"><b className="text-blue-950">{row.korbis.dames}</b><span>Dames</span><b className="text-blue-950">{row.opponent.dames}</b></div>
+          <div className="mt-1 grid grid-cols-[1fr_minmax(72px,.7fr)_1fr] items-center gap-2 text-center"><b className="text-blue-950">{row.korbis.heren}</b><span>Heren</span><b className="text-blue-950">{row.opponent.heren}</b></div>
+          {(unknownShotLinks>0||unknownShotRights>0)&&<div className="mt-1 grid grid-cols-[1fr_minmax(72px,.7fr)_1fr] items-center gap-2 text-center text-slate-400"><b>{unknownShotLinks}</b><span>Niet gekoppeld</span><b>{unknownShotRights}</b></div>}
+        </div>}
+      </div>)}
+
+      <div className="grid grid-cols-[minmax(70px,1fr)_minmax(105px,1.1fr)_minmax(70px,1fr)] items-center gap-2 py-4 text-center sm:gap-5"><div className="text-2xl font-black tabular-nums text-blue-950">{reboundsWon}</div><div><div className="text-sm font-black text-blue-800 sm:text-lg">Rebounds gewonnen</div><div className="text-[10px] text-slate-400">na kansen Korbis</div></div><div className="text-2xl font-black tabular-nums text-blue-950">{reboundsOpponent}</div></div>
+      <div className="grid grid-cols-[minmax(70px,1fr)_minmax(105px,1.1fr)_minmax(70px,1fr)] items-center gap-2 py-4 text-center sm:gap-5"><div className="text-2xl font-black tabular-nums text-blue-950">{stealsKorbis}</div><div className="text-sm font-black text-blue-800 sm:text-lg">Steals</div><div className="text-2xl font-black tabular-nums text-blue-950">{stealsOpponent}</div></div>
+    </div>
+    <div className="border-t border-blue-100 bg-blue-50/60 px-4 py-3 text-center text-[11px] leading-5 text-slate-500">Links staan de acties van Korbis, rechts die van {opponent}. Bij kansen van de tegenstander is Dames/Heren afgeleid van de gekoppelde Korbis-verdediger.</div>
+  </section>;
+}
+
 function MatchReport({
   state,
   spelersMap,
@@ -6908,16 +6975,48 @@ function MatchReport({
   // Het verslag gebruikt dezelfde logregels als de spelerskaarten en de opgeslagen database.
   // Veldmarkers zijn alleen voor de heatmap en gebruiken bewust lowercase actienamen.
   const attempts = state.log.filter(isOwnAttempt);
+  const opponentAttempts = state.log.filter((event) =>
+    isAttemptEvent(event) && !isOwnAttempt(event) &&
+    (event.team === "uit" || event.vak === "verdedigend" || event.soort === "Gemis")
+  );
   const totalAttempts = attempts.length;
   const goalsFromAttempts = attempts.filter(isMadeAttempt).length;
   const onTarget = attempts.filter(isDirectedAttempt).length;
   const scorePct = totalAttempts ? goalsFromAttempts / totalAttempts * 100 : 0;
   const quality = totalAttempts ? onTarget / totalAttempts * 100 : 0;
+  const reportPlayers = new Map<string,Player>();
+  state.spelers.forEach((player)=>reportPlayers.set(player.id,player));
+  spelersMap.forEach((player,id)=>reportPlayers.set(id,player));
+  const comparisonAttempt = (rows:LogEvent[], aliases:string[]):MatchComparisonAttempt => {
+    const selected = rows.filter((event)=>aliases.includes(reportNorm(event.actie)));
+    const genders = selected.map((event)=>event.spelerId ? reportPlayers.get(event.spelerId)?.geslacht : undefined);
+    return {
+      goals:selected.filter(isMadeAttempt).length,
+      attempts:selected.length,
+      dames:genders.filter((gender)=>gender==="Dame").length,
+      heren:genders.filter((gender)=>gender==="Heer").length,
+      ongekoppeld:genders.filter((gender)=>!gender).length,
+    };
+  };
+  const comparisonRows = [
+    {key:"schot",label:"Schoten",aliases:["schot"],showGender:true},
+    {key:"doorloop",label:"Doorloopballen",aliases:["doorloop"]},
+    {key:"vrijebal",label:"Vrije ballen",aliases:["vrijebal","vrije bal","vrije"]},
+    {key:"strafworp",label:"Strafworpen",aliases:["strafworp"]},
+  ].map((row)=>({
+    key:row.key,
+    label:row.label,
+    showGender:row.showGender,
+    korbis:comparisonAttempt(attempts,row.aliases),
+    opponent:comparisonAttempt(opponentAttempts,row.aliases),
+  }));
   const reboundsWon = state.log.filter((e) => e.reden === "Rebound" && e.team !== "uit").length;
   const reboundsLost = state.log.filter((e) => e.reden === "Geen Rebound" || (e.reden === "Rebound" && e.team === "uit")).length;
   const reboundTotal = reboundsWon + reboundsLost;
   const reboundPct = reboundTotal ? reboundsWon / reboundTotal * 100 : 0;
   const turnovers = state.log.filter(isKorbisTurnoverEvent).length;
+  const stealsKorbis = state.log.filter(isKorbisStealEvent).length;
+  const stealsOpponent = state.log.filter(isOpponentStealEvent).length;
 
   const korbisAttacks = state.attacks.filter((a) => a.team === "thuis");
   const chancesPerAttack = korbisAttacks.length ? totalAttempts / korbisAttacks.length : 0;
@@ -7030,6 +7129,16 @@ function MatchReport({
     {state.matchEnded && saveStatus !== "idle" && <div className={`rounded-2xl border p-4 text-sm ${saveStatus==="saved"?"border-emerald-200 bg-emerald-50 text-emerald-900":saveStatus==="error"?"border-red-200 bg-red-50 text-red-900":"border-blue-200 bg-blue-50 text-blue-900"}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><b>{saveStatus==="saved"?"Wedstrijd opgeslagen":saveStatus==="error"?"Opslaan mislukt":"Wedstrijd opslaan"}</b><div className="mt-1">{saveMessage}</div></div>{saveStatus==="error"&&<button type="button" onClick={onRetrySave} className="shrink-0 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white">Opnieuw proberen</button>}</div></div>}
     {!state.matchEnded && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><b>Voorlopig verslag.</b> De wedstrijd is nog niet afgesloten.</div>}
     {goalsPanel}
+
+    <MatchStatisticsSummary
+      state={state}
+      opponent={opponent}
+      comparisonRows={comparisonRows}
+      reboundsWon={reboundsWon}
+      reboundsOpponent={reboundsLost}
+      stealsKorbis={stealsKorbis}
+      stealsOpponent={stealsOpponent}
+    />
 
     <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-5"><div className="text-xs font-extrabold uppercase tracking-[0.14em] text-blue-600">Wedstrijdbeeld</div><p className="mt-2 text-sm leading-6 text-slate-700">{matchStory}</p></div>
 
