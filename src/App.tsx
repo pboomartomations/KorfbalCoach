@@ -2040,6 +2040,7 @@ export default function App() {
   useState<"dashboard" | "wedstrijdinzichten" | "spelersanalyse" | "teamanalyse" | "spelers" | "personenbeheer" | "teamsbeheer" | "seizoenenbeheer" | "wedstrijdbeheer" | "vakken" | "wedstrijd" | "verslag" | "combinaties" | "opstelling" | "wisseladvies" | "doelen" | "portaal" | "voorbereiding">("dashboard");
   const [requestedAnalysisMatchId, setRequestedAnalysisMatchId] = useState<string | null>(null);
   const [requestedAnalysisOpponent, setRequestedAnalysisOpponent] = useState<string | null>(null);
+  const [selectedReportMatchId, setSelectedReportMatchId] = useState("");
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileMenuOpen(false);
@@ -3668,6 +3669,7 @@ const eindeWedstrijd = () => {
   };
 
   setState(finishedState);
+  setSelectedReportMatchId("__current__");
   setTab("verslag");
   void saveMatchToSupabase(finishedState);
 };
@@ -4291,20 +4293,20 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
       )}
 
       {tab === "verslag" && (
-        <div className="space-y-5">
-          <MatchReport
-            state={state}
-            spelersMap={analysisSpelersMap}
-            dbSheets={activeTeamDbSheets}
-            saveStatus={matchSaveStatus}
-            saveMessage={matchSaveMessage}
-            onRetrySave={retrySupabaseMatchSave}
-            onBackToMatch={openCurrentMatch}
-            onOpenFullAnalysis={state.matchEnded && matchSaveStatus === "saved" && savedReportDatabaseMatch ? () => openStoredMatchAnalysis(String(savedReportDatabaseMatch.wedstrijd_id ?? "")) : undefined}
-            goalsPanel={<WedstrijddoelenDashboard state={state} dbSheets={activeTeamDbSheets} embedded />}
-          />
-          {state.matchEnded && matchSaveStatus === "saved" && <LatestMatchSharePanel match={latestShareableDatabaseMatch} />}
-        </div>
+        <WedstrijdverslagDashboard
+          state={state}
+          spelersMap={analysisSpelersMap}
+          dbSheets={activeTeamDbSheets}
+          selectedMatchId={selectedReportMatchId}
+          onSelectMatch={setSelectedReportMatchId}
+          saveStatus={matchSaveStatus}
+          saveMessage={matchSaveMessage}
+          onRetrySave={retrySupabaseMatchSave}
+          onBackToMatch={openCurrentMatch}
+          onOpenFullAnalysis={openStoredMatchAnalysis}
+          goalsPanel={<WedstrijddoelenDashboard state={state} dbSheets={activeTeamDbSheets} embedded />}
+          currentShareMatch={state.matchEnded && matchSaveStatus === "saved" ? savedReportDatabaseMatch : null}
+        />
       )}
 
       {tab === "voorbereiding" && (
@@ -7165,6 +7167,166 @@ function MatchReport({
     <div className="grid gap-3 sm:grid-cols-2"><div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold text-slate-500">Vak 1</div><div className="mt-1 text-lg font-extrabold">{vakStats[0].goals10.toFixed(1)} doelpunten Korbis / 10 aanv.</div><div className="text-xs text-slate-500">{vakStats[0].goals} doelpunten Korbis · {vakStats[0].attempts} kansen Korbis</div></div><div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold text-slate-500">Vak 2</div><div className="mt-1 text-lg font-extrabold">{vakStats[1].goals10.toFixed(1)} doelpunten Korbis / 10 aanv.</div><div className="text-xs text-slate-500">{vakStats[1].goals} doelpunten Korbis · {vakStats[1].attempts} kansen Korbis</div></div></div>
 
     <div className="flex flex-wrap justify-end gap-2">{onOpenFullAnalysis&&<button onClick={onOpenFullAnalysis} className="rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50">Open volledige wedstrijdanalyse</button>}<button onClick={onBackToMatch} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700">Terug naar wedstrijd</button></div>
+  </div>;
+}
+
+const reportSeconds = (value:unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0,value);
+  const parts=String(value??"").trim().split(":").map(Number);
+  if(parts.length===2&&parts.every(Number.isFinite))return Math.max(0,parts[0]*60+parts[1]);
+  const numeric=Number(value);
+  return Number.isFinite(numeric)?Math.max(0,numeric):0;
+};
+
+const reportJsonIds = (value:unknown):string[] => {
+  if(Array.isArray(value))return value.map(String).filter(Boolean);
+  if(typeof value!=="string"||!value.trim())return [];
+  try{const parsed=JSON.parse(value);return Array.isArray(parsed)?parsed.map(String).filter(Boolean):[];}catch{return value.split(/[|,;]+/).map(item=>item.trim()).filter(Boolean);}
+};
+
+function databaseMatchReportState(baseState:AppState,match:any,dbSheets:DatabaseSheetsData):AppState {
+  const matchId=String(match.wedstrijd_id??"");
+  const rows=(dbSheets.events??[]).filter((row:any)=>String(row.wedstrijd_id??"")===matchId);
+  const attackRows=(dbSheets.attacks??[]).filter((row:any)=>String(row.wedstrijd_id??"")===matchId);
+  const periodRows=(dbSheets.vakperiodes??[]).filter((row:any)=>String(row.wedstrijd_id??"")===matchId);
+  const norm=(value:unknown)=>String(value??"").trim().toLocaleLowerCase("nl-NL");
+  const ownTeam=(value:unknown)=>["korbis","thuis",norm(match.team_naam)].includes(norm(value));
+  const action=(value:unknown):LogEvent["actie"]|undefined=>{
+    const normalized=norm(value);
+    if(normalized==="schot")return "Schot";
+    if(normalized==="doorloop")return "Doorloop";
+    if(["vrijebal","vrije bal","vrije"].includes(normalized))return "Vrijebal";
+    if(normalized==="strafworp")return "Strafworp";
+    return undefined;
+  };
+  const result=(value:unknown):LogEvent["resultaat"]|undefined=>{
+    const normalized=norm(value);
+    if(normalized==="raak")return "Raak";
+    if(normalized==="mis")return "Mis";
+    if(normalized==="korf")return "Korf";
+    if(normalized==="verdedigd")return "Verdedigd";
+    return undefined;
+  };
+  const vak=(value:unknown):VakSide|undefined=>norm(value)==="aanvallend"?"aanvallend":norm(value)==="verdedigend"?"verdedigend":undefined;
+  const fixedVakId=(value:unknown):VakId|undefined=>Number(value)===1?1:Number(value)===2?2:undefined;
+  const attackId=(number:unknown)=>String(number??"").trim()?`${matchId}-attack-${String(number)}`:undefined;
+  const log:LogEvent[]=rows.map((row:any,index:number)=>{
+    const eventAction=action(row.actie);
+    const eventVak=vak(row.vak);
+    const eventResult=result(row.uitkomst??row.resultaat);
+    const team:LogEvent["team"]=ownTeam(row.team)?"thuis":"uit";
+    const reason=String(row.reden??(eventResult==="Raak"?(team==="thuis"?"Gescoord":"Doorgelaten"):eventResult==="Korf"?"Korf":eventResult==="Verdedigd"?"Verdedigd":"Gemist Schot")) as LogReden;
+    const soort:LogEvent["soort"]=eventAction?(team==="thuis"?"Kans":"Gemis"):norm(row.actie)==="rebound"?"Rebound":"Balbezit";
+    return {
+      id:String(row.id??`${matchId}-event-${index}`),
+      tijdSeconden:reportSeconds(row.tijd_verstreken),
+      vak:eventVak,
+      soort,
+      actie:eventAction,
+      reden:reason,
+      spelerId:String(row.spelerId??"")||undefined,
+      resterendSeconden:reportSeconds(row.klok_resterend),
+      wedstrijdMinuut:Number(row.wedstrijd_minuut)||undefined,
+      team,
+      resultaat:eventResult,
+      attackId:attackId(row.aanval_nr),
+      attackIndex:Number(row.aanval_nr)||undefined,
+      vakId:fixedVakId(row.vak_id),
+      spelerIds:reportJsonIds(row.combinatie_speler_ids),
+      combinatieKey:String(row.combinatie_key??"")||undefined,
+    };
+  }).sort((a,b)=>b.tijdSeconden-a.tijdSeconden);
+  const attacks:AttackMeta[]=attackRows.map((row:any,index:number)=>({
+    id:attackId(row.aanval_nr)??`${matchId}-attack-${index+1}`,
+    index:Number(row.aanval_nr)||index+1,
+    team:ownTeam(row.team)?"thuis":"uit",
+    vak:vak(row.vak)??(ownTeam(row.team)?"aanvallend":"verdedigend"),
+    vakId:fixedVakId(row.vak_id),
+    startSeconden:reportSeconds(row.start??row.aanval_start),
+    endSeconden:String(row.einde??row.aanval_einde??"").trim()?reportSeconds(row.einde??row.aanval_einde):undefined,
+    spelerIds:reportJsonIds(row.combinatie_speler_ids),
+    combinatieKey:String(row.combinatie_key??"")||undefined,
+  }));
+  const vakPeriods:VakPeriod[]=periodRows.map((row:any,index:number)=>({
+    id:String(row.periode_id??`${matchId}-period-${index}`),
+    vakId:fixedVakId(row.vak_id)??1,
+    startSeconden:reportSeconds(row.start),
+    endSeconden:String(row.einde??"").trim()?reportSeconds(row.einde):undefined,
+    spelerIds:reportJsonIds(row.combinatie_speler_ids),
+    combinatieKey:String(row.combinatie_key??"")||combinationKey(reportJsonIds(row.combinatie_speler_ids)),
+  }));
+  const speelSeconden:Record<string,number>={};
+  try{const playtime=JSON.parse(String(match.speeltijd_spelers_json??"[]"));if(Array.isArray(playtime))playtime.forEach((row:any)=>{const id=String(row.spelerId??row.player_id??"");if(id)speelSeconden[id]=Number(row.seconden??row.seconds??0)||0;});}catch{/* Oude ongeldige speeltijdsnapshot negeren. */}
+  const elapsed=Math.max(0,...log.map(event=>event.tijdSeconden),...attacks.map(attack=>attack.endSeconden??attack.startSeconden));
+  return {
+    ...baseState,
+    scoreThuis:Number(match.score_korbis??0),
+    scoreUit:Number(match.score_tegenstander??0),
+    tijdSeconden:elapsed,
+    klokLoopt:false,
+    log,
+    attacks,
+    currentAttackId:null,
+    vakPeriods,
+    fieldEvents:[],
+    speelSeconden,
+    opponentName:String(match.tegenstander??match.wedstrijd_naam??"Tegenstander"),
+    homeAway:norm(match.locatie)==="uit"?"uit":norm(match.locatie)==="thuis"?"thuis":"",
+    matchType:(String(match.wedstrijdtype??"Competitie") as AppState["matchType"]),
+    season:String(match.seizoen??match.team_seizoen_naam??baseState.season),
+    halfMinuten:Number(match.half_duur_minuten??baseState.halfMinuten)||baseState.halfMinuten,
+    matchEnded:true,
+    matchTeamId:String(match.team_id??""),
+    matchTeamName:String(match.team_naam??"Korbis"),
+    matchTeamSeasonId:String(match.team_season_id??""),
+    matchSeasonId:String(match.team_seizoen_id??""),
+    matchSeasonName:String(match.team_seizoen_naam??match.seizoen??""),
+    matchDate:String(match.datum??""),
+    matchLegacyId:matchId,
+  };
+}
+
+function WedstrijdverslagDashboard({
+  state,
+  spelersMap,
+  dbSheets,
+  selectedMatchId,
+  onSelectMatch,
+  saveStatus,
+  saveMessage,
+  onRetrySave,
+  onBackToMatch,
+  onOpenFullAnalysis,
+  goalsPanel,
+  currentShareMatch,
+}: {
+  state:AppState;
+  spelersMap:Map<string,Player>;
+  dbSheets:DatabaseSheetsData|null;
+  selectedMatchId:string;
+  onSelectMatch:(matchId:string)=>void;
+  saveStatus:"idle"|"saving"|"saved"|"error";
+  saveMessage:string;
+  onRetrySave:()=>void;
+  onBackToMatch:()=>void;
+  onOpenFullAnalysis:(matchId:string)=>void;
+  goalsPanel?:React.ReactNode;
+  currentShareMatch?:any;
+}) {
+  const savedMatches=(dbSheets?.matches??[]).filter((match:any)=>!Boolean(match.gearchiveerd)&&String(match.wedstrijd_afgesloten??"").toLocaleLowerCase("nl-NL")==="ja").slice().sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??""))||String(b.wedstrijd_id??"").localeCompare(String(a.wedstrijd_id??"")));
+  const currentAvailable=Boolean(state.opponentName.trim()||state.matchLegacyId||state.log.length||state.scoreThuis||state.scoreUit);
+  const defaultSelection=savedMatches.length?String(savedMatches[0].wedstrijd_id??""):currentAvailable?"__current__":"";
+  const validSelection=selectedMatchId==="__current__"?currentAvailable:savedMatches.some((match:any)=>String(match.wedstrijd_id??"")===selectedMatchId);
+  const effectiveSelection=validSelection?selectedMatchId:defaultSelection;
+  useEffect(()=>{if(effectiveSelection!==selectedMatchId)onSelectMatch(effectiveSelection);},[effectiveSelection,selectedMatchId,onSelectMatch]);
+  const selectedMatch=savedMatches.find((match:any)=>String(match.wedstrijd_id??"")===effectiveSelection)??null;
+  const reportState=selectedMatch&&dbSheets?databaseMatchReportState(state,selectedMatch,dbSheets):state;
+  const shareMatch=selectedMatch??(effectiveSelection==="__current__"?currentShareMatch:null);
+  if(!effectiveSelection)return <div className="rounded-3xl border border-blue-100 bg-white p-7 text-center shadow-sm"><h2 className="text-xl font-black">Nog geen wedstrijdverslag</h2><p className="mt-2 text-sm text-slate-500">Zodra een wedstrijd voor dit team in Supabase is opgeslagen, verschijnt hij hier voor iedere coach met toegang tot het team.</p></div>;
+  return <div className="space-y-5">
+    <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm"><div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><label className="w-full max-w-2xl text-xs font-extrabold uppercase tracking-wide text-blue-700">Wedstrijd kiezen<select value={effectiveSelection} onChange={event=>onSelectMatch(event.target.value)} className="mt-1.5 w-full rounded-xl border border-blue-200 bg-blue-50/40 px-3 py-2.5 text-sm font-bold normal-case tracking-normal text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">{currentAvailable&&<option value="__current__">Huidige wedstrijd op dit apparaat</option>}{savedMatches.map((match:any)=><option key={String(match.wedstrijd_id)} value={String(match.wedstrijd_id)}>{formatImportedDate(match.datum)} · {safeDisplayText(match.team_naam,"Korbis")} – {safeDisplayText(match.tegenstander??match.wedstrijd_naam,"Tegenstander")} · {safeDisplayText(match.score_korbis,"0")}–{safeDisplayText(match.score_tegenstander,"0")}</option>)}</select></label><div className="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">{selectedMatch?"Opgeslagen in Supabase · zichtbaar voor bevoegde coaches van dit team":"Lokale huidige wedstrijd"}</div></div></div>
+    <MatchReport state={reportState} spelersMap={spelersMap} dbSheets={dbSheets} saveStatus={selectedMatch?"idle":saveStatus} saveMessage={selectedMatch?"":saveMessage} onRetrySave={onRetrySave} onBackToMatch={onBackToMatch} onOpenFullAnalysis={selectedMatch?()=>onOpenFullAnalysis(String(selectedMatch.wedstrijd_id??"")):undefined} goalsPanel={selectedMatch?undefined:goalsPanel}/>
+    {shareMatch&&<LatestMatchSharePanel match={shareMatch}/>} 
   </div>;
 }
 
