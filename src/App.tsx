@@ -7785,7 +7785,6 @@ function SpelerprofielenDashboard({
   const rebounds = playerEvents.filter((e:any) => String(e.actie ?? "").toLowerCase() === "rebound" && String(e.reden ?? "").toLowerCase() === "rebound").length;
   const defendedOpponentAttempts = allSelectedPlayerEvents.filter((e:any) => !own(e)&&isAttempt(e)&&result(e)==="verdedigd").length;
   const stealsKorbis = allSelectedPlayerEvents.filter(positiveSteal).length;
-  const defense = defendedOpponentAttempts + stealsKorbis;
   const turnovers = attempts.filter((e:any)=>result(e)==="verdedigd").length + allSelectedPlayerEvents.filter(negativeSteal).length;
   const scorePct = attempts.length ? goals / attempts.length * 100 : 0;
   const qualityPct = attempts.length ? (goals + korf) / attempts.length * 100 : 0;
