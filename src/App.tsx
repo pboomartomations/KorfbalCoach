@@ -779,6 +779,23 @@ function findVoicePlayers(segment: string, players: Player[]): Player[] {
   return fuzzy.map((match) => match.player);
 }
 
+function findVoicePlayerImmediatelyBeforeAction(transcript: string, actionStart: number, players: Player[]): Player | undefined {
+  const prefix = transcript.slice(0, actionStart).trim();
+  if (!prefix) return undefined;
+  const matches = players.flatMap((player) => {
+    const full = normalizeVoiceText(player.naam);
+    const first = full.split(" ")[0];
+    const aliases = Array.from(new Set([full, first])).filter((alias) => alias.length >= 2);
+    const alias = aliases
+      .filter((candidate) => prefix === candidate || prefix.endsWith(` ${candidate}`))
+      .sort((a, b) => b.length - a.length)[0];
+    return alias ? [{ player, aliasLength: alias.length }] : [];
+  }).sort((a, b) => b.aliasLength - a.aliasLength);
+  const longest = matches[0]?.aliasLength;
+  const equallyStrong = matches.filter((match) => match.aliasLength === longest);
+  return equallyStrong.length === 1 ? equallyStrong[0].player : undefined;
+}
+
 function parseVoiceMatchCommands(transcript: string, state: AppState): VoiceParseResult {
   const normalized = normalizeVoiceText(transcript)
     .replace(/vrije\s+bal/g, "vrijebal")
@@ -789,12 +806,16 @@ function parseVoiceMatchCommands(transcript: string, state: AppState): VoicePars
 
   const commands: VoiceParsedCommand[] = [];
   const errors: string[] = [];
+  const fieldPlayerIds = new Set([...state.aanval, ...state.verdediging].filter((id): id is string => Boolean(id)));
+  const eligiblePlayers = state.spelers.filter((player) => player.actief || fieldPlayerIds.has(player.id));
   starts.forEach((match, index) => {
     const start = match.index ?? 0;
     const end = index + 1 < starts.length ? (starts[index + 1].index ?? normalized.length) : normalized.length;
     const segment = normalized.slice(start, end).trim();
     const keyword = match[1];
-    const matchedPlayers = findVoicePlayers(segment, state.spelers.filter((player) => player.actief));
+    const playersAfterAction = findVoicePlayers(segment, eligiblePlayers);
+    const playerBeforeAction = findVoicePlayerImmediatelyBeforeAction(normalized, start, eligiblePlayers);
+    const matchedPlayers = playersAfterAction.length ? playersAfterAction : playerBeforeAction ? [playerBeforeAction] : [];
 
     if (keyword === "wissel") {
       const uniquePlayers = matchedPlayers.filter((player, playerIndex, all) => all.findIndex((item) => item.id === player.id) === playerIndex);
@@ -6289,7 +6310,8 @@ function VoiceMatchControl({
       const form = new FormData();
       const extension = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
       form.append("audio", blob, `korbiq-${context.sequence}.${extension}`);
-      form.append("player_names", JSON.stringify(stateRef.current.spelers.filter((player) => player.actief).map((player) => player.naam)));
+      const fieldPlayerIds = new Set([...stateRef.current.aanval, ...stateRef.current.verdediging].filter((id): id is string => Boolean(id)));
+      form.append("player_names", JSON.stringify(stateRef.current.spelers.filter((player) => player.actief || fieldPlayerIds.has(player.id)).map((player) => player.naam)));
       const { data, error } = await supabase.functions.invoke("transcribe-match-command", { body: form });
       if (error) throw error;
       const transcript = String((data as any)?.text ?? "").trim();
