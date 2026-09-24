@@ -710,6 +710,267 @@ function detectVakForSpeler(state: AppState, spelerId?: string): VakSide | undef
   return undefined;
 }
 
+type VoiceAttemptAction = "Schot" | "Doorloop" | "Vrijebal" | "Strafworp";
+type VoiceAttemptOutcome = "Raak" | "Mis" | "Korf" | "Verdedigd";
+type VoiceParsedCommand =
+  | { kind: "attempt"; action: VoiceAttemptAction; outcome: VoiceAttemptOutcome; playerId: string; label: string }
+  | { kind: "rebound"; playerId?: string; noRebound: boolean; label: string }
+  | { kind: "steal"; playerId?: string; label: string }
+  | { kind: "substitution"; outgoingId: string; incomingId: string; label: string };
+
+type VoiceCaptureContext = {
+  sequence: number;
+  elapsedSeconds: number;
+  activeVak: VakSide;
+};
+
+type VoiceParseResult = {
+  commands: VoiceParsedCommand[];
+  errors: string[];
+};
+
+const normalizeVoiceText = (value: unknown) =>
+  String(value ?? "")
+    .toLocaleLowerCase("nl-NL")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const voiceWordDistance = (left: string, right: string) => {
+  const rows = Array.from({ length: left.length + 1 }, (_, index) => index);
+  for (let column = 1; column <= right.length; column += 1) {
+    let previous = rows[0];
+    rows[0] = column;
+    for (let row = 1; row <= left.length; row += 1) {
+      const saved = rows[row];
+      rows[row] = Math.min(
+        rows[row] + 1,
+        rows[row - 1] + 1,
+        previous + (left[row - 1] === right[column - 1] ? 0 : 1)
+      );
+      previous = saved;
+    }
+  }
+  return rows[left.length];
+};
+
+function findVoicePlayers(segment: string, players: Player[]): Player[] {
+  const normalized = normalizeVoiceText(segment);
+  const exactMatches = players.flatMap((player) => {
+    const full = normalizeVoiceText(player.naam);
+    const first = full.split(" ")[0];
+    const aliases = Array.from(new Set([full, first])).filter((alias) => alias.length >= 2);
+    const positions = aliases
+      .map((alias) => ({ alias, index: ` ${normalized} `.indexOf(` ${alias} `) }))
+      .filter((match) => match.index >= 0)
+      .sort((a, b) => a.index - b.index || b.alias.length - a.alias.length);
+    return positions.length ? [{ player, index: positions[0].index }] : [];
+  }).sort((a, b) => a.index - b.index);
+  if (exactMatches.length) return exactMatches.map((match) => match.player);
+
+  const words = normalized.split(" ").filter((word) => word.length >= 3);
+  const fuzzy = players.flatMap((player) => {
+    const first = normalizeVoiceText(player.naam).split(" ")[0];
+    const matchIndex = words.findIndex((word) => first.length >= 4 && voiceWordDistance(first, word) <= 1);
+    return matchIndex >= 0 ? [{ player, index: matchIndex }] : [];
+  }).sort((a, b) => a.index - b.index);
+  return fuzzy.map((match) => match.player);
+}
+
+function parseVoiceMatchCommands(transcript: string, state: AppState): VoiceParseResult {
+  const normalized = normalizeVoiceText(transcript)
+    .replace(/vrije\s+bal/g, "vrijebal")
+    .replace(/doorloop\s+bal/g, "doorloopbal")
+    .replace(/doorloopbal/g, "doorloop");
+  const starts = Array.from(normalized.matchAll(/\b(schot|doorloop|vrijebal|strafworp|rebound|steal|steel|wissel)\b/g));
+  if (!starts.length) return { commands: [], errors: ["Geen herkenbare wedstrijdactie gehoord."] };
+
+  const commands: VoiceParsedCommand[] = [];
+  const errors: string[] = [];
+  starts.forEach((match, index) => {
+    const start = match.index ?? 0;
+    const end = index + 1 < starts.length ? (starts[index + 1].index ?? normalized.length) : normalized.length;
+    const segment = normalized.slice(start, end).trim();
+    const keyword = match[1];
+    const matchedPlayers = findVoicePlayers(segment, state.spelers.filter((player) => player.actief));
+
+    if (keyword === "wissel") {
+      const uniquePlayers = matchedPlayers.filter((player, playerIndex, all) => all.findIndex((item) => item.id === player.id) === playerIndex);
+      if (uniquePlayers.length < 2) {
+        errors.push(`Wissel niet verwerkt: noem eerst de speler die eruit gaat en daarna de speler die erin komt.`);
+        return;
+      }
+      const [outgoing, incoming] = uniquePlayers;
+      if (!detectVakForSpeler(state, outgoing.id)) {
+        errors.push(`Wissel niet verwerkt: ${outgoing.naam} staat niet in het veld.`);
+        return;
+      }
+      if (detectVakForSpeler(state, incoming.id)) {
+        errors.push(`Wissel niet verwerkt: ${incoming.naam} staat al in het veld.`);
+        return;
+      }
+      commands.push({ kind: "substitution", outgoingId: outgoing.id, incomingId: incoming.id, label: `Wissel ${outgoing.naam} → ${incoming.naam}` });
+      return;
+    }
+
+    if (keyword === "rebound") {
+      const noRebound = /\bgeen\s+rebound\b/.test(segment);
+      const player = matchedPlayers[0];
+      if (!noRebound && !player) {
+        errors.push("Rebound niet verwerkt: noem de speler of zeg ‘geen rebound’. ");
+        return;
+      }
+      if (player && detectVakForSpeler(state, player.id) !== "aanvallend") {
+        errors.push(`Rebound niet verwerkt: ${player.naam} staat niet in het aanvallende vak.`);
+        return;
+      }
+      commands.push({ kind: "rebound", playerId: player?.id, noRebound, label: noRebound ? "Geen rebound" : `Rebound ${player?.naam}` });
+      return;
+    }
+
+    if (keyword === "steal" || keyword === "steel") {
+      const player = matchedPlayers[0];
+      commands.push({ kind: "steal", playerId: player?.id, label: `Steal${player ? ` ${player.naam}` : ""}` });
+      return;
+    }
+
+    const player = matchedPlayers[0];
+    if (!player) {
+      errors.push(`${keyword} niet verwerkt: speler niet herkend.`);
+      return;
+    }
+    const action: VoiceAttemptAction = keyword === "schot" ? "Schot" : keyword === "doorloop" ? "Doorloop" : keyword === "strafworp" ? "Strafworp" : "Vrijebal";
+    const outcome: VoiceAttemptOutcome | null = /\b(raak|doelpunt|goal)\b/.test(segment)
+      ? "Raak"
+      : /\bkorf\b/.test(segment)
+      ? "Korf"
+      : /\bverdedigd\b/.test(segment)
+      ? "Verdedigd"
+      : /\bmis(t|ser)?\b/.test(segment)
+      ? "Mis"
+      : null;
+    if (!outcome) {
+      errors.push(`${action} van ${player.naam} niet verwerkt: zeg raak, korf, mis of verdedigd.`);
+      return;
+    }
+    commands.push({ kind: "attempt", action, outcome, playerId: player.id, label: `${action} ${player.naam} · ${outcome}` });
+  });
+  return { commands, errors };
+}
+
+function startVoiceAttackAt(state: AppState, vak: VakSide, elapsedSeconds: number) {
+  const liveTime = state.tijdSeconden;
+  const next = startAttackForVak({ ...state, tijdSeconden: elapsedSeconds }, vak);
+  return { ...next, tijdSeconden: liveTime };
+}
+
+function voiceEventTiming(state: AppState, elapsedSeconds: number) {
+  const halfTotal = (Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
+  const halfStart = state.currentHalf === 1 ? 0 : halfTotal;
+  const halfElapsed = Math.max(0, elapsedSeconds - halfStart);
+  return {
+    resterendSeconden: Math.max(halfTotal - halfElapsed, 0),
+    wedstrijdMinuut: Math.max(1, Math.ceil(elapsedSeconds / 60)),
+  };
+}
+
+function applyVoiceAttempt(state: AppState, command: Extract<VoiceParsedCommand, { kind: "attempt" }>, elapsedSeconds: number): AppState {
+  const vak = detectVakForSpeler(state, command.playerId) ?? state.activeVak;
+  let next = state.currentAttackId && state.activeVak === vak ? state : startVoiceAttackAt(state, vak, elapsedSeconds);
+  const timing = voiceEventTiming(next, elapsedSeconds);
+  const { attackId, attackIndex } = getCurrentAttackInfo(next);
+  const vakId: VakId = vak === "aanvallend" ? (next.vak1Aanvallend ? 1 : 2) : (next.vak1Aanvallend ? 2 : 1);
+  const playerIds = playerIdsForVak(next, vakId);
+  const homeGoal = vak === "aanvallend" && command.outcome === "Raak";
+  const awayGoal = vak === "verdedigend" && command.outcome === "Raak";
+  const reason: LogReden = command.outcome === "Raak"
+    ? (vak === "aanvallend" ? "Gescoord" : "Doorgelaten")
+    : command.outcome === "Korf"
+    ? "Korf"
+    : command.outcome === "Verdedigd"
+    ? "Verdedigd"
+    : "Gemist Schot";
+  const event: LogEvent = {
+    id: uid("ev"), tijdSeconden: elapsedSeconds, vak, soort: vak === "aanvallend" ? "Kans" : "Gemis",
+    reden: reason, spelerId: command.playerId, team: vak === "aanvallend" ? "thuis" : "uit",
+    actie: command.action, resultaat: command.outcome, ...timing, attackId, attackIndex, vakId,
+    spelerIds: playerIds, combinatieKey: combinationKey(playerIds),
+  };
+  next = { ...next, log: [event, ...next.log], scoreThuis: next.scoreThuis + Number(homeGoal), scoreUit: next.scoreUit + Number(awayGoal) };
+  const goalScored = homeGoal || awayGoal;
+  if (goalScored && next.autoVakWisselNa2) {
+    const goalsTotal = next.goalsSinceLastSwitch + 1;
+    next = goalsTotal >= 2
+      ? { ...next, aanval: next.verdediging, verdediging: next.aanval, vak1Aanvallend: !next.vak1Aanvallend, goalsSinceLastSwitch: 0 }
+      : { ...next, goalsSinceLastSwitch: goalsTotal };
+  }
+  if (goalScored || command.outcome === "Verdedigd") {
+    next = startVoiceAttackAt(next, vak === "aanvallend" ? "verdedigend" : "aanvallend", elapsedSeconds);
+  }
+  return next;
+}
+
+function applyVoiceRebound(state: AppState, command: Extract<VoiceParsedCommand, { kind: "rebound" }>, elapsedSeconds: number): AppState {
+  const timing = voiceEventTiming(state, elapsedSeconds);
+  const { attackId, attackIndex } = getCurrentAttackInfo(state);
+  const vakId: VakId = state.vak1Aanvallend ? 1 : 2;
+  const playerIds = playerIdsForVak(state, vakId);
+  const event: LogEvent = {
+    id: uid("ev"), tijdSeconden: elapsedSeconds, vak: "aanvallend", soort: "Rebound",
+    reden: command.noRebound ? "Geen Rebound" : "Rebound", spelerId: command.noRebound ? undefined : command.playerId,
+    team: "thuis", type: "Rebound", ...timing, attackId, attackIndex, vakId,
+    spelerIds: playerIds, combinatieKey: combinationKey(playerIds),
+  };
+  return { ...state, log: [event, ...state.log] };
+}
+
+function applyVoiceSteal(state: AppState, command: Extract<VoiceParsedCommand, { kind: "steal" }>, elapsedSeconds: number, capturedVak: VakSide): AppState {
+  const vak = capturedVak;
+  const timing = voiceEventTiming(state, elapsedSeconds);
+  const { attackId, attackIndex } = getCurrentAttackInfo(state);
+  const vakId: VakId = vak === "aanvallend" ? (state.vak1Aanvallend ? 1 : 2) : (state.vak1Aanvallend ? 2 : 1);
+  const playerIds = playerIdsForVak(state, vakId);
+  const event: LogEvent = {
+    id: uid("ev"), tijdSeconden: elapsedSeconds, vak, soort: "Balbezit", reden: "Schot afgevangen",
+    spelerId: command.playerId, team: vak === "verdedigend" ? "thuis" : "uit", ...timing,
+    attackId, attackIndex, vakId, spelerIds: playerIds, combinatieKey: combinationKey(playerIds),
+  };
+  const withEvent = { ...state, log: [event, ...state.log], possessionOwner: vak === "verdedigend" ? "thuis" as const : "uit" as const };
+  return startVoiceAttackAt(withEvent, vak === "verdedigend" ? "aanvallend" : "verdedigend", elapsedSeconds);
+}
+
+function applyVoiceSubstitution(state: AppState, command: Extract<VoiceParsedCommand, { kind: "substitution" }>, elapsedSeconds: number): AppState {
+  const vak = detectVakForSpeler(state, command.outgoingId);
+  if (!vak || detectVakForSpeler(state, command.incomingId)) return state;
+  const positions = vak === "aanvallend" ? [...state.aanval] : [...state.verdediging];
+  const position = positions.findIndex((id) => id === command.outgoingId);
+  if (position < 0) return state;
+  positions[position] = command.incomingId;
+  const timing = voiceEventTiming(state, elapsedSeconds);
+  const vakId: VakId = vak === "aanvallend" ? (state.vak1Aanvallend ? 1 : 2) : (state.vak1Aanvallend ? 2 : 1);
+  const common = { tijdSeconden: elapsedSeconds, vak, soort: "Wissel" as const, ...timing, pos: position + 1, team: vak === "aanvallend" ? "thuis" as const : "uit" as const, vakId };
+  const logs: LogEvent[] = [
+    { id: uid("ev"), ...common, reden: "Wissel in", spelerId: command.incomingId },
+    { id: uid("ev"), ...common, reden: "Wissel uit", spelerId: command.outgoingId },
+  ];
+  let next: AppState = vak === "aanvallend" ? { ...state, aanval: positions, log: [...logs, ...state.log] } : { ...state, verdediging: positions, log: [...logs, ...state.log] };
+  const periods = next.vakPeriods.map((period) => period.vakId === vakId && period.endSeconden == null ? { ...period, endSeconden: elapsedSeconds } : period);
+  const ids = playerIdsForVak(next, vakId);
+  periods.push({ id: uid("vp"), vakId, startSeconden: elapsedSeconds, spelerIds: ids, combinatieKey: combinationKey(ids) });
+  return { ...next, vakPeriods: periods };
+}
+
+function applyVoiceCommands(state: AppState, commands: VoiceParsedCommand[], context: VoiceCaptureContext): AppState {
+  return commands.reduce((current, command) => {
+    if (command.kind === "attempt") return applyVoiceAttempt(current, command, context.elapsedSeconds);
+    if (command.kind === "rebound") return applyVoiceRebound(current, command, context.elapsedSeconds);
+    if (command.kind === "steal") return applyVoiceSteal(current, command, context.elapsedSeconds, context.activeVak);
+    return applyVoiceSubstitution(current, command, context.elapsedSeconds);
+  }, state);
+}
+
 function getTeamDisplayName(
   team: "thuis" | "uit",
   opponentName: string
@@ -5876,6 +6137,358 @@ function VakBox({
 //////////////////////////////////////////////////////////////////////////////
 // --- Wedstrijd Tab ---------------------------------------------------------
 //////////////////////////////////////////////////////////////////////////////
+type VoiceQueueStatus = "recording" | "processing" | "done" | "warning" | "error";
+type VoiceQueueView = { sequence: number; status: VoiceQueueStatus; message: string };
+type VoiceUndoCheckpoint = { before: AppState; afterSignature: string };
+type BrowserSpeechRecognition = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: any) => void) | null;
+  onerror: ((event: any) => void) | null;
+  onend: (() => void) | null;
+};
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+const getBrowserSpeechRecognition = (): BrowserSpeechRecognitionConstructor | null => {
+  const browserWindow = window as typeof window & {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  };
+  return browserWindow.SpeechRecognition ?? browserWindow.webkitSpeechRecognition ?? null;
+};
+
+const voiceMatchSignature = (state: AppState) => JSON.stringify({
+  log: state.log.map((event) => event.id), scores: [state.scoreThuis, state.scoreUit],
+  aanval: state.aanval, verdediging: state.verdediging, vak1Aanvallend: state.vak1Aanvallend,
+  goalsSinceLastSwitch: state.goalsSinceLastSwitch, attacks: state.attacks,
+  currentAttackId: state.currentAttackId, activeVak: state.activeVak,
+  possessionOwner: state.possessionOwner, vakPeriods: state.vakPeriods,
+});
+
+function restoreVoiceCheckpoint(current: AppState, before: AppState): AppState {
+  return {
+    ...current,
+    log: before.log,
+    scoreThuis: before.scoreThuis,
+    scoreUit: before.scoreUit,
+    aanval: before.aanval,
+    verdediging: before.verdediging,
+    vak1Aanvallend: before.vak1Aanvallend,
+    goalsSinceLastSwitch: before.goalsSinceLastSwitch,
+    attacks: before.attacks,
+    currentAttackId: before.currentAttackId,
+    activeVak: before.activeVak,
+    possessionOwner: before.possessionOwner,
+    vakPeriods: before.vakPeriods,
+    fieldEvents: before.fieldEvents,
+    markerGroup: before.markerGroup,
+  };
+}
+
+function VoiceMatchControl({
+  state,
+  setState,
+  disabled,
+}: {
+  state: AppState;
+  setState: React.Dispatch<React.SetStateAction<AppState>>;
+  disabled: boolean;
+}) {
+  const stateRef = useRef(state);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const recognitionContextRef = useRef<VoiceCaptureContext | null>(null);
+  const recognitionTranscriptRef = useRef("");
+  const recognitionErrorRef = useRef("");
+  const recognitionStoppingRef = useRef(false);
+  const sequenceRef = useRef(0);
+  const nextApplyRef = useRef(1);
+  const completedRef = useRef(new Map<number, { context: VoiceCaptureContext; transcript?: string; error?: string }>());
+  const drainingRef = useRef(false);
+  const heldRef = useRef(false);
+  const maximumTimerRef = useRef<number | null>(null);
+  const undoRef = useRef<VoiceUndoCheckpoint | null>(null);
+  const feedbackTimerRef = useRef<number | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [queue, setQueue] = useState<VoiceQueueView[]>([]);
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+
+  useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => () => {
+    if (maximumTimerRef.current != null) window.clearTimeout(maximumTimerRef.current);
+    if (feedbackTimerRef.current != null) window.clearTimeout(feedbackTimerRef.current);
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.abort();
+    }
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  const showFeedback = () => {
+    setFeedbackVisible(true);
+    if (feedbackTimerRef.current != null) window.clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = window.setTimeout(() => setFeedbackVisible(false), 6500);
+  };
+
+  const updateQueueItem = (sequence: number, status: VoiceQueueStatus, message: string) => {
+    setQueue((items) => {
+      const exists = items.some((item) => item.sequence === sequence);
+      const next = exists
+        ? items.map((item) => item.sequence === sequence ? { ...item, status, message } : item)
+        : [...items, { sequence, status, message }];
+      return next.slice(-4);
+    });
+    showFeedback();
+  };
+
+  const drainQueue = () => {
+    if (drainingRef.current) return;
+    const sequence = nextApplyRef.current;
+    const completed = completedRef.current.get(sequence);
+    if (!completed) return;
+    drainingRef.current = true;
+    completedRef.current.delete(sequence);
+
+    if (completed.error) {
+      updateQueueItem(sequence, "error", completed.error);
+    } else {
+      const parsed = parseVoiceMatchCommands(completed.transcript ?? "", stateRef.current);
+      if (!parsed.commands.length) {
+        updateQueueItem(sequence, "error", `${parsed.errors.join(" ") || "Opdracht niet begrepen."} Gehoord: “${completed.transcript}”`);
+      } else {
+        const labels = parsed.commands.map((command) => command.label).join(" · ");
+        setState((current) => {
+          const next = applyVoiceCommands(current, parsed.commands, completed.context);
+          undoRef.current = { before: current, afterSignature: voiceMatchSignature(next) };
+          stateRef.current = next;
+          return next;
+        });
+        setCanUndo(true);
+        window.setTimeout(() => setCanUndo(false), 6500);
+        updateQueueItem(sequence, parsed.errors.length ? "warning" : "done", `${labels}${parsed.errors.length ? ` · ${parsed.errors.join(" ")}` : ""}`);
+        if (navigator.vibrate) navigator.vibrate(parsed.errors.length ? [60, 50, 60] : 55);
+      }
+    }
+
+    nextApplyRef.current += 1;
+    drainingRef.current = false;
+    window.setTimeout(drainQueue, 0);
+  };
+
+  const transcribeClip = async (blob: Blob, context: VoiceCaptureContext) => {
+    updateQueueItem(context.sequence, "processing", "Spraak wordt via de reservefunctie verwerkt…");
+    try {
+      const form = new FormData();
+      const extension = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
+      form.append("audio", blob, `korbiq-${context.sequence}.${extension}`);
+      form.append("player_names", JSON.stringify(stateRef.current.spelers.filter((player) => player.actief).map((player) => player.naam)));
+      const { data, error } = await supabase.functions.invoke("transcribe-match-command", { body: form });
+      if (error) throw error;
+      const transcript = String((data as any)?.text ?? "").trim();
+      if (!transcript) throw new Error("Geen spraak herkend.");
+      completedRef.current.set(context.sequence, { context, transcript });
+    } catch (error: any) {
+      const message = String(error?.message ?? "Spraakverwerking mislukt.");
+      completedRef.current.set(context.sequence, { context, error: message.includes("FunctionsHttpError") ? "Gratis spraakherkenning wordt niet ondersteund door deze browser en de optionele reservefunctie is niet bereikbaar." : message });
+    }
+    drainQueue();
+  };
+
+  const stopRecording = () => {
+    heldRef.current = false;
+    if (maximumTimerRef.current != null) {
+      window.clearTimeout(maximumTimerRef.current);
+      maximumTimerRef.current = null;
+    }
+    const recognition = recognitionRef.current;
+    const recognitionContext = recognitionContextRef.current;
+    if (recognition && !recognitionStoppingRef.current) {
+      recognitionStoppingRef.current = true;
+      if (recognitionContext) updateQueueItem(recognitionContext.sequence, "processing", "Spraak wordt gratis door de browser herkend…");
+      try { recognition.stop(); } catch { recognitionStoppingRef.current = false; }
+    } else {
+      const recorder = recorderRef.current;
+      if (recorder?.state === "recording") recorder.stop();
+    }
+    setRecording(false);
+  };
+
+  useEffect(() => {
+    const stop = () => stopRecording();
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    return () => {
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+  }, []);
+
+  const startRecording = async () => {
+    if (disabled || recorderRef.current?.state === "recording" || recognitionRef.current || !heldRef.current) return;
+    const SpeechRecognition = getBrowserSpeechRecognition();
+    if (SpeechRecognition) {
+      const sequence = sequenceRef.current + 1;
+      sequenceRef.current = sequence;
+      const context: VoiceCaptureContext = { sequence, elapsedSeconds: stateRef.current.tijdSeconden, activeVak: stateRef.current.activeVak };
+      const recognition = new SpeechRecognition();
+      recognition.lang = "nl-NL";
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognitionRef.current = recognition;
+      recognitionContextRef.current = context;
+      recognitionTranscriptRef.current = "";
+      recognitionErrorRef.current = "";
+      recognitionStoppingRef.current = false;
+      recognition.onresult = (event: any) => {
+        const parts: string[] = [];
+        for (let index = 0; index < event.results.length; index += 1) {
+          const transcript = String(event.results[index]?.[0]?.transcript ?? "").trim();
+          if (transcript) parts.push(transcript);
+        }
+        recognitionTranscriptRef.current = parts.join(" ").trim();
+      };
+      recognition.onerror = (event: any) => {
+        const code = String(event?.error ?? "");
+        recognitionErrorRef.current = code === "not-allowed" || code === "service-not-allowed"
+          ? "Geef KorbIQ toestemming om spraakherkenning te gebruiken."
+          : code === "audio-capture"
+            ? "De microfoon is niet beschikbaar."
+            : code === "network"
+              ? "De gratis browserherkenning kon geen verbinding maken."
+              : code === "no-speech"
+                ? "Geen spraak herkend. Houd de knop vast terwijl je spreekt."
+                : code === "aborted" && !heldRef.current
+                  ? "Geen spraak herkend."
+                  : "De gratis browserherkenning is gestopt. Probeer het opnieuw.";
+      };
+      recognition.onend = () => {
+        const finishedContext = recognitionContextRef.current;
+        const transcript = recognitionTranscriptRef.current.trim();
+        const error = recognitionErrorRef.current;
+        recognitionRef.current = null;
+        recognitionContextRef.current = null;
+        recognitionTranscriptRef.current = "";
+        recognitionErrorRef.current = "";
+        recognitionStoppingRef.current = false;
+        setRecording(false);
+        if (!finishedContext) return;
+        completedRef.current.set(finishedContext.sequence, transcript
+          ? { context: finishedContext, transcript }
+          : { context: finishedContext, error: error || "Geen spraak herkend. Houd de knop iets langer vast." });
+        drainQueue();
+      };
+      try {
+        recognition.start();
+        setRecording(true);
+        updateQueueItem(sequence, "recording", "Gratis browserherkenning luistert… laat los wanneer je klaar bent.");
+        maximumTimerRef.current = window.setTimeout(stopRecording, 12000);
+        if (navigator.vibrate) navigator.vibrate(25);
+      } catch {
+        recognitionRef.current = null;
+        recognitionContextRef.current = null;
+        recognitionStoppingRef.current = false;
+        completedRef.current.set(sequence, { context, error: "Spraakherkenning kon niet worden gestart. Probeer het opnieuw." });
+        drainQueue();
+      }
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      updateQueueItem(sequenceRef.current + 1, "error", "Deze browser ondersteunt geen gratis spraakherkenning of microfoonopname.");
+      return;
+    }
+    try {
+      let stream = mediaStreamRef.current;
+      if (!stream || stream.getTracks().every((track) => track.readyState === "ended")) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        mediaStreamRef.current = stream;
+      }
+      if (!heldRef.current) return;
+      const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/ogg;codecs=opus"].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const sequence = sequenceRef.current + 1;
+      sequenceRef.current = sequence;
+      const context: VoiceCaptureContext = { sequence, elapsedSeconds: stateRef.current.tijdSeconden, activeVak: stateRef.current.activeVak };
+      const chunks: Blob[] = [];
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      recorder.onerror = () => {
+        completedRef.current.set(sequence, { context, error: "Microfoonopname mislukt." });
+        drainQueue();
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+        if (recorderRef.current === recorder) recorderRef.current = null;
+        if (blob.size < 400) {
+          completedRef.current.set(sequence, { context, error: "De opname was te kort. Houd de knop iets langer vast." });
+          drainQueue();
+          return;
+        }
+        void transcribeClip(blob, context);
+      };
+      recorder.start(150);
+      setRecording(true);
+      updateQueueItem(sequence, "recording", "Browserherkenning ontbreekt; de optionele reservefunctie neemt op…");
+      maximumTimerRef.current = window.setTimeout(stopRecording, 12000);
+      if (navigator.vibrate) navigator.vibrate(25);
+    } catch (error: any) {
+      heldRef.current = false;
+      setRecording(false);
+      updateQueueItem(sequenceRef.current + 1, "error", error?.name === "NotAllowedError" ? "Geef KorbIQ toestemming om de microfoon te gebruiken." : "Microfoon kon niet worden gestart.");
+    }
+  };
+
+  const undoLastVoiceBatch = () => {
+    const checkpoint = undoRef.current;
+    if (!checkpoint) return;
+    if (voiceMatchSignature(stateRef.current) !== checkpoint.afterSignature) {
+      setCanUndo(false);
+      updateQueueItem(sequenceRef.current, "warning", "Ongedaan maken is niet meer mogelijk omdat daarna al een andere actie is geregistreerd.");
+      return;
+    }
+    setState((current) => {
+      const restored = restoreVoiceCheckpoint(current, checkpoint.before);
+      stateRef.current = restored;
+      return restored;
+    });
+    undoRef.current = null;
+    setCanUndo(false);
+    updateQueueItem(sequenceRef.current, "warning", "Laatste gesproken opdracht ongedaan gemaakt.");
+  };
+
+  const pendingCount = queue.filter((item) => item.status === "recording" || item.status === "processing").length;
+  const latest = queue[queue.length - 1];
+  return <div className="relative shrink-0" data-no-pause>
+    <button
+      type="button"
+      disabled={disabled}
+      onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); heldRef.current = true; void startRecording(); }}
+      onPointerUp={(event) => { event.preventDefault(); stopRecording(); }}
+      onKeyDown={(event) => { if ((event.key === " " || event.key === "Enter") && !event.repeat) { event.preventDefault(); heldRef.current = true; void startRecording(); } }}
+      onKeyUp={(event) => { if (event.key === " " || event.key === "Enter") { event.preventDefault(); stopRecording(); } }}
+      onContextMenu={(event) => event.preventDefault()}
+      className={`relative flex h-full min-h-[45px] w-14 touch-none select-none items-center justify-center border transition disabled:cursor-not-allowed disabled:opacity-40 ${recording ? "border-red-500 bg-red-600 text-white shadow-inner" : "border-blue-200 bg-blue-600 text-white hover:bg-blue-700"}`}
+      aria-label="Houd ingedrukt om een wedstrijdactie in te spreken"
+      title="Houd ingedrukt en spreek één of meer acties in"
+    >
+      <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>
+      {pendingCount > 0 && !recording && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-orange-500 px-1 text-[10px] font-black text-white">{pendingCount}</span>}
+    </button>
+    {feedbackVisible && latest && <div className={`absolute right-0 top-[calc(100%+0.45rem)] z-50 w-[min(330px,86vw)] rounded-xl border p-3 text-xs shadow-2xl ${latest.status === "done" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : latest.status === "error" ? "border-red-200 bg-red-50 text-red-900" : latest.status === "warning" ? "border-orange-200 bg-orange-50 text-orange-900" : "border-blue-200 bg-white text-blue-900"}`}>
+      <div className="flex items-start gap-2"><span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${latest.status === "recording" ? "animate-pulse bg-red-500" : latest.status === "processing" ? "animate-pulse bg-blue-500" : latest.status === "done" ? "bg-emerald-500" : latest.status === "warning" ? "bg-orange-500" : "bg-red-500"}`}/><span className="min-w-0 flex-1 font-semibold leading-5">{latest.message}</span><button type="button" onClick={() => setFeedbackVisible(false)} className="text-base leading-none opacity-60">×</button></div>
+      <div className="mt-2 flex items-center justify-between gap-3 text-[10px] opacity-70"><span>{pendingCount ? `${pendingCount} opdracht${pendingCount === 1 ? "" : "en"} in verwerking` : "Verwerkt op wedstrijdtijd"}</span>{canUndo && <button type="button" onClick={undoLastVoiceBatch} className="rounded-lg border border-current px-2 py-1 font-black opacity-100">Ongedaan maken</button>}</div>
+    </div>}
+  </div>;
+}
+
 function WedstrijdTab({
   state,
   setState,
@@ -6483,6 +7096,7 @@ const attackUitPct =
               {state.klokLoopt ? "Ⅱ  PAUZEER WEDSTRIJD" : "▶  HERVAT WEDSTRIJD"}
               <span className="ml-2 font-semibold text-sm opacity-70">{formatTime(resterend)}<span className="hidden sm:inline"> resterend</span></span>
             </button>
+            <VoiceMatchControl state={state} setState={setState} disabled={wedstrijdAfgelopen || wedstrijdNietGestart} />
             <details ref={matchActionsRef} className="group relative">
               <summary className={`flex h-full min-w-[52px] cursor-pointer list-none items-center justify-center rounded-r-xl border px-4 text-xl font-black marker:hidden ${state.klokLoopt ? "border-amber-200 bg-amber-100 text-amber-900 hover:bg-amber-200" : "border-blue-200 bg-blue-100 text-blue-800 hover:bg-blue-200"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
               <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
