@@ -105,6 +105,7 @@ type Player = {
   status: PlayerStatus;
   actief: boolean;
   foto?: string;
+  voiceAliases?: string[];
 };
 
 const isGuestPlayer = (player: Pick<Player, "status"> | null | undefined) =>
@@ -716,7 +717,8 @@ type VoiceParsedCommand =
   | { kind: "attempt"; action: VoiceAttemptAction; outcome: VoiceAttemptOutcome; playerId: string; label: string }
   | { kind: "rebound"; playerId?: string; noRebound: boolean; label: string }
   | { kind: "steal"; playerId?: string; label: string }
-  | { kind: "substitution"; outgoingId: string; incomingId: string; label: string };
+  | { kind: "substitution"; outgoingId: string; incomingId: string; label: string }
+  | { kind: "swapVakken"; label: string };
 
 type VoiceCaptureContext = {
   sequence: number;
@@ -727,6 +729,7 @@ type VoiceCaptureContext = {
 type VoiceParseResult = {
   commands: VoiceParsedCommand[];
   errors: string[];
+  unresolvedNames: string[];
 };
 
 const normalizeVoiceText = (value: unknown) =>
@@ -756,36 +759,102 @@ const voiceWordDistance = (left: string, right: string) => {
   return rows[left.length];
 };
 
+const voiceNameKey = (value: string) => normalizeVoiceText(value)
+  .replace(/aaij|aay|aai|aei|eij|ey|ay|ij|ei|ai|ae/g, "ei")
+  .replace(/ou|au/g, "au")
+  .replace(/ch/g, "g")
+  .replace(/ph/g, "f")
+  .replace(/th/g, "t")
+  .replace(/ck/g, "k")
+  .replace(/qu/g, "kw")
+  .replace(/x/g, "ks")
+  .replace(/c(?=[eiy])/g, "s")
+  .replace(/c/g, "k")
+  .replace(/y/g, "i")
+  .replace(/v/g, "f")
+  .replace(/^mike$/, "meik")
+  .replace(/(.)\1+/g, "$1")
+  .replace(/d$/, "t")
+  .replace(/b$/, "p");
+
+const voiceNameDistance = (left: string, right: string) => Math.min(
+  voiceWordDistance(left, right),
+  voiceWordDistance(voiceNameKey(left), voiceNameKey(right))
+);
+
+const VOICE_NON_NAME_WORDS = new Set([
+  "schot", "doorloop", "doorloopbal", "vrijebal", "strafworp", "rebound", "steal", "steel", "wissel",
+  "raak", "doelpunt", "goal", "korf", "verdedigd", "mis", "mist", "misser", "geen", "van", "naar", "voor", "met", "en",
+  "speler", "eruit", "erin", "uit", "in", "gaat", "komt", "de", "het", "een", "dan", "daarna",
+  "vak", "vakken", "helft", "aanval", "aanvallend", "verdediging", "verdedigend", "wisselen", "draai", "draaien", "vakwissel",
+]);
+
+const voiceAliasesForPlayer = (player: Player) => {
+  const full = normalizeVoiceText(player.naam);
+  const first = full.split(" ")[0];
+  return Array.from(new Set([full, first, ...(player.voiceAliases ?? []).map(normalizeVoiceText)]))
+    .filter((alias) => alias.length >= 2);
+};
+
+const extractUnresolvedVoiceNames = (text: string, players: Player[]) => {
+  const knownAliases = new Set(players.flatMap(voiceAliasesForPlayer));
+  return normalizeVoiceText(text)
+    .split(" ")
+    .filter((word) => word.length >= 2 && !VOICE_NON_NAME_WORDS.has(word) && !/^\d+$/.test(word))
+    .filter((word) => !knownAliases.has(word))
+    .filter((word, index, all) => all.indexOf(word) === index);
+};
+
 function findVoicePlayers(segment: string, players: Player[]): Player[] {
   const normalized = normalizeVoiceText(segment);
   const exactMatches = players.flatMap((player) => {
-    const full = normalizeVoiceText(player.naam);
-    const first = full.split(" ")[0];
-    const aliases = Array.from(new Set([full, first])).filter((alias) => alias.length >= 2);
+    const aliases = voiceAliasesForPlayer(player);
     const positions = aliases
       .map((alias) => ({ alias, index: ` ${normalized} `.indexOf(` ${alias} `) }))
       .filter((match) => match.index >= 0)
       .sort((a, b) => a.index - b.index || b.alias.length - a.alias.length);
-    return positions.length ? [{ player, index: positions[0].index }] : [];
+    return positions.length ? [{ player, index: positions[0].index, alias: positions[0].alias }] : [];
   }).sort((a, b) => a.index - b.index);
-  if (exactMatches.length) return exactMatches.map((match) => match.player);
+  const matchedPlayerIds = new Set(exactMatches.map((match) => match.player.id));
+  const exactRanges = exactMatches.map((match) => ({ start: match.index, end: match.index + match.alias.length }));
+  const fuzzyMatches: Array<{ player: Player; index: number }> = [];
+  const words = Array.from(normalized.matchAll(/\b[a-z0-9-]+\b/g))
+    .map((match) => ({ word: match[0], index: match.index ?? 0 }))
+    .filter(({ word, index }) => word.length >= 3 && !VOICE_NON_NAME_WORDS.has(word) && !exactRanges.some((range) => index >= range.start && index < range.end));
 
-  const words = normalized.split(" ").filter((word) => word.length >= 3);
-  const fuzzy = players.flatMap((player) => {
-    const first = normalizeVoiceText(player.naam).split(" ")[0];
-    const matchIndex = words.findIndex((word) => first.length >= 4 && voiceWordDistance(first, word) <= 1);
-    return matchIndex >= 0 ? [{ player, index: matchIndex }] : [];
-  }).sort((a, b) => a.index - b.index);
-  return fuzzy.map((match) => match.player);
+  words.forEach(({ word, index }) => {
+    const candidates = players
+      .filter((player) => !matchedPlayerIds.has(player.id))
+      .map((player) => {
+        const aliases = voiceAliasesForPlayer(player);
+        const distances = aliases.map((alias) => ({ alias, distance: voiceNameDistance(alias, word) }));
+        const best = distances.sort((a, b) => a.distance - b.distance || b.alias.length - a.alias.length)[0];
+        return { player, first: best?.alias ?? "", distance: best?.distance ?? Number.POSITIVE_INFINITY };
+      })
+      .filter(({ first, distance }) => {
+        const shortestLength = Math.min(voiceNameKey(first).length, voiceNameKey(word).length);
+        const maximumDistance = shortestLength >= 7 ? 2 : 1;
+        return first.length >= 3 && distance <= maximumDistance;
+      })
+      .sort((a, b) => a.distance - b.distance || b.first.length - a.first.length);
+    const bestDistance = candidates[0]?.distance;
+    const best = candidates.filter((candidate) => candidate.distance === bestDistance);
+    if (best.length === 1) {
+      matchedPlayerIds.add(best[0].player.id);
+      fuzzyMatches.push({ player: best[0].player, index });
+    }
+  });
+
+  return [...exactMatches, ...fuzzyMatches]
+    .sort((a, b) => a.index - b.index)
+    .map((match) => match.player);
 }
 
 function findVoicePlayerImmediatelyBeforeAction(transcript: string, actionStart: number, players: Player[]): Player | undefined {
   const prefix = transcript.slice(0, actionStart).trim();
   if (!prefix) return undefined;
   const matches = players.flatMap((player) => {
-    const full = normalizeVoiceText(player.naam);
-    const first = full.split(" ")[0];
-    const aliases = Array.from(new Set([full, first])).filter((alias) => alias.length >= 2);
+    const aliases = voiceAliasesForPlayer(player);
     const alias = aliases
       .filter((candidate) => prefix === candidate || prefix.endsWith(` ${candidate}`))
       .sort((a, b) => b.length - a.length)[0];
@@ -793,19 +862,26 @@ function findVoicePlayerImmediatelyBeforeAction(transcript: string, actionStart:
   }).sort((a, b) => b.aliasLength - a.aliasLength);
   const longest = matches[0]?.aliasLength;
   const equallyStrong = matches.filter((match) => match.aliasLength === longest);
-  return equallyStrong.length === 1 ? equallyStrong[0].player : undefined;
+  if (equallyStrong.length === 1) return equallyStrong[0].player;
+  const prefixWords = prefix.split(" ");
+  const finalWord = prefixWords[prefixWords.length - 1] ?? "";
+  const fuzzy = findVoicePlayers(finalWord, players);
+  return fuzzy.length === 1 ? fuzzy[0] : undefined;
 }
 
 function parseVoiceMatchCommands(transcript: string, state: AppState): VoiceParseResult {
   const normalized = normalizeVoiceText(transcript)
+    .replace(/\b(wissel|wisselen|draai|draaien)\s+(van\s+)?(vak|vakken|helft|aanval\s+(en\s+)?verdediging)\b/g, "vakwissel")
+    .replace(/\b(aanval|aanvallend)\s+(en|met|naar)?\s*(verdediging|verdedigend)\s+(wissel|wisselen|omdraaien)\b/g, "vakwissel")
     .replace(/vrije\s+bal/g, "vrijebal")
     .replace(/doorloop\s+bal/g, "doorloopbal")
     .replace(/doorloopbal/g, "doorloop");
-  const starts = Array.from(normalized.matchAll(/\b(schot|doorloop|vrijebal|strafworp|rebound|steal|steel|wissel)\b/g));
-  if (!starts.length) return { commands: [], errors: ["Geen herkenbare wedstrijdactie gehoord."] };
+  const starts = Array.from(normalized.matchAll(/\b(schot|doorloop|vrijebal|strafworp|rebound|steal|steel|wissel|vakwissel)\b/g));
+  if (!starts.length) return { commands: [], errors: ["Geen herkenbare wedstrijdactie gehoord."], unresolvedNames: [] };
 
   const commands: VoiceParsedCommand[] = [];
   const errors: string[] = [];
+  const unresolvedNames: string[] = [];
   const fieldPlayerIds = new Set([...state.aanval, ...state.verdediging].filter((id): id is string => Boolean(id)));
   const eligiblePlayers = state.spelers.filter((player) => player.actief || fieldPlayerIds.has(player.id));
   starts.forEach((match, index) => {
@@ -817,9 +893,15 @@ function parseVoiceMatchCommands(transcript: string, state: AppState): VoicePars
     const playerBeforeAction = findVoicePlayerImmediatelyBeforeAction(normalized, start, eligiblePlayers);
     const matchedPlayers = playersAfterAction.length ? playersAfterAction : playerBeforeAction ? [playerBeforeAction] : [];
 
+    if (keyword === "vakwissel") {
+      commands.push({ kind: "swapVakken", label: "Aanval en verdediging gewisseld" });
+      return;
+    }
+
     if (keyword === "wissel") {
       const uniquePlayers = matchedPlayers.filter((player, playerIndex, all) => all.findIndex((item) => item.id === player.id) === playerIndex);
       if (uniquePlayers.length < 2) {
+        extractUnresolvedVoiceNames(segment, eligiblePlayers).forEach((name) => unresolvedNames.push(name));
         errors.push(`Wissel niet verwerkt: noem eerst de speler die eruit gaat en daarna de speler die erin komt.`);
         return;
       }
@@ -840,6 +922,7 @@ function parseVoiceMatchCommands(transcript: string, state: AppState): VoicePars
       const noRebound = /\bgeen\s+rebound\b/.test(segment);
       const player = matchedPlayers[0];
       if (!noRebound && !player) {
+        extractUnresolvedVoiceNames(segment, eligiblePlayers).forEach((name) => unresolvedNames.push(name));
         errors.push("Rebound niet verwerkt: noem de speler of zeg ‘geen rebound’. ");
         return;
       }
@@ -853,12 +936,23 @@ function parseVoiceMatchCommands(transcript: string, state: AppState): VoicePars
 
     if (keyword === "steal" || keyword === "steel") {
       const player = matchedPlayers[0];
+      const unresolved = player ? [] : extractUnresolvedVoiceNames(segment, eligiblePlayers);
+      if (unresolved.length) {
+        unresolved.forEach((name) => unresolvedNames.push(name));
+        errors.push("Steal niet verwerkt: speler niet herkend.");
+        return;
+      }
       commands.push({ kind: "steal", playerId: player?.id, label: `Steal${player ? ` ${player.naam}` : ""}` });
       return;
     }
 
     const player = matchedPlayers[0];
     if (!player) {
+      extractUnresolvedVoiceNames(segment, eligiblePlayers).forEach((name) => unresolvedNames.push(name));
+      if (playerBeforeAction == null) {
+        const before = normalized.slice(0, start).trim().split(" ").pop() ?? "";
+        if (before.length >= 2 && !VOICE_NON_NAME_WORDS.has(before)) unresolvedNames.push(before);
+      }
       errors.push(`${keyword} niet verwerkt: speler niet herkend.`);
       return;
     }
@@ -878,7 +972,7 @@ function parseVoiceMatchCommands(transcript: string, state: AppState): VoicePars
     }
     commands.push({ kind: "attempt", action, outcome, playerId: player.id, label: `${action} ${player.naam} · ${outcome}` });
   });
-  return { commands, errors };
+  return { commands, errors, unresolvedNames: Array.from(new Set(unresolvedNames)) };
 }
 
 function startVoiceAttackAt(state: AppState, vak: VakSide, elapsedSeconds: number) {
@@ -988,7 +1082,15 @@ function applyVoiceCommands(state: AppState, commands: VoiceParsedCommand[], con
     if (command.kind === "attempt") return applyVoiceAttempt(current, command, context.elapsedSeconds);
     if (command.kind === "rebound") return applyVoiceRebound(current, command, context.elapsedSeconds);
     if (command.kind === "steal") return applyVoiceSteal(current, command, context.elapsedSeconds, context.activeVak);
-    return applyVoiceSubstitution(current, command, context.elapsedSeconds);
+    if (command.kind === "substitution") return applyVoiceSubstitution(current, command, context.elapsedSeconds);
+    return {
+      ...current,
+      aanval: current.verdediging,
+      verdediging: current.aanval,
+      vak1Aanvallend: !current.vak1Aanvallend,
+      goalsSinceLastSwitch: 0,
+      markerGroup: current.markerGroup + 1,
+    };
   }, state);
 }
 
@@ -2172,6 +2274,22 @@ export default function App() {
         actief: boolean;
       }>;
 
+      // Spraakaliassen zijn een aanvullende, niet-kritieke bron. Daardoor blijft
+      // het teamroster ook werken wanneer de aliasmigratie nog niet is uitgevoerd.
+      const voiceAliasesByPlayerId = new Map<string, string[]>();
+      const { data: voiceAliasData, error: voiceAliasError } = await supabase
+        .from("player_voice_aliases")
+        .select("player_id,alias")
+        .in("player_id", playerIds);
+      if (!voiceAliasError) {
+        (voiceAliasData ?? []).forEach((row: any) => {
+          const playerId = String(row.player_id ?? "");
+          const alias = String(row.alias ?? "").trim();
+          if (!playerId || !alias) return;
+          voiceAliasesByPlayerId.set(playerId, [...(voiceAliasesByPlayerId.get(playerId) ?? []), alias]);
+        });
+      }
+
       const personIds = Array.from(
         new Set(
           managedPlayers
@@ -2239,6 +2357,7 @@ export default function App() {
             geslacht: player.geslacht,
             status: membership.status,
             actief: true,
+            voiceAliases: voiceAliasesByPlayerId.get(player.id) ?? [],
           }];
         })
         .sort((a, b) =>
@@ -5989,13 +6108,35 @@ function VakindelingTab({
             <span className="text-sm">minuten</span>
           </div>
 
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setAanvalLinks(!aanvalLinks)}
-          >
-            Aanval {aanvalLinks ? "links" : "rechts"} starten
-          </Button>
+          <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+            <div className="mb-2 text-xs font-extrabold uppercase tracking-wide text-blue-800">
+              Startzijde aanval
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={aanvalLinks}
+              aria-label={`De aanval start ${aanvalLinks ? "links" : "rechts"}`}
+              onClick={() => setAanvalLinks(!aanvalLinks)}
+              className="relative grid h-12 w-full min-w-[240px] grid-cols-2 overflow-hidden rounded-full border border-blue-200 bg-slate-200 p-1 shadow-inner outline-none transition focus:ring-4 focus:ring-blue-100 sm:w-[280px]"
+            >
+              <span
+                aria-hidden="true"
+                className={`absolute bottom-1 left-1 top-1 w-[calc(50%_-_4px)] rounded-full bg-blue-600 shadow-md transition-transform duration-200 ease-out ${
+                  aanvalLinks ? "translate-x-0" : "translate-x-full"
+                }`}
+              />
+              <span className={`relative z-10 flex items-center justify-center gap-1 text-sm font-black transition-colors ${aanvalLinks ? "text-white" : "text-slate-500"}`}>
+                <span className="text-lg">←</span> Links
+              </span>
+              <span className={`relative z-10 flex items-center justify-center gap-1 text-sm font-black transition-colors ${aanvalLinks ? "text-slate-500" : "text-white"}`}>
+                Rechts <span className="text-lg">→</span>
+              </span>
+            </button>
+            <div className="mt-2 text-center text-xs font-semibold text-blue-900">
+              De aanval begint aan de {aanvalLinks ? "linkerkant" : "rechterkant"} van het scherm.
+            </div>
+          </div>
         </div>
 
         {/* Minder vaak te wijzigen instellingen */}
@@ -6161,6 +6302,13 @@ function VakBox({
 type VoiceQueueStatus = "recording" | "processing" | "done" | "warning" | "error";
 type VoiceQueueView = { sequence: number; status: VoiceQueueStatus; message: string };
 type VoiceUndoCheckpoint = { before: AppState; afterSignature: string };
+type VoiceCompletedCommand = { context: VoiceCaptureContext; transcript?: string; error?: string };
+type VoiceNameResolution = {
+  completed: VoiceCompletedCommand;
+  spokenName: string;
+  assignments: Record<string, string>;
+};
+type VoiceAliasConfirmation = { alias: string; playerId: string; playerName: string };
 type BrowserSpeechRecognition = {
   lang: string;
   continuous: boolean;
@@ -6230,8 +6378,10 @@ function VoiceMatchControl({
   const recognitionStoppingRef = useRef(false);
   const sequenceRef = useRef(0);
   const nextApplyRef = useRef(1);
-  const completedRef = useRef(new Map<number, { context: VoiceCaptureContext; transcript?: string; error?: string }>());
+  const completedRef = useRef(new Map<number, VoiceCompletedCommand>());
   const drainingRef = useRef(false);
+  const resolutionPendingRef = useRef(false);
+  const aliasDecisionPendingRef = useRef(false);
   const heldRef = useRef(false);
   const maximumTimerRef = useRef<number | null>(null);
   const undoRef = useRef<VoiceUndoCheckpoint | null>(null);
@@ -6240,6 +6390,8 @@ function VoiceMatchControl({
   const [queue, setQueue] = useState<VoiceQueueView[]>([]);
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
+  const [nameResolution, setNameResolution] = useState<VoiceNameResolution | null>(null);
+  const [aliasConfirmations, setAliasConfirmations] = useState<VoiceAliasConfirmation[]>([]);
 
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => () => {
@@ -6270,8 +6422,30 @@ function VoiceMatchControl({
     showFeedback();
   };
 
+  const finishVoiceCommand = (completed: VoiceCompletedCommand, parsed: VoiceParseResult) => {
+    const sequence = completed.context.sequence;
+    if (!parsed.commands.length) {
+      updateQueueItem(sequence, "error", `${parsed.errors.join(" ") || "Opdracht niet begrepen."} Gehoord: “${completed.transcript}”`);
+    } else {
+      const labels = parsed.commands.map((command) => command.label).join(" · ");
+      setState((current) => {
+        const next = applyVoiceCommands(current, parsed.commands, completed.context);
+        undoRef.current = { before: current, afterSignature: voiceMatchSignature(next) };
+        stateRef.current = next;
+        return next;
+      });
+      setCanUndo(true);
+      window.setTimeout(() => setCanUndo(false), 6500);
+      updateQueueItem(sequence, parsed.errors.length ? "warning" : "done", `${labels}${parsed.errors.length ? ` · ${parsed.errors.join(" ")}` : ""}`);
+      if (navigator.vibrate) navigator.vibrate(parsed.errors.length ? [60, 50, 60] : 55);
+    }
+    nextApplyRef.current += 1;
+    drainingRef.current = false;
+    window.setTimeout(drainQueue, 0);
+  };
+
   const drainQueue = () => {
-    if (drainingRef.current) return;
+    if (drainingRef.current || resolutionPendingRef.current || aliasDecisionPendingRef.current) return;
     const sequence = nextApplyRef.current;
     const completed = completedRef.current.get(sequence);
     if (!completed) return;
@@ -6280,28 +6454,97 @@ function VoiceMatchControl({
 
     if (completed.error) {
       updateQueueItem(sequence, "error", completed.error);
+      nextApplyRef.current += 1;
+      drainingRef.current = false;
+      window.setTimeout(drainQueue, 0);
     } else {
       const parsed = parseVoiceMatchCommands(completed.transcript ?? "", stateRef.current);
-      if (!parsed.commands.length) {
-        updateQueueItem(sequence, "error", `${parsed.errors.join(" ") || "Opdracht niet begrepen."} Gehoord: “${completed.transcript}”`);
-      } else {
-        const labels = parsed.commands.map((command) => command.label).join(" · ");
-        setState((current) => {
-          const next = applyVoiceCommands(current, parsed.commands, completed.context);
-          undoRef.current = { before: current, afterSignature: voiceMatchSignature(next) };
-          stateRef.current = next;
-          return next;
-        });
-        setCanUndo(true);
-        window.setTimeout(() => setCanUndo(false), 6500);
-        updateQueueItem(sequence, parsed.errors.length ? "warning" : "done", `${labels}${parsed.errors.length ? ` · ${parsed.errors.join(" ")}` : ""}`);
-        if (navigator.vibrate) navigator.vibrate(parsed.errors.length ? [60, 50, 60] : 55);
+      if (parsed.unresolvedNames.length) {
+        resolutionPendingRef.current = true;
+        setNameResolution({ completed, spokenName: parsed.unresolvedNames[0], assignments: {} });
+        updateQueueItem(sequence, "warning", `Wie bedoelde je met “${parsed.unresolvedNames[0]}”? Kies de juiste speler.`);
+        drainingRef.current = false;
+        return;
       }
+      finishVoiceCommand(completed, parsed);
+    }
+  };
+
+  const resolveSpokenName = (player: Player) => {
+    if (!nameResolution) return;
+    const assignments = { ...nameResolution.assignments, [normalizeVoiceText(nameResolution.spokenName)]: player.id };
+    const stateWithTemporaryAliases: AppState = {
+      ...stateRef.current,
+      spelers: stateRef.current.spelers.map((candidate) => {
+        const aliases = Object.entries(assignments)
+          .filter(([, playerId]) => playerId === candidate.id)
+          .map(([alias]) => alias);
+        return aliases.length
+          ? { ...candidate, voiceAliases: Array.from(new Set([...(candidate.voiceAliases ?? []), ...aliases])) }
+          : candidate;
+      }),
+    };
+    const parsed = parseVoiceMatchCommands(nameResolution.completed.transcript ?? "", stateWithTemporaryAliases);
+    if (parsed.unresolvedNames.length) {
+      setNameResolution({ ...nameResolution, spokenName: parsed.unresolvedNames[0], assignments });
+      updateQueueItem(nameResolution.completed.context.sequence, "warning", `Wie bedoelde je met “${parsed.unresolvedNames[0]}”? Kies ook deze speler.`);
+      return;
     }
 
+    const confirmations = Object.entries(assignments).flatMap(([alias, playerId]) => {
+      const selected = stateRef.current.spelers.find((candidate) => candidate.id === playerId);
+      return selected ? [{ alias, playerId, playerName: selected.naam }] : [];
+    });
+    aliasDecisionPendingRef.current = confirmations.length > 0;
+    setAliasConfirmations((current) => [...current, ...confirmations]);
+    setNameResolution(null);
+    resolutionPendingRef.current = false;
+    finishVoiceCommand(nameResolution.completed, parsed);
+  };
+
+  const cancelNameResolution = () => {
+    if (!nameResolution) return;
+    updateQueueItem(nameResolution.completed.context.sequence, "error", `Opdracht niet verwerkt: “${nameResolution.spokenName}” is niet aan een speler gekoppeld.`);
+    setNameResolution(null);
+    resolutionPendingRef.current = false;
     nextApplyRef.current += 1;
     drainingRef.current = false;
     window.setTimeout(drainQueue, 0);
+  };
+
+  const dismissAliasConfirmation = () => setAliasConfirmations((current) => {
+    const next = current.slice(1);
+    if (!next.length) {
+      aliasDecisionPendingRef.current = false;
+      window.setTimeout(drainQueue, 0);
+    }
+    return next;
+  });
+
+  const saveAliasConfirmation = async () => {
+    const confirmation = aliasConfirmations[0];
+    if (!confirmation) return;
+    const { error } = await supabase.rpc("save_player_voice_alias", {
+      p_player_id: confirmation.playerId,
+      p_alias: confirmation.alias,
+    });
+    if (error) {
+      updateQueueItem(sequenceRef.current, "error", `Alias kon niet worden opgeslagen: ${error.message}`);
+      dismissAliasConfirmation();
+      return;
+    }
+    setState((current) => {
+      const next = {
+        ...current,
+        spelers: current.spelers.map((player) => player.id === confirmation.playerId
+          ? { ...player, voiceAliases: Array.from(new Set([...(player.voiceAliases ?? []), confirmation.alias])) }
+          : player),
+      };
+      stateRef.current = next;
+      return next;
+    });
+    updateQueueItem(sequenceRef.current, "done", `“${confirmation.alias}” wordt voortaan herkend als ${confirmation.playerName}.`);
+    dismissAliasConfirmation();
   };
 
   const transcribeClip = async (blob: Blob, context: VoiceCaptureContext) => {
@@ -6488,27 +6731,77 @@ function VoiceMatchControl({
 
   const pendingCount = queue.filter((item) => item.status === "recording" || item.status === "processing").length;
   const latest = queue[queue.length - 1];
-  return <div className="relative shrink-0" data-no-pause>
+  const fieldPlayerIds = new Set([...state.aanval, ...state.verdediging].filter((id): id is string => Boolean(id)));
+  const resolutionPlayers = state.spelers
+    .filter((player) => player.actief || fieldPlayerIds.has(player.id))
+    .sort((left, right) => Number(fieldPlayerIds.has(right.id)) - Number(fieldPlayerIds.has(left.id)) || left.naam.localeCompare(right.naam, "nl-NL"));
+  const aliasConfirmation = aliasConfirmations[0] ?? null;
+  return <>
+  <div
+    className="fixed left-1/2 z-[120] -translate-x-1/2"
+    style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 24px)" }}
+    data-no-pause
+  >
     <button
       type="button"
-      disabled={disabled}
+      disabled={disabled || Boolean(nameResolution)}
       onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); heldRef.current = true; void startRecording(); }}
       onPointerUp={(event) => { event.preventDefault(); stopRecording(); }}
       onKeyDown={(event) => { if ((event.key === " " || event.key === "Enter") && !event.repeat) { event.preventDefault(); heldRef.current = true; void startRecording(); } }}
       onKeyUp={(event) => { if (event.key === " " || event.key === "Enter") { event.preventDefault(); stopRecording(); } }}
       onContextMenu={(event) => event.preventDefault()}
-      className={`relative flex h-full min-h-[45px] w-14 touch-none select-none items-center justify-center border transition disabled:cursor-not-allowed disabled:opacity-40 ${recording ? "border-red-500 bg-red-600 text-white shadow-inner" : "border-blue-200 bg-blue-600 text-white hover:bg-blue-700"}`}
+      className={`relative flex h-16 w-16 touch-none select-none items-center justify-center rounded-full border-2 border-white transition shadow-[0_12px_35px_rgba(15,23,42,0.28)] disabled:cursor-not-allowed disabled:opacity-40 ${recording ? "bg-red-600 text-white shadow-inner" : "bg-blue-600 text-white hover:scale-105 hover:bg-blue-700"}`}
       aria-label="Houd ingedrukt om een wedstrijdactie in te spreken"
       title="Houd ingedrukt en spreek één of meer acties in"
     >
-      <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>
+      <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>
       {pendingCount > 0 && !recording && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-orange-500 px-1 text-[10px] font-black text-white">{pendingCount}</span>}
     </button>
-    {feedbackVisible && latest && <div className={`absolute right-0 top-[calc(100%+0.45rem)] z-50 w-[min(330px,86vw)] rounded-xl border p-3 text-xs shadow-2xl ${latest.status === "done" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : latest.status === "error" ? "border-red-200 bg-red-50 text-red-900" : latest.status === "warning" ? "border-orange-200 bg-orange-50 text-orange-900" : "border-blue-200 bg-white text-blue-900"}`}>
+    {feedbackVisible && latest && <div className={`absolute bottom-[calc(100%+0.75rem)] left-1/2 z-50 w-[min(360px,88vw)] -translate-x-1/2 rounded-xl border p-3 text-xs shadow-2xl ${latest.status === "done" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : latest.status === "error" ? "border-red-200 bg-red-50 text-red-900" : latest.status === "warning" ? "border-orange-200 bg-orange-50 text-orange-900" : "border-blue-200 bg-white text-blue-900"}`}>
       <div className="flex items-start gap-2"><span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${latest.status === "recording" ? "animate-pulse bg-red-500" : latest.status === "processing" ? "animate-pulse bg-blue-500" : latest.status === "done" ? "bg-emerald-500" : latest.status === "warning" ? "bg-orange-500" : "bg-red-500"}`}/><span className="min-w-0 flex-1 font-semibold leading-5">{latest.message}</span><button type="button" onClick={() => setFeedbackVisible(false)} className="text-base leading-none opacity-60">×</button></div>
       <div className="mt-2 flex items-center justify-between gap-3 text-[10px] opacity-70"><span>{pendingCount ? `${pendingCount} opdracht${pendingCount === 1 ? "" : "en"} in verwerking` : "Verwerkt op wedstrijdtijd"}</span>{canUndo && <button type="button" onClick={undoLastVoiceBatch} className="rounded-lg border border-current px-2 py-1 font-black opacity-100">Ongedaan maken</button>}</div>
     </div>}
-  </div>;
+  </div>
+
+  {nameResolution && <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm" data-no-pause>
+    <div role="dialog" aria-modal="true" aria-labelledby="voice-player-title" className="flex max-h-[88vh] w-[min(920px,94vw)] flex-col overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-2xl">
+      <div className="border-b border-slate-200 bg-gradient-to-r from-blue-50 to-white px-5 py-5 sm:px-7">
+        <div className="text-xs font-black uppercase tracking-[0.16em] text-blue-600">Gesproken naam controleren</div>
+        <h2 id="voice-player-title" className="mt-1 text-2xl font-black text-slate-950">Wie bedoelde je met “{nameResolution.spokenName}”?</h2>
+        <p className="mt-2 text-sm text-slate-600">Tik de juiste speler aan. De gesproken opdracht wordt daarna alsnog verwerkt.</p>
+        <div className="mt-3 rounded-xl border border-blue-100 bg-white px-3 py-2 text-sm font-semibold text-blue-950">Gehoord: “{nameResolution.completed.transcript}”</div>
+      </div>
+      <div className="overflow-y-auto p-4 sm:p-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {resolutionPlayers.map((player) => {
+            const inField = fieldPlayerIds.has(player.id);
+            const vak = detectVakForSpeler(state, player.id);
+            return <button key={player.id} type="button" onClick={() => resolveSpokenName(player)} className="min-h-24 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-400 hover:bg-blue-50 focus:outline-none focus:ring-4 focus:ring-blue-100">
+              <span className="block text-base font-black text-slate-950">{player.naam}</span>
+              <span className="mt-1 block text-xs font-bold text-slate-500">{inField ? vak === "aanvallend" ? "Aanvallend vak" : "Verdedigend vak" : "Wisselveld"}{player.status === "Gast" ? " · Gastspeler" : ""}</span>
+            </button>;
+          })}
+        </div>
+      </div>
+      <div className="flex justify-end border-t border-slate-200 bg-slate-50 px-5 py-4 sm:px-7">
+        <button type="button" onClick={cancelNameResolution} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-100">Opdracht overslaan</button>
+      </div>
+    </div>
+  </div>}
+
+  {aliasConfirmation && !nameResolution && <div className="fixed inset-0 z-[171] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" data-no-pause>
+    <div role="dialog" aria-modal="true" aria-labelledby="voice-alias-title" className="w-[min(560px,94vw)] rounded-3xl border border-blue-100 bg-white p-6 shadow-2xl sm:p-8">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100 text-2xl">🎙️</div>
+      <h2 id="voice-alias-title" className="mt-4 text-2xl font-black text-slate-950">Naam voortaan onthouden?</h2>
+      <p className="mt-3 text-base leading-7 text-slate-600">Wil je <strong className="text-slate-950">“{aliasConfirmation.alias}”</strong> voortaan als gesproken alias koppelen aan <strong className="text-slate-950">{aliasConfirmation.playerName}</strong>?</p>
+      <p className="mt-2 text-xs text-slate-500">De wedstrijdactie is al verwerkt. Alleen na jouw bevestiging wordt de alias opgeslagen.</p>
+      <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+        <button type="button" onClick={dismissAliasConfirmation} className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-100">Alleen deze keer</button>
+        <button type="button" onClick={() => void saveAliasConfirmation()} className="rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-blue-700">Ja, alias opslaan</button>
+      </div>
+    </div>
+  </div>}
+  </>;
 }
 
 function WedstrijdTab({
