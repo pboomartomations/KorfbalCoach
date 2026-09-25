@@ -6887,6 +6887,21 @@ function WedstrijdTab({
   const [draftScoreUit, setDraftScoreUit] = useState(state.scoreUit);
   const matchActionsRef = useRef<HTMLDetailsElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(() => Boolean(document.fullscreenElement));
+  const [isPortrait, setIsPortrait] = useState(() =>
+    window.matchMedia?.("(orientation: portrait)").matches ?? window.innerHeight > window.innerWidth
+  );
+
+  useEffect(() => {
+    const portraitQuery = window.matchMedia("(orientation: portrait)");
+    const syncOrientation = () => setIsPortrait(portraitQuery.matches);
+    syncOrientation();
+    if (portraitQuery.addEventListener) portraitQuery.addEventListener("change", syncOrientation);
+    else portraitQuery.addListener(syncOrientation);
+    return () => {
+      if (portraitQuery.removeEventListener) portraitQuery.removeEventListener("change", syncOrientation);
+      else portraitQuery.removeListener(syncOrientation);
+    };
+  }, []);
 
   useEffect(() => {
     const syncFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -7466,8 +7481,8 @@ const attackUitPct =
             {/* De twee velden krijgen de volledige beschikbare breedte. */}
             <div className="relative mt-4" data-no-pause>
               <div className="mb-4">
-                {/* BOVEN: twee veld-afbeeldingen, altijd horizontaal */}
-                <div className="relative grid min-w-0 grid-cols-2 gap-3 xl:gap-5">
+                {/* Liggend: beide velden. Staand: alleen het actieve veld. */}
+                <div className={`relative grid min-w-0 gap-3 xl:gap-5 ${isPortrait ? "grid-cols-1" : "grid-cols-2"}`}>
                 {state.aanvalLinks ? (
                   <>
                     {/* LINKS: Aanvallend veld */}
@@ -7478,6 +7493,7 @@ const attackUitPct =
                       active={state.activeVak === "aanvallend"}
                       onClick={() => handleVakClick("aanvallend")}
                       markers={aanvalMarkers}
+                      className={isPortrait && state.activeVak !== "aanvallend" ? "hidden" : ""}
                       onFieldClick={
                         state.activeVak === "aanvallend"
                           ? (xPct, yPct) =>
@@ -7494,6 +7510,7 @@ const attackUitPct =
                       active={state.activeVak === "verdedigend"}
                       onClick={() => handleVakClick("verdedigend")}
                       markers={verdedigMarkers}
+                      className={isPortrait && state.activeVak !== "verdedigend" ? "hidden" : ""}
                       onFieldClick={
                         state.activeVak === "verdedigend"
                           ? (xPct, yPct) =>
@@ -7513,6 +7530,7 @@ const attackUitPct =
                       active={state.activeVak === "verdedigend"}
                       onClick={() => handleVakClick("verdedigend")}
                       markers={verdedigMarkers}
+                      className={isPortrait && state.activeVak !== "verdedigend" ? "hidden" : ""}
                       onFieldClick={
                         state.activeVak === "verdedigend"
                           ? (xPct, yPct) =>
@@ -7530,6 +7548,7 @@ const attackUitPct =
                       active={state.activeVak === "aanvallend"}
                       onClick={() => handleVakClick("aanvallend")}
                       markers={aanvalMarkers}
+                      className={isPortrait && state.activeVak !== "aanvallend" ? "hidden" : ""}
                       onFieldClick={
                         state.activeVak === "aanvallend"
                           ? (xPct, yPct) =>
@@ -7545,21 +7564,32 @@ const attackUitPct =
                     onClick={(e) => { e.stopPropagation(); wisselVakken(); }}
                     aria-label="Aanval en verdediging wisselen"
                     title="Aanval en verdediging wisselen"
-                    className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 h-16 w-16 items-center justify-center rounded-full border-2 border-blue-200 bg-white text-3xl font-black text-blue-700 shadow-xl transition hover:bg-blue-50 active:scale-95"
+                    className={`${isPortrait ? "hidden" : "flex"} absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 h-16 w-16 items-center justify-center rounded-full border-2 border-blue-200 bg-white text-3xl font-black text-blue-700 shadow-xl transition hover:bg-blue-50 active:scale-95`}
                   >
                     ⇄
                   </button>
                 </div>
 
+                {isPortrait && (
+                  <button
+                    type="button"
+                    onClick={() => setState((s) => startAttackForVak(s, s.activeVak === "aanvallend" ? "verdedigend" : "aanvallend"))}
+                    className="mt-3 flex w-full items-center justify-center gap-3 rounded-2xl border-2 border-blue-200 bg-blue-600 px-4 py-3 text-base font-extrabold text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.99]"
+                  >
+                    <span className="text-xl" aria-hidden="true">⇄</span>
+                    <span>{state.activeVak === "aanvallend" ? "Maak verdediging actief" : "Maak aanval actief"}</span>
+                  </button>
+                )}
+
               </div>
 
               {/* ONDER: vakken met spelers en wisselknoppen */}
-              <div className="grid md:grid-cols-2 gap-4">
+              <div className={`grid gap-4 ${isPortrait ? "grid-cols-1" : "md:grid-cols-2"}`}>
                 {state.aanvalLinks ? (
                   <>
                     {/* LINKS: Aanvallend vak */}
                     <div
-                      className={`rounded-2xl p-4 border ${
+                      className={`${isPortrait && state.activeVak !== "aanvallend" ? "hidden" : ""} rounded-2xl p-4 border ${
                         aanvValid ? "border-gray-200" : "border-red-500"
                       } ${
                         state.activeVak === "aanvallend"
@@ -7601,7 +7631,7 @@ const attackUitPct =
 
                     {/* RECHTS: Verdedigend vak */}
                     <div
-                      className={`rounded-2xl p-4 border ${
+                      className={`${isPortrait && state.activeVak !== "verdedigend" ? "hidden" : ""} rounded-2xl p-4 border ${
                         verdValid ? "border-gray-200" : "border-red-500"
                       } ${
                         state.activeVak === "verdedigend"
@@ -7645,7 +7675,7 @@ const attackUitPct =
                   <>
                     {/* LINKS: Verdedigend vak */}
                     <div
-                      className={`rounded-2xl p-4 border ${
+                      className={`${isPortrait && state.activeVak !== "verdedigend" ? "hidden" : ""} rounded-2xl p-4 border ${
                         verdValid ? "border-gray-200" : "border-red-500"
                       } ${
                         state.activeVak === "verdedigend"
@@ -7687,7 +7717,7 @@ const attackUitPct =
 
                     {/* RECHTS: Aanvallend vak */}
                     <div
-                      className={`rounded-2xl p-4 border ${
+                      className={`${isPortrait && state.activeVak !== "aanvallend" ? "hidden" : ""} rounded-2xl p-4 border ${
                         aanvValid ? "border-gray-200" : "border-red-500"
                       } ${
                         state.activeVak === "aanvallend"
@@ -12983,6 +13013,7 @@ type FieldImageCardProps = {
   title: string;
   imgSrc: string;
   timeSummary?: string;
+  className?: string;
   active: boolean;
   onClick: () => void;
   onFieldClick?: (xPct: number, yPct: number) => void;
@@ -12994,6 +13025,7 @@ function FieldImageCard({
   title,
   imgSrc,
   timeSummary,
+  className = "",
   active,
   onClick,
   onFieldClick,
@@ -13033,7 +13065,7 @@ function FieldImageCard({
   }
 
   return (
-    <div className={`w-full overflow-hidden rounded-2xl border ${isAttack ? "border-green-200 bg-green-50/80" : "border-red-200 bg-red-50/80"}`}>
+    <div className={`${className} w-full overflow-hidden rounded-2xl border ${isAttack ? "border-green-200 bg-green-50/80" : "border-red-200 bg-red-50/80"}`}>
       <div className="grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-3 py-2">
         <span />
         <div className="text-center">
