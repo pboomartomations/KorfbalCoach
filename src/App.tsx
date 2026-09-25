@@ -784,7 +784,9 @@ const voiceNameDistance = (left: string, right: string) => Math.min(
 
 const VOICE_NON_NAME_WORDS = new Set([
   "schot", "doorloop", "doorloopbal", "vrijebal", "strafworp", "rebound", "steal", "steel", "wissel",
-  "raak", "doelpunt", "goal", "korf", "verdedigd", "mis", "mist", "misser", "geen", "van", "naar", "voor", "met", "en",
+  "raak", "raakt", "geraakt", "doelpunt", "goal", "korf", "verdedigd", "verdedigt", "verdedigde", "verdedigen",
+  "mis", "mist", "gemist", "misser", "naast", "geen", "van", "naar", "voor", "met", "en",
+  "onderschepping", "onderschept", "gestolen", "afvang",
   "speler", "eruit", "erin", "uit", "in", "gaat", "komt", "de", "het", "een", "dan", "daarna",
   "vak", "vakken", "helft", "aanval", "aanvallend", "verdediging", "verdedigend", "wisselen", "draai", "draaien", "vakwissel",
 ]);
@@ -873,9 +875,18 @@ function parseVoiceMatchCommands(transcript: string, state: AppState): VoicePars
   const normalized = normalizeVoiceText(transcript)
     .replace(/\b(wissel|wisselen|draai|draaien)\s+(van\s+)?(vak|vakken|helft|aanval\s+(en\s+)?verdediging)\b/g, "vakwissel")
     .replace(/\b(aanval|aanvallend)\s+(en|met|naar)?\s*(verdediging|verdedigend)\s+(wissel|wisselen|omdraaien)\b/g, "vakwissel")
-    .replace(/vrije\s+bal/g, "vrijebal")
-    .replace(/doorloop\s+bal/g, "doorloopbal")
-    .replace(/doorloopbal/g, "doorloop");
+    .replace(/\b(vrije\s+bal|vrij\s+bal|vrije\s+worp)\b/g, "vrijebal")
+    .replace(/\bshot\b/g, "schot")
+    .replace(/\bdoorloop\s*bal\b/g, "doorloop")
+    .replace(/\bdoorloper\b/g, "doorloop")
+    .replace(/\b(straf\s+worp|stip|penalty)\b/g, "strafworp")
+    .replace(/\b(afvang|afgevangen|reboundt|rebounds)\b/g, "rebound")
+    .replace(/\b(onderschepping|onderschept|bal\s+gestolen|gestolen|steelt|stelen|stiel)\b/g, "steal")
+    .replace(/\bwisselen\b/g, "wissel")
+    .replace(/\b(verdedigt|verdedicht|verdedigde|verdedigen)\b/g, "verdedigd")
+    .replace(/\b(geen\s+korf|naast)\b/g, "mis")
+    .replace(/\b(gemist|mist|misser)\b/g, "mis")
+    .replace(/\b(raakt|geraakt)\b/g, "raak");
   const starts = Array.from(normalized.matchAll(/\b(schot|doorloop|vrijebal|strafworp|rebound|steal|steel|wissel|vakwissel)\b/g));
   if (!starts.length) return { commands: [], errors: ["Geen herkenbare wedstrijdactie gehoord."], unresolvedNames: [] };
 
@@ -957,13 +968,14 @@ function parseVoiceMatchCommands(transcript: string, state: AppState): VoicePars
       return;
     }
     const action: VoiceAttemptAction = keyword === "schot" ? "Schot" : keyword === "doorloop" ? "Doorloop" : keyword === "strafworp" ? "Strafworp" : "Vrijebal";
-    const outcome: VoiceAttemptOutcome | null = /\b(raak|doelpunt|goal)\b/.test(segment)
-      ? "Raak"
-      : /\bkorf\b/.test(segment)
+    // Korf eerst: "raakt de korf" bevat na normalisatie zowel "raak" als "korf".
+    const outcome: VoiceAttemptOutcome | null = /\bkorf\b/.test(segment)
       ? "Korf"
       : /\bverdedigd\b/.test(segment)
       ? "Verdedigd"
-      : /\bmis(t|ser)?\b/.test(segment)
+      : /\b(raak|doelpunt|goal)\b/.test(segment)
+      ? "Raak"
+      : /\bmis\b/.test(segment)
       ? "Mis"
       : null;
     if (!outcome) {
