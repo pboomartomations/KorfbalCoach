@@ -7689,7 +7689,6 @@ const attackUitPct =
               />
               {finalMinuteFrozen && <div className="mt-1 truncate text-[9px] font-bold text-amber-800 sm:text-[10px]">Klok staat vast; registreer de laatste acties en kies daarna de volgende helft of einde wedstrijd.</div>}
             </div>
-            <VoiceMatchControl state={state} setState={setState} disabled={wedstrijdAfgelopen || wedstrijdNietGestart} />
             <details ref={matchActionsRef} className="group relative">
               <summary className={`flex h-full min-w-[48px] cursor-pointer list-none items-center justify-center rounded-r-xl border-l px-3 text-xl font-black marker:hidden ${finalMinuteFrozen ? "border-amber-200 text-amber-900 hover:bg-amber-100" : "border-slate-200 text-slate-700 hover:bg-white/70"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
               <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
@@ -7714,6 +7713,9 @@ const attackUitPct =
               </div>
             </details>
           </div>
+        )}
+        {!wedstrijdNietGestart && !wedstrijdAfgelopen && !eersteHelftAfgelopen && (
+          <VoiceMatchControl state={state} setState={setState} disabled={false} />
         )}
       </div>
 
