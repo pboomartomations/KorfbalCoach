@@ -501,6 +501,30 @@ function formatTime(secs: number) {
   return `${m}:${s}`;
 }
 
+// De zichtbare klok blijft in de laatste minuut staan. Bij de bewuste overgang
+// naar de volgende helft/eindstand tellen we die nominale minuut één keer mee
+// voor wedstrijdtijd, spelers en het actuele balbezit.
+function completeFrozenFinalMinute(state: AppState): AppState {
+  const halfTotal = (Number.isFinite(state.halfMinuten) ? state.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
+  if (halfTotal <= 60) return state;
+  const halfEnd = state.currentHalf * halfTotal;
+  const freezeAt = halfEnd - 60;
+  if (state.tijdSeconden < freezeAt || state.tijdSeconden >= halfEnd) return state;
+  const delta = halfEnd - state.tijdSeconden;
+  const speelSeconden = { ...state.speelSeconden };
+  const veldIds = Array.from(new Set([...state.aanval, ...state.verdediging].filter((id): id is string => Boolean(id))));
+  veldIds.forEach((id) => {
+    speelSeconden[id] = Math.max(0, (speelSeconden[id] ?? 0) + delta);
+  });
+  return {
+    ...state,
+    tijdSeconden: halfEnd,
+    speelSeconden,
+    possessionThuisSeconden: state.possessionOwner === "thuis" ? state.possessionThuisSeconden + delta : state.possessionThuisSeconden,
+    possessionUitSeconden: state.possessionOwner === "uit" ? state.possessionUitSeconden + delta : state.possessionUitSeconden,
+  };
+}
+
 // Fase 29: vertaal de genormaliseerde PostgreSQL-tabellen terug naar het
 // bestaande analyseformaat. Hierdoor blijven alle huidige dashboards en
 // grafieken dezelfde velden gebruiken terwijl Supabase de primaire bron is.
@@ -3025,7 +3049,10 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
       const halfTotal = halfMinuten * 60;
     
       const currentHalfEnd = prev.currentHalf * halfTotal;
-      const nextTime = Math.min(prev.tijdSeconden + 1, currentHalfEnd);
+      // De laatste minuut blijft beschikbaar voor registratie. De klok stopt
+      // daarom bij 01:00 resterend en loopt nooit vanzelf een helft uit.
+      const finalMinuteStart = halfTotal > 60 ? currentHalfEnd - 60 : currentHalfEnd;
+      const nextTime = Math.min(prev.tijdSeconden + 1, finalMinuteStart);
     
       let updated: AppState = {
         ...prev,
@@ -3055,19 +3082,10 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
         updated.possessionUitSeconden = prev.possessionUitSeconden + 1;
       }
     
-      // helft vol → klok stoppen en aanval afsluiten
-      if (nextTime >= currentHalfEnd) {
+      // Laatste minuut bereikt → klok stoppen, maar de lopende aanval openlaten.
+      // Zo kunnen kansen en rebounds nog op deze helft worden geregistreerd.
+      if (nextTime >= finalMinuteStart) {
         updated.klokLoopt = false;
-    
-        if (prev.currentAttackId) {
-          const attacks = [...prev.attacks];
-          const idx = attacks.findIndex((a) => a.id === prev.currentAttackId);
-          if (idx >= 0 && attacks[idx].endSeconden == null) {
-            attacks[idx] = { ...attacks[idx], endSeconden: nextTime };
-          }
-          updated.attacks = attacks;
-          updated.currentAttackId = null;
-        }
       }
       return updated;
     });
@@ -4041,12 +4059,13 @@ const eindeWedstrijd = () => {
 
   if (!ok) return;
 
-  const now = state.tijdSeconden;
-  const attacks = [...state.attacks];
+  const completedState = completeFrozenFinalMinute(state);
+  const now = completedState.tijdSeconden;
+  const attacks = [...completedState.attacks];
 
-  if (state.currentAttackId) {
+  if (completedState.currentAttackId) {
       const idx = attacks.findIndex(
-        (a) => a.id === state.currentAttackId
+        (a) => a.id === completedState.currentAttackId
       );
 
       if (idx >= 0 && attacks[idx].endSeconden == null) {
@@ -4057,21 +4076,21 @@ const eindeWedstrijd = () => {
       }
   }
 
-  const vakPeriods = state.vakPeriods.map((period) =>
+  const vakPeriods = completedState.vakPeriods.map((period) =>
     period.endSeconden == null ? { ...period, endSeconden: now } : period
   );
-  const matchDate = state.matchDate || new Date().toLocaleDateString("sv-SE");
-  const opponentSlug = (state.opponentName || "tegenstander")
+  const matchDate = completedState.matchDate || new Date().toLocaleDateString("sv-SE");
+  const opponentSlug = (completedState.opponentName || "tegenstander")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "tegenstander";
-  const matchLegacyId = state.matchLegacyId ||
-    `WED-${matchDate}-${state.homeAway || "onbekend"}-${opponentSlug}`;
+  const matchLegacyId = completedState.matchLegacyId ||
+    `WED-${matchDate}-${completedState.homeAway || "onbekend"}-${opponentSlug}`;
 
   const finishedState: AppState = {
-    ...state,
+    ...completedState,
     klokLoopt: false,
     matchEnded: true,
     attacks,
@@ -4497,6 +4516,40 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
         .korbiq-app .bg-indigo-500 { background-color: #607b92 !important; }
         .korbiq-app .bg-purple-500 { background-color: #71869a !important; }
         .korbiq-app .bg-pink-500 { background-color: #8b9dac !important; }
+        .korbiq-time-slider {
+          height: 5px;
+          border-radius: 999px;
+          outline: none;
+        }
+        .korbiq-time-slider::-webkit-slider-runnable-track {
+          height: 5px;
+          border-radius: 999px;
+          background: transparent;
+        }
+        .korbiq-time-slider::-webkit-slider-thumb {
+          width: 18px;
+          height: 18px;
+          margin-top: -6.5px;
+          appearance: none;
+          border: 3px solid rgba(255,255,255,.96);
+          border-radius: 999px;
+          background: var(--kq-primary);
+          box-shadow: 0 1px 4px rgba(15,23,42,.28);
+        }
+        .korbiq-time-slider::-moz-range-track {
+          height: 5px;
+          border-radius: 999px;
+          background: transparent;
+        }
+        .korbiq-time-slider::-moz-range-thumb {
+          width: 14px;
+          height: 14px;
+          border: 3px solid rgba(255,255,255,.96);
+          border-radius: 999px;
+          background: var(--kq-primary);
+          box-shadow: 0 1px 4px rgba(15,23,42,.28);
+        }
+        .korbiq-time-slider:focus-visible { outline: 3px solid rgba(82,107,130,.18); outline-offset: 5px; }
         .korbiq-main h2, .korbiq-main h3 { letter-spacing: -.01em; }
         @media (max-width: 1023px) { .korbiq-desktop-sidebar { display:none; } }
       `}</style>
@@ -7000,6 +7053,8 @@ function WedstrijdTab({
   const [draftScoreThuis, setDraftScoreThuis] = useState(state.scoreThuis);
   const [draftScoreUit, setDraftScoreUit] = useState(state.scoreUit);
   const matchActionsRef = useRef<HTMLDetailsElement>(null);
+  const timeScrubWasRunningRef = useRef(false);
+  const [isTimeScrubbing, setIsTimeScrubbing] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(() => Boolean(document.fullscreenElement));
   const [isPortrait, setIsPortrait] = useState(() =>
     window.matchMedia?.("(orientation: portrait)").matches ?? window.innerHeight > window.innerWidth
@@ -7307,6 +7362,75 @@ function WedstrijdTab({
     Math.min(halfTotal, state.tijdSeconden - halfStart)
   );
   const resterend = Math.max(halfTotal - halfElapsed, 0);
+  const timelineEndElapsed = halfTotal > 60 ? halfTotal - 60 : halfTotal;
+  const timelineValue = Math.min(halfElapsed, timelineEndElapsed);
+  const timelineProgress = timelineEndElapsed > 0 ? (timelineValue / timelineEndElapsed) * 100 : 0;
+  const finalMinuteFrozen = halfTotal > 60 && timelineValue >= timelineEndElapsed && !state.klokLoopt;
+
+  const beginTimeScrub = () => {
+    timeScrubWasRunningRef.current = state.klokLoopt;
+    setIsTimeScrubbing(true);
+    if (state.klokLoopt) setState((s) => ({ ...s, klokLoopt: false }));
+  };
+
+  const seekMatchTime = (relativeSeconds: number) => {
+    setState((s) => {
+      const duration = (Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
+      const start = s.currentHalf === 1 ? 0 : duration;
+      const maximum = duration > 60 ? duration - 60 : duration;
+      const target = start + Math.max(0, Math.min(maximum, Math.round(relativeSeconds)));
+      const delta = target - s.tijdSeconden;
+      if (delta === 0 && !s.klokLoopt) return s;
+
+      // Houd speelminuten en balbezit synchroon met een kleine klokcorrectie.
+      const speelSeconden = { ...s.speelSeconden };
+      const veldIds = Array.from(new Set([...s.aanval, ...s.verdediging].filter((id): id is string => Boolean(id))));
+      veldIds.forEach((id) => {
+        speelSeconden[id] = Math.max(0, (speelSeconden[id] ?? 0) + delta);
+      });
+
+      const possessionThuisSeconden = s.possessionOwner === "thuis"
+        ? Math.max(0, s.possessionThuisSeconden + delta)
+        : s.possessionThuisSeconden;
+      const possessionUitSeconden = s.possessionOwner === "uit"
+        ? Math.max(0, s.possessionUitSeconden + delta)
+        : s.possessionUitSeconden;
+
+      const attacks = s.attacks.map((attack) =>
+        attack.id === s.currentAttackId && attack.endSeconden == null && attack.startSeconden > target
+          ? { ...attack, startSeconden: target }
+          : attack
+      );
+      const vakPeriods = s.vakPeriods.map((period) =>
+        period.endSeconden == null && period.startSeconden > target
+          ? { ...period, startSeconden: target }
+          : period
+      );
+
+      return {
+        ...s,
+        tijdSeconden: target,
+        klokLoopt: false,
+        speelSeconden,
+        possessionThuisSeconden,
+        possessionUitSeconden,
+        attacks,
+        vakPeriods,
+      };
+    });
+  };
+
+  const finishTimeScrub = () => {
+    setIsTimeScrubbing(false);
+    if (!timeScrubWasRunningRef.current) return;
+    setState((s) => {
+      const duration = (Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten) * 60;
+      const end = s.currentHalf * duration;
+      const freezeAt = duration > 60 ? end - 60 : end;
+      return { ...s, klokLoopt: s.tijdSeconden < freezeAt };
+    });
+    timeScrubWasRunningRef.current = false;
+  };
 
       const computeAttackSeconds = (team: AttackTeam) => {
         let total = 0;
@@ -7403,18 +7527,19 @@ const attackUitPct =
 
   const startTweedeHelft = () => {
     setState((s) => {
-      const halfMinuten = Number.isFinite(s.halfMinuten)
-        ? s.halfMinuten
+      const completed = completeFrozenFinalMinute(s);
+      const halfMinuten = Number.isFinite(completed.halfMinuten)
+        ? completed.halfMinuten
         : DEFAULT_STATE.halfMinuten;
       const halfTotal = halfMinuten * 60;
 
       return {
-        ...s,
+        ...completed,
         currentHalf: 2,
-        tijdSeconden: Math.max(s.tijdSeconden, halfTotal),
+        tijdSeconden: Math.max(completed.tijdSeconden, halfTotal),
         klokLoopt: true,
-        aanvalLinks: !s.aanvalLinks,
-        markerGroup: s.markerGroup + 1,
+        aanvalLinks: !completed.aanvalLinks,
+        markerGroup: completed.markerGroup + 1,
       };
     });
   };
@@ -7527,22 +7652,46 @@ const attackUitPct =
         </div>
 
         {!wedstrijdNietGestart && !wedstrijdAfgelopen && !eersteHelftAfgelopen && (
-          <div className="relative flex w-full" data-no-pause>
+          <div className={`relative flex w-full overflow-visible rounded-xl border shadow-sm ${finalMinuteFrozen ? "border-amber-200 bg-amber-50/70" : state.klokLoopt ? "border-slate-200 bg-white/70" : "border-blue-200 bg-blue-50/60"}`} data-no-pause>
             <button
               type="button"
+              disabled={finalMinuteFrozen}
               onClick={() => toggleKlok(!state.klokLoopt)}
-              className={`min-w-0 flex-1 rounded-l-xl border border-r-0 px-4 py-2.5 text-center font-extrabold tracking-wide transition ${
-                state.klokLoopt
-                  ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
-                  : "border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100"
-              }`}
+              className={`flex min-w-[48px] shrink-0 items-center justify-center gap-2 rounded-l-xl border-r px-3 text-center font-extrabold transition sm:min-w-[150px] ${finalMinuteFrozen ? "cursor-default border-amber-200 text-amber-900" : state.klokLoopt ? "border-slate-200 text-slate-700 hover:bg-white/70" : "border-blue-200 text-blue-800 hover:bg-white/70"}`}
             >
-              {state.klokLoopt ? "Ⅱ  PAUZEER WEDSTRIJD" : "▶  HERVAT WEDSTRIJD"}
-              <span className="ml-2 font-semibold text-sm opacity-70">{formatTime(resterend)}<span className="hidden sm:inline"> resterend</span></span>
+              <span className="text-lg">{finalMinuteFrozen ? "●" : state.klokLoopt ? "Ⅱ" : "▶"}</span>
+              <span className="hidden text-xs tracking-wide sm:inline">{finalMinuteFrozen ? "LAATSTE MINUUT" : state.klokLoopt ? "PAUZEER" : "HERVAT"}</span>
             </button>
+
+            <div className="flex min-w-0 flex-1 flex-col justify-center px-3 py-2 sm:px-4">
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{isTimeScrubbing ? "Tijd aanpassen" : `${state.currentHalf}e helft`}</span>
+                <span className="text-sm font-black tabular-nums text-slate-800 sm:text-base">{formatTime(resterend)} <span className="hidden text-[10px] font-bold uppercase tracking-wide text-slate-400 sm:inline">resterend</span></span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={timelineEndElapsed}
+                step={1}
+                value={timelineValue}
+                onPointerDown={beginTimeScrub}
+                onPointerUp={finishTimeScrub}
+                onPointerCancel={finishTimeScrub}
+                onKeyDown={() => {
+                  if (!isTimeScrubbing) beginTimeScrub();
+                }}
+                onKeyUp={finishTimeScrub}
+                onChange={(event) => seekMatchTime(Number(event.target.value))}
+                className="korbiq-time-slider h-5 w-full cursor-grab touch-none appearance-none bg-transparent active:cursor-grabbing"
+                style={{ background: `linear-gradient(to right, var(--kq-primary) 0%, var(--kq-primary) ${timelineProgress}%, rgba(148,163,184,.32) ${timelineProgress}%, rgba(148,163,184,.32) 100%)` }}
+                aria-label="Wedstrijdtijd aanpassen"
+                aria-valuetext={`${formatTime(resterend)} resterend in de ${state.currentHalf}e helft`}
+              />
+              {finalMinuteFrozen && <div className="mt-1 truncate text-[9px] font-bold text-amber-800 sm:text-[10px]">Klok staat vast; registreer de laatste acties en kies daarna de volgende helft of einde wedstrijd.</div>}
+            </div>
             <VoiceMatchControl state={state} setState={setState} disabled={wedstrijdAfgelopen || wedstrijdNietGestart} />
             <details ref={matchActionsRef} className="group relative">
-              <summary className={`flex h-full min-w-[52px] cursor-pointer list-none items-center justify-center rounded-r-xl border px-4 text-xl font-black marker:hidden ${state.klokLoopt ? "border-amber-200 bg-amber-100 text-amber-900 hover:bg-amber-200" : "border-blue-200 bg-blue-100 text-blue-800 hover:bg-blue-200"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
+              <summary className={`flex h-full min-w-[48px] cursor-pointer list-none items-center justify-center rounded-r-xl border-l px-3 text-xl font-black marker:hidden ${finalMinuteFrozen ? "border-amber-200 text-amber-900 hover:bg-amber-100" : "border-slate-200 text-slate-700 hover:bg-white/70"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
               <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
                 <button
                   type="button"
@@ -7550,9 +7699,10 @@ const attackUitPct =
                   onClick={() => {
                     matchActionsRef.current?.removeAttribute("open");
                     setState((s) => {
-                      const halfMinuten = Number.isFinite(s.halfMinuten) ? s.halfMinuten : DEFAULT_STATE.halfMinuten;
+                      const completed = completeFrozenFinalMinute(s);
+                      const halfMinuten = Number.isFinite(completed.halfMinuten) ? completed.halfMinuten : DEFAULT_STATE.halfMinuten;
                       const halfTotal = halfMinuten * 60;
-                      return { ...s, currentHalf: 2, tijdSeconden: Math.max(s.tijdSeconden, halfTotal), klokLoopt: false, aanvalLinks: !s.aanvalLinks, markerGroup: s.markerGroup + 1 };
+                      return { ...completed, currentHalf: 2, tijdSeconden: Math.max(completed.tijdSeconden, halfTotal), klokLoopt: false, aanvalLinks: !completed.aanvalLinks, markerGroup: completed.markerGroup + 1 };
                     });
                   }}
                   className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
