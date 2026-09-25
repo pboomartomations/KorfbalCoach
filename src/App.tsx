@@ -20,20 +20,20 @@ function Button({
   ...props
 }: ButtonProps) {
   const base =
-    "inline-flex items-center justify-center rounded-xl font-medium transition active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-offset-2";
+    "inline-flex items-center justify-center rounded-xl font-semibold shadow-sm transition duration-150 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-offset-2";
   const sizes = {
     sm: "px-2 py-1 text-sm",
     md: "px-3 py-2 text-base",
   } as const;
   const variants = {
     primary:
-      "bg-blue-600 text-white hover:bg-blue-700 border border-transparent focus:ring-blue-600",
+      "bg-blue-600/95 text-white hover:bg-blue-700 border border-white/10 focus:ring-blue-600",
     secondary:
-      "bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 focus:ring-gray-300",
+      "bg-white/75 text-slate-800 border border-slate-300/80 hover:bg-white/95 focus:ring-slate-300 backdrop-blur-sm",
     ghost:
-      "border border-transparent text-gray-700 hover:bg-gray-100 focus:ring-gray-300",
+      "border border-transparent text-slate-700 hover:bg-white/55 focus:ring-slate-300",
     danger:
-      "bg-red-600 text-white hover:bg-red-700 border border-transparent focus:ring-red-600",
+      "bg-red-600/90 text-white hover:bg-red-700 border border-white/10 focus:ring-red-600",
   } as const;
 
   const cls = `${base} ${sizes[size]} ${variants[variant]} ${className}`;
@@ -4378,23 +4378,125 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
   return (
     <div className="korbiq-app min-h-screen bg-[#f6f8fc] text-slate-900">
       <style>{`
-        html, body, #root { min-height: 100%; margin: 0; background: #f6f8fc; }
-        body { align-items: flex-start !important; justify-content: flex-start !important; place-items: start !important; }
+        :root {
+          --kq-bg: #e9eef3;
+          --kq-bg-top: #f3f6f8;
+          --kq-surface: rgba(255,255,255,.76);
+          --kq-surface-strong: rgba(255,255,255,.92);
+          --kq-surface-soft: rgba(241,245,249,.68);
+          --kq-border: rgba(100,116,139,.19);
+          --kq-border-strong: rgba(100,116,139,.28);
+          --kq-primary: #526b82;
+          --kq-primary-hover: #425a70;
+          --kq-primary-dark: #34495e;
+          --kq-primary-soft: rgba(82,107,130,.11);
+          --kq-primary-softer: rgba(82,107,130,.065);
+          --kq-text: #1f2937;
+          --kq-muted: #64748b;
+        }
+        html, body, #root { min-height: 100%; margin: 0; background: var(--kq-bg); }
+        body {
+          align-items: flex-start !important;
+          justify-content: flex-start !important;
+          place-items: start !important;
+          color: var(--kq-text);
+          font-family: Roboto, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+          background:
+            radial-gradient(circle at 12% 0%, rgba(255,255,255,.9), transparent 34rem),
+            linear-gradient(180deg, var(--kq-bg-top) 0%, var(--kq-bg) 100%);
+          background-attachment: fixed;
+        }
         #root { width: 100%; max-width: none !important; margin: 0 !important; padding: 0 !important; }
-        .korbiq-main .border.rounded-2xl, .korbiq-main .border.rounded-xl { border-color: #e4eaf2; box-shadow: 0 1px 2px rgba(15,23,42,.025), 0 8px 24px rgba(15,23,42,.035); }
-        .korbiq-main table thead { color: #64748b; background: #eff6ff !important; }
+        .korbiq-app { background: transparent !important; }
+        .korbiq-desktop-sidebar,
+        .korbiq-app > div > div > header {
+          background-color: rgba(248,250,252,.78) !important;
+          border-color: var(--kq-border) !important;
+          box-shadow: 0 1px 0 rgba(255,255,255,.65), 0 8px 30px rgba(15,23,42,.045) !important;
+          -webkit-backdrop-filter: blur(18px) saturate(125%);
+          backdrop-filter: blur(18px) saturate(125%);
+        }
+        .korbiq-main .bg-white { background-color: var(--kq-surface) !important; }
+        .korbiq-main .bg-slate-50 { background-color: var(--kq-surface-soft) !important; }
+        .korbiq-main .fixed .bg-white { background-color: rgba(255,255,255,.96) !important; }
+        .korbiq-main .border.rounded-3xl,
+        .korbiq-main .border.rounded-2xl,
+        .korbiq-main .border.rounded-xl {
+          border-color: var(--kq-border) !important;
+          box-shadow: 0 1px 1px rgba(15,23,42,.025), 0 7px 22px rgba(15,23,42,.038);
+          -webkit-backdrop-filter: blur(12px);
+          backdrop-filter: blur(12px);
+        }
+        .korbiq-main table { border-collapse: separate; border-spacing: 0; }
+        .korbiq-main table thead { color: var(--kq-muted); background: rgba(226,232,240,.62) !important; }
         .korbiq-main table tbody tr { transition: background-color .15s ease; }
-        .korbiq-main table tbody tr:hover { background: rgba(239,246,255,.72); }
-        .korbiq-app select:not(:disabled) { border-color: #93c5fd; background-color: #f8fbff; box-shadow: 0 0 0 1px rgba(147,197,253,.22); cursor: pointer; }
-        .korbiq-app select:not(:disabled):hover { border-color: #60a5fa; background-color: #eff6ff; }
+        .korbiq-main table tbody tr:hover { background: rgba(226,232,240,.46); }
+        .korbiq-app select:not(:disabled) {
+          border-color: var(--kq-border-strong);
+          background-color: rgba(255,255,255,.7);
+          box-shadow: 0 1px 2px rgba(15,23,42,.025);
+          cursor: pointer;
+        }
+        .korbiq-app select:not(:disabled):hover { border-color: rgba(82,107,130,.48); background-color: rgba(255,255,255,.9); }
         .korbiq-main input:not([type]):not(:disabled):not([readonly]),
         .korbiq-main input[type="text"]:not(:disabled):not([readonly]),
         .korbiq-main input[type="search"]:not(:disabled):not([readonly]),
         .korbiq-main input[type="number"]:not(:disabled):not([readonly]),
         .korbiq-main input[type="date"]:not(:disabled):not([readonly]),
-        .korbiq-main textarea:not(:disabled):not([readonly]) { border-color: #bfdbfe; background-color: #f8fbff; box-shadow: 0 0 0 1px rgba(191,219,254,.18); }
-        .korbiq-app input[type="checkbox"], .korbiq-app input[type="radio"] { accent-color: #2563eb; cursor: pointer; }
-        .korbiq-main input:focus, .korbiq-main select:focus, .korbiq-main textarea:focus { border-color: #60a5fa; outline: 3px solid rgba(191,219,254,.65); outline-offset: 1px; }
+        .korbiq-main textarea:not(:disabled):not([readonly]) {
+          border-color: var(--kq-border-strong);
+          background-color: rgba(255,255,255,.7);
+          box-shadow: 0 1px 2px rgba(15,23,42,.025);
+        }
+        .korbiq-app input[type="checkbox"], .korbiq-app input[type="radio"] { accent-color: var(--kq-primary); cursor: pointer; }
+        .korbiq-main input:focus, .korbiq-main select:focus, .korbiq-main textarea:focus {
+          border-color: rgba(82,107,130,.58);
+          outline: 3px solid rgba(82,107,130,.14);
+          outline-offset: 1px;
+        }
+        .korbiq-app .bg-blue-50 { background-color: var(--kq-primary-soft) !important; }
+        .korbiq-app .bg-blue-100 { background-color: rgba(82,107,130,.17) !important; }
+        .korbiq-app .bg-blue-200 { background-color: rgba(82,107,130,.26) !important; }
+        .korbiq-app .bg-blue-300 { background-color: #9aaebe !important; }
+        .korbiq-app .bg-blue-400 { background-color: #7f98ab !important; }
+        .korbiq-app .bg-blue-500 { background-color: #688398 !important; }
+        .korbiq-app .bg-blue-600 { background-color: var(--kq-primary) !important; }
+        .korbiq-app .bg-blue-700 { background-color: var(--kq-primary-hover) !important; }
+        .korbiq-app .bg-blue-800 { background-color: var(--kq-primary-dark) !important; }
+        .korbiq-app [class*="bg-blue-50/"] { background-color: rgba(82,107,130,.075) !important; }
+        .korbiq-app button[class*="bg-blue-600"] { background-color: rgba(82,107,130,.94) !important; }
+        .korbiq-app button[class*="bg-blue-700"] { background-color: rgba(66,90,112,.96) !important; }
+        .korbiq-app .text-blue-600 { color: #587188 !important; }
+        .korbiq-app .text-blue-700 { color: #465e74 !important; }
+        .korbiq-app .text-blue-800, .korbiq-app .text-blue-900, .korbiq-app .text-blue-950 { color: #34495e !important; }
+        .korbiq-app .border-blue-100, .korbiq-app .border-blue-200, .korbiq-app .border-blue-300 { border-color: rgba(82,107,130,.22) !important; }
+        .korbiq-app .ring-blue-100, .korbiq-app .ring-blue-200 { --tw-ring-color: rgba(82,107,130,.18) !important; }
+        .korbiq-app button.bg-white,
+        .korbiq-app button.bg-slate-50,
+        .korbiq-app button[class*="bg-white/"] {
+          background-color: rgba(255,255,255,.64) !important;
+          border-color: var(--kq-border) !important;
+          -webkit-backdrop-filter: blur(10px);
+          backdrop-filter: blur(10px);
+        }
+        .korbiq-app button.bg-white:hover,
+        .korbiq-app button.bg-slate-50:hover,
+        .korbiq-app button[class*="bg-white/"]:hover { background-color: rgba(255,255,255,.9) !important; }
+        .korbiq-main [class*="bg-gradient"][class*="from-blue-50"] {
+          background-image: none !important;
+          background-color: rgba(255,255,255,.68) !important;
+        }
+        .korbiq-main [class*="bg-gradient"][class*="from-blue-600"],
+        .korbiq-main [class*="bg-gradient"][class*="from-blue-700"],
+        .korbiq-main [class*="bg-gradient"][class*="from-blue-900"],
+        .korbiq-main [class*="bg-gradient"][class*="from-blue-950"] {
+          background-image: none !important;
+          background-color: rgba(63,83,103,.94) !important;
+        }
+        .korbiq-app .bg-cyan-500 { background-color: #7894a8 !important; }
+        .korbiq-app .bg-indigo-500 { background-color: #607b92 !important; }
+        .korbiq-app .bg-purple-500 { background-color: #71869a !important; }
+        .korbiq-app .bg-pink-500 { background-color: #8b9dac !important; }
         .korbiq-main h2, .korbiq-main h3 { letter-spacing: -.01em; }
         @media (max-width: 1023px) { .korbiq-desktop-sidebar { display:none; } }
       `}</style>
