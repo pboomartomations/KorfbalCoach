@@ -4550,6 +4550,13 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           box-shadow: 0 1px 4px rgba(15,23,42,.28);
         }
         .korbiq-time-slider:focus-visible { outline: 3px solid rgba(82,107,130,.18); outline-offset: 5px; }
+        .korbiq-timebar {
+          position: relative;
+          z-index: 80 !important;
+          overflow: visible !important;
+          -webkit-backdrop-filter: none !important;
+          backdrop-filter: none !important;
+        }
         .korbiq-main h2, .korbiq-main h3 { letter-spacing: -.01em; }
         @media (max-width: 1023px) { .korbiq-desktop-sidebar { display:none; } }
       `}</style>
@@ -7652,7 +7659,7 @@ const attackUitPct =
         </div>
 
         {!wedstrijdNietGestart && !wedstrijdAfgelopen && !eersteHelftAfgelopen && (
-          <div className={`relative flex w-full overflow-visible rounded-xl border shadow-sm ${finalMinuteFrozen ? "border-amber-200 bg-amber-50/70" : state.klokLoopt ? "border-slate-200 bg-white/70" : "border-blue-200 bg-blue-50/60"}`} data-no-pause>
+          <div className={`korbiq-timebar flex w-full overflow-visible rounded-xl border shadow-sm ${finalMinuteFrozen ? "border-amber-200 bg-amber-50/70" : state.klokLoopt ? "border-slate-200 bg-white/70" : "border-blue-200 bg-blue-50/60"}`} data-no-pause>
             <button
               type="button"
               disabled={finalMinuteFrozen}
@@ -7689,9 +7696,9 @@ const attackUitPct =
               />
               {finalMinuteFrozen && <div className="mt-1 truncate text-[9px] font-bold text-amber-800 sm:text-[10px]">Klok staat vast; registreer de laatste acties en kies daarna de volgende helft of einde wedstrijd.</div>}
             </div>
-            <details ref={matchActionsRef} className="group relative">
+            <details ref={matchActionsRef} className="group relative z-[90]">
               <summary className={`flex h-full min-w-[48px] cursor-pointer list-none items-center justify-center rounded-r-xl border-l px-3 text-xl font-black marker:hidden ${finalMinuteFrozen ? "border-amber-200 text-amber-900 hover:bg-amber-100" : "border-slate-200 text-slate-700 hover:bg-white/70"}`} aria-label="Meer wedstrijdacties" title="Meer wedstrijdacties">⌄</summary>
-              <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
+              <div className="absolute right-0 top-[calc(100%+0.5rem)] z-[95] w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-2xl">
                 <button
                   type="button"
                   disabled={state.currentHalf === 2}
@@ -13500,7 +13507,6 @@ function HitMissBarChart({
     </div>
   );
 }
-
 
 //////////////////////////////////////////////////////////////////////////////
 // --- UI bits ---------------------------------------------------------------
