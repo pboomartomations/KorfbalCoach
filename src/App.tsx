@@ -8696,6 +8696,9 @@ function VakcombinatiesDashboard({ dbSheets, spelers = [] }: { dbSheets: Databas
 type UnifiedChartSeries = { label:string; color:string; values:number[]; dashed?:boolean };
 type UnifiedChartBar = { label:string; color:string; values:number[] };
 type UnifiedStatBucket = { key:string; label:string; matchId?:string; match:any; events:any[]; attacks:any[] };
+type UnifiedDetailMetric = "chances"|"goals"|"score"|"directed"|"shots"|"runs"|"possession"|"penalties";
+type UnifiedChartDetailItem = { time:string; player:string; description:string; team:"Korbis"|"Tegenstander" };
+type UnifiedChartDetail = { title:string; subtitle:string; calculation:string; items:UnifiedChartDetailItem[]; note?:string };
 
 function StatisticsWorkspace({state,dbSheets,initialMatchId=null,onInitialRequestHandled}:{state:AppState;dbSheets:DatabaseSheetsData|null;initialMatchId?:string|null;onInitialRequestHandled?:()=>void}) {
   const matches=useMemo(()=>[...(dbSheets?.matches??[])].sort((a:any,b:any)=>String(a.datum??"").localeCompare(String(b.datum??""))),[dbSheets]);
@@ -8765,15 +8768,78 @@ function StatisticsWorkspace({state,dbSheets,initialMatchId=null,onInitialReques
   const teamSeries=(ownKey:keyof ReturnType<typeof summarize>,opponentKey?:keyof ReturnType<typeof summarize>):UnifiedChartSeries[]=>[{label:"Korbis",color:"#175cff",values:teamRows.map(row=>Number(row[ownKey])||0)},...(opponentKey?[{label:"Tegenstander",color:"#ff5a36",values:teamRows.map(row=>Number(row[opponentKey])||0),dashed:true}]:[])];
   const genderBars=(womenKey:keyof ReturnType<typeof summarize>,menKey:keyof ReturnType<typeof summarize>):UnifiedChartBar[]=>[{label:"Dames Korbis",color:"#b9cdff",values:teamRows.map(row=>Number(row[womenKey])||0)},{label:"Heren Korbis",color:"#75a0ff",values:teamRows.map(row=>Number(row[menKey])||0)}];
   const isPlayers=level==="players";
-  const charts:Array<{title:string;subtitle?:string;percentage?:boolean;lines:UnifiedChartSeries[];bars?:UnifiedChartBar[]}>= [
-    {title:"Kansen Korbis en tegenstander",lines:isPlayers?playerSeries("chances"):teamSeries("chances","chancesAgainst"),bars:isPlayers?undefined:genderBars("womenChances","menChances")},
-    {title:"Doelpunten Korbis en tegenstander",lines:isPlayers?playerSeries("goals"):teamSeries("goals","goalsAgainst"),bars:isPlayers?undefined:genderBars("womenGoals","menGoals")},
-    {title:"Percentage kansen raak",percentage:true,lines:isPlayers?playerSeries("score"):teamSeries("scorePct","opponentScorePct"),bars:isPlayers?undefined:genderBars("womenChances","menChances")},
-    {title:"Percentage korf geraakt van kansen",percentage:true,lines:isPlayers?playerSeries("directed"):teamSeries("directedPct")},
-    {title:"Schoten Korbis en tegenstander",lines:isPlayers?playerSeries("shots"):teamSeries("shots","shotsAgainst"),bars:isPlayers?undefined:genderBars("womenShots","menShots")},
-    {title:"Doorloopballen Korbis en tegenstander",lines:isPlayers?playerSeries("runs"):teamSeries("runs","runsAgainst")},
-    {title:"Balbezit Korbis en tegenstander",subtitle:isPlayers?"Balbezit is teamdata en kan niet betrouwbaar aan één speler worden toegewezen.":undefined,percentage:true,lines:teamSeries("possessionPct","opponentPossessionPct")},
-    {title:"Strafworpen Korbis en tegenstander",lines:isPlayers?playerSeries("penalties"):teamSeries("penalties","penaltiesAgainst")},
+  const displayClock=(seconds:number)=>`${Math.floor(Math.max(0,seconds)/60)}:${String(Math.floor(Math.max(0,seconds)%60)).padStart(2,"0")}`;
+  const eventDescription=(row:any)=>{
+    const actionValue=norm(row.actie),resultValue=norm(row.uitkomst??row.resultaat),reasonValue=norm(row.reden);
+    const actionLabel=actionValue==="doorloop"?"Doorloopbal":actionValue==="strafworp"?"Strafworp":["vrijebal","vrije bal"].includes(actionValue)?"Vrije bal":actionValue==="schot"?"Schot":safeDisplayText(row.actie,"Actie");
+    const resultLabel=resultValue==="raak"?"Raak":resultValue==="korf"?"Korf geraakt":resultValue==="verdedigd"?"Verdedigd":resultValue==="mis"?"Mis":safeDisplayText(row.uitkomst??row.resultaat??row.reden,"Geen resultaat");
+    const vakLabel=safeDisplayText(row.vak_id??row.vak,"");
+    return `${actionLabel} · ${resultLabel}${reasonValue&&reasonValue!==resultValue?` · ${safeDisplayText(row.reden,"")}`:""}${vakLabel?` · ${vakLabel}`:""}`;
+  };
+  const detailFor=(bucket:UnifiedStatBucket,index:number,metric:UnifiedDetailMetric):UnifiedChartDetail=>{
+    const summary=teamRows[index];
+    const opponent=safeDisplayText(bucket.match?.tegenstander??bucket.match?.wedstrijd_naam,"Tegenstander");
+    const title=level==="match"?`${bucket.label} · Korbis – ${opponent}`:`${bucket.label} · Korbis – ${opponent}`;
+    const subtitle=level==="match"?"Acties binnen dit wedstrijdblok":"Onderliggende geregistreerde acties in deze wedstrijd";
+    const result=(row:any)=>norm(row.uitkomst??row.resultaat);
+    const selectedOwnEvent=(row:any)=>!isPlayers||selectedPlayers.some(player=>belongsToPlayer(row,player));
+    let eventRows=bucket.events.filter(row=>attempt(row)&&selectedOwnEvent(row));
+    if(metric==="goals")eventRows=eventRows.filter(row=>result(row)==="raak");
+    if(metric==="directed")eventRows=eventRows.filter(row=>isOwn(row,bucket.match)&&["raak","korf"].includes(result(row)));
+    if(metric==="shots")eventRows=eventRows.filter(row=>norm(row.actie)==="schot");
+    if(metric==="runs")eventRows=eventRows.filter(row=>norm(row.actie)==="doorloop");
+    if(metric==="penalties")eventRows=eventRows.filter(row=>norm(row.actie)==="strafworp");
+    if(isPlayers)eventRows=eventRows.filter(row=>isOwn(row,bucket.match));
+    const eventItems:UnifiedChartDetailItem[]=eventRows.sort((a:any,b:any)=>eventSeconds(a)-eventSeconds(b)).map((row:any)=>{
+      const own=isOwn(row,bucket.match);
+      const knownPlayer=playerFor(row);
+      return {time:displayClock(eventSeconds(row)),player:own?(knownPlayer?.naam??safeDisplayText(row.spelerNaam??row.speler_naam,"Onbekende speler")):safeDisplayText(row.spelerNaam??row.speler_naam,"Tegenstander"),description:eventDescription(row),team:own?"Korbis":"Tegenstander"};
+    });
+    const attackDuration=(row:any)=>{const direct=parseSeconds(row.aanval_duur??row.duur);if(direct>0)return direct;const start=parseSeconds(row.aanval_start??row.starttijd??row.startSeconden);const end=parseSeconds(row.aanval_einde??row.eindtijd??row.endSeconden);return Math.max(0,end-start)};
+    const possessionItems:UnifiedChartDetailItem[]=[...bucket.attacks].sort((a:any,b:any)=>attackSeconds(a)-attackSeconds(b)).map((row:any)=>{const own=isOwn(row,bucket.match),duration=attackDuration(row);return{time:displayClock(attackSeconds(row)),player:own?"Balbezit Korbis":"Balbezit tegenstander",description:`Aanval · ${Math.round(duration)} seconden`,team:own?"Korbis":"Tegenstander"}});
+    const directedCount=Math.round((summary.directedPct/100)*summary.chances);
+    const ownPossession=bucket.attacks.filter(row=>isOwn(row,bucket.match)).reduce((total,row)=>total+attackDuration(row),0);
+    const opponentPossession=bucket.attacks.filter(row=>!isOwn(row,bucket.match)).reduce((total,row)=>total+attackDuration(row),0);
+    const teamCalculation=metric==="chances"?`${summary.chances} kansen Korbis · ${summary.chancesAgainst} kansen tegenstander`
+      :metric==="goals"?`${summary.goals} doelpunten Korbis · ${summary.goalsAgainst} doelpunten tegenstander`
+      :metric==="score"?`${summary.goals} / ${summary.chances} = ${summary.scorePct.toFixed(1)}% Korbis · ${summary.goalsAgainst} / ${summary.chancesAgainst} = ${summary.opponentScorePct.toFixed(1)}% tegenstander`
+      :metric==="directed"?`${directedCount} raak of korf geraakt / ${summary.chances} kansen = ${summary.directedPct.toFixed(1)}%`
+      :metric==="shots"?`${summary.shots} schoten Korbis · ${summary.shotsAgainst} schoten tegenstander`
+      :metric==="runs"?`${summary.runs} doorloopballen Korbis · ${summary.runsAgainst} doorloopballen tegenstander`
+      :metric==="penalties"?`${summary.penalties} strafworpen Korbis · ${summary.penaltiesAgainst} strafworpen tegenstander`
+      :`${displayClock(ownPossession)} Korbis · ${displayClock(opponentPossession)} tegenstander`;
+    const selectedAttempts=bucket.events.filter(row=>isOwn(row,bucket.match)&&attempt(row)&&selectedOwnEvent(row));
+    const selectedGoals=selectedAttempts.filter(row=>result(row)==="raak").length;
+    const selectedDirected=selectedAttempts.filter(row=>["raak","korf"].includes(result(row))).length;
+    const selectedMetricCount=metric==="shots"?selectedAttempts.filter(row=>norm(row.actie)==="schot").length:metric==="runs"?selectedAttempts.filter(row=>norm(row.actie)==="doorloop").length:metric==="penalties"?selectedAttempts.filter(row=>norm(row.actie)==="strafworp").length:0;
+    const playerCalculation=metric==="chances"?`${selectedAttempts.length} kansen van ${selectedPlayers.length} geselecteerde speler${selectedPlayers.length===1?"":"s"}`
+      :metric==="goals"?`${selectedGoals} doelpunten van ${selectedPlayers.length} geselecteerde speler${selectedPlayers.length===1?"":"s"}`
+      :metric==="score"?`${selectedGoals} raak / ${selectedAttempts.length} kansen = ${selectedAttempts.length?(selectedGoals/selectedAttempts.length*100).toFixed(1):"0.0"}%`
+      :metric==="directed"?`${selectedDirected} raak of korf geraakt / ${selectedAttempts.length} kansen = ${selectedAttempts.length?(selectedDirected/selectedAttempts.length*100).toFixed(1):"0.0"}%`
+      :metric==="shots"?`${selectedMetricCount} schoten van de geselecteerde spelers`
+      :metric==="runs"?`${selectedMetricCount} doorloopballen van de geselecteerde spelers`
+      :metric==="penalties"?`${selectedMetricCount} strafworpen van de geselecteerde spelers`
+      :teamCalculation;
+    const calculation=isPlayers&&metric!=="possession"?playerCalculation:teamCalculation;
+    const recordedOwnGoals=bucket.events.filter(row=>isOwn(row,bucket.match)&&attempt(row)&&result(row)==="raak").length;
+    const recordedOpponentGoals=bucket.events.filter(row=>!isOwn(row,bucket.match)&&attempt(row)&&result(row)==="raak").length;
+    const unlinkedGoals=!isPlayers&&["goals","score","directed"].includes(metric)?Math.max(0,summary.goals-recordedOwnGoals)+Math.max(0,summary.goalsAgainst-recordedOpponentGoals):0;
+    const recordedAttempts=bucket.events.filter(row=>attempt(row)).length;
+    const missingAttempts=!isPlayers&&["chances","score","directed"].includes(metric)?Math.max(0,summary.chances+summary.chancesAgainst-recordedAttempts):0;
+    const notes:string[]=[];
+    if(unlinkedGoals)notes.push(`${unlinkedGoals} doelpunt${unlinkedGoals===1?"":"en"} komt uit de opgeslagen stand en heeft geen gekoppelde actie met speler en tijd.`);
+    if(missingAttempts)notes.push(`${missingAttempts} kans${missingAttempts===1?"":"en"} is wel in het totaal verwerkt, maar heeft geen afzonderlijke actie om hier te tonen.`);
+    return {title,subtitle,calculation,items:metric==="possession"?possessionItems:eventItems,note:notes.length?notes.join(" "):undefined};
+  };
+  const charts:Array<{title:string;metric:UnifiedDetailMetric;subtitle?:string;percentage?:boolean;lines:UnifiedChartSeries[];bars?:UnifiedChartBar[];details:UnifiedChartDetail[]}>= [
+    {title:"Kansen Korbis en tegenstander",metric:"chances",lines:isPlayers?playerSeries("chances"):teamSeries("chances","chancesAgainst"),bars:isPlayers?undefined:genderBars("womenChances","menChances"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"chances"))},
+    {title:"Doelpunten Korbis en tegenstander",metric:"goals",lines:isPlayers?playerSeries("goals"):teamSeries("goals","goalsAgainst"),bars:isPlayers?undefined:genderBars("womenGoals","menGoals"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"goals"))},
+    {title:"Percentage kansen raak",metric:"score",percentage:true,lines:isPlayers?playerSeries("score"):teamSeries("scorePct","opponentScorePct"),bars:isPlayers?undefined:genderBars("womenChances","menChances"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"score"))},
+    {title:"Percentage korf geraakt van kansen",metric:"directed",percentage:true,lines:isPlayers?playerSeries("directed"):teamSeries("directedPct"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"directed"))},
+    {title:"Schoten Korbis en tegenstander",metric:"shots",lines:isPlayers?playerSeries("shots"):teamSeries("shots","shotsAgainst"),bars:isPlayers?undefined:genderBars("womenShots","menShots"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"shots"))},
+    {title:"Doorloopballen Korbis en tegenstander",metric:"runs",lines:isPlayers?playerSeries("runs"):teamSeries("runs","runsAgainst"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"runs"))},
+    {title:"Balbezit Korbis en tegenstander",metric:"possession",subtitle:isPlayers?"Balbezit is teamdata en kan niet betrouwbaar aan één speler worden toegewezen.":undefined,percentage:true,lines:teamSeries("possessionPct","opponentPossessionPct"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"possession"))},
+    {title:"Strafworpen Korbis en tegenstander",metric:"penalties",lines:isPlayers?playerSeries("penalties"):teamSeries("penalties","penaltiesAgainst"),details:buckets.map((bucket,index)=>detailFor(bucket,index,"penalties"))},
   ];
   const togglePlayer=(id:string)=>setSelectedPlayerIds(current=>{const next=new Set(current);if(next.has(id))next.delete(id);else next.add(id);return next});
 
@@ -8784,12 +8850,20 @@ function StatisticsWorkspace({state,dbSheets,initialMatchId=null,onInitialReques
       {level==="match"&&selectedMatch&&<div className="flex items-center gap-2 text-sm"><button type="button" onClick={()=>{setLevel("matches");setSelectedMatchId(null)}} className="font-bold text-blue-700">Alle wedstrijden</button><span className="text-slate-300">›</span><span className="font-black text-slate-800">{formatImportedDate(selectedMatch.datum)} · {safeDisplayText(selectedMatch.tegenstander??selectedMatch.wedstrijd_naam,"Onbekend")}</span></div>}
     </div>
     {level==="players"&&<div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center gap-2"><span className="mr-1 text-xs font-bold text-slate-500">Vergelijk spelers:</span>{basePlayers.map(player=><button type="button" key={player.id} onClick={()=>togglePlayer(player.id)} className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${selectedPlayerIds.has(player.id)?"border-blue-300 bg-blue-50 text-blue-700":"border-slate-200 bg-white text-slate-400"}`}>{player.naam}</button>)}<button type="button" onClick={()=>setSelectedPlayerIds(new Set(basePlayers.map(player=>player.id)))} className="ml-auto text-xs font-bold text-blue-700">Alles</button><button type="button" onClick={()=>setSelectedPlayerIds(new Set<string>())} className="text-xs font-bold text-slate-500">Geen</button></div></div>}
-    {!buckets.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Geen wedstrijden binnen de gekozen filters.</div>:isPlayers&&!selectedPlayers.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Selecteer één of meer spelers om de grafieken te vullen.</div>:<div className="grid gap-4 2xl:grid-cols-2">{charts.map(chart=><UnifiedStatisticsChart key={chart.title} title={chart.title} subtitle={chart.subtitle} labels={buckets.map(bucket=>bucket.label)} matchIds={buckets.map(bucket=>bucket.matchId)} lines={chart.lines} bars={chart.bars} percentage={chart.percentage} onOpenMatch={level==="matches"?openMatch:undefined}/>)}</div>}
+    {!buckets.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Geen wedstrijden binnen de gekozen filters.</div>:isPlayers&&!selectedPlayers.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Selecteer één of meer spelers om de grafieken te vullen.</div>:<div className="grid gap-4 2xl:grid-cols-2">{charts.map(chart=><UnifiedStatisticsChart key={chart.title} title={chart.title} subtitle={chart.subtitle} labels={buckets.map(bucket=>bucket.label)} matchIds={buckets.map(bucket=>bucket.matchId)} lines={chart.lines} bars={chart.bars} details={chart.details} percentage={chart.percentage} onOpenMatch={level==="matches"?openMatch:undefined}/>)}</div>}
   </div>;
 }
 
-function UnifiedStatisticsChart({title,subtitle,labels,matchIds,lines,bars=[],percentage=false,onOpenMatch}:{title:string;subtitle?:string;labels:string[];matchIds:Array<string|undefined>;lines:UnifiedChartSeries[];bars?:UnifiedChartBar[];percentage?:boolean;onOpenMatch?:(matchId:string)=>void}) {
+function UnifiedStatisticsChart({title,subtitle,labels,matchIds,lines,bars=[],details,percentage=false,onOpenMatch}:{title:string;subtitle?:string;labels:string[];matchIds:Array<string|undefined>;lines:UnifiedChartSeries[];bars?:UnifiedChartBar[];details:UnifiedChartDetail[];percentage?:boolean;onOpenMatch?:(matchId:string)=>void}) {
   const [hoverIndex,setHoverIndex]=useState<number|null>(null);
+  const [pinnedIndex,setPinnedIndex]=useState<number|null>(null);
+  const closeTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
+  const activeIndex=hoverIndex??pinnedIndex;
+  const clearClose=()=>{if(closeTimer.current)clearTimeout(closeTimer.current);closeTimer.current=null};
+  const showDetail=(index:number)=>{clearClose();setHoverIndex(index)};
+  const scheduleClose=()=>{clearClose();closeTimer.current=setTimeout(()=>setHoverIndex(null),220)};
+  const toggleDetail=(index:number)=>{clearClose();setPinnedIndex(current=>current===index?null:index);setHoverIndex(index)};
+  useEffect(()=>()=>clearClose(),[]);
   const width=Math.max(760,labels.length*82),height=300,left=42,right=18,top=18,bottom=52,plotWidth=width-left-right,plotHeight=height-top-bottom;
   const allLineValues=lines.flatMap(series=>series.values),allBarValues=bars.flatMap(series=>series.values);
   const lineMax=percentage?100:Math.max(1,...allLineValues,...allBarValues),barMax=Math.max(1,...allBarValues);
@@ -8798,8 +8872,23 @@ function UnifiedStatisticsChart({title,subtitle,labels,matchIds,lines,bars=[],pe
   const barHeight=(value:number)=>value/barMax*plotHeight*.72;
   const path=(values:number[])=>values.map((value,index)=>`${index?"L":"M"} ${x(index).toFixed(1)} ${lineY(value).toFixed(1)}`).join(" ");
   const labelStep=Math.max(1,Math.ceil(labels.length/7));
-  const hoverText=hoverIndex===null?"Beweeg over een meetpunt voor details.":lines.map(series=>`${series.label}: ${(series.values[hoverIndex]??0).toFixed(percentage?1:0)}${percentage?"%":""}`).join(" · ");
-  return <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="min-h-12"><h3 className="font-black text-slate-900">{title}</h3><p className="mt-0.5 text-xs text-slate-400">{subtitle??hoverText}</p></div><div className="mt-2 overflow-x-auto"><svg viewBox={`0 0 ${width} ${height}`} className="h-[300px] min-w-[760px] w-full" role="img" aria-label={title}>{[0,.25,.5,.75,1].map(part=>{const value=lineMax*(1-part),y=top+plotHeight*part;return <g key={part}><line x1={left} x2={width-right} y1={y} y2={y} stroke="#e2e8f0"/><text x={left-7} y={y+4} textAnchor="end" fontSize="10" fill="#94a3b8">{percentage?`${value.toFixed(0)}%`:value.toFixed(lineMax<10?1:0)}</text></g>})}{bars.flatMap((series,seriesIndex)=>series.values.map((value,index)=>{const groupWidth=Math.min(34,plotWidth/Math.max(1,labels.length)*.55),single=groupWidth/Math.max(1,bars.length),h=barHeight(value),barX=x(index)-groupWidth/2+seriesIndex*single;return <rect key={`${series.label}-${index}`} x={barX} y={top+plotHeight-h} width={Math.max(2,single-1)} height={h} rx="2" fill={series.color} opacity=".72"><title>{`${labels[index]} · ${series.label}: ${value}`}</title></rect>}))}{lines.map(series=><path key={series.label} d={path(series.values)} fill="none" stroke={series.color} strokeWidth="2.5" strokeDasharray={series.dashed?"7 5":undefined} strokeLinecap="round" strokeLinejoin="round"/>)}{lines.flatMap(series=>series.values.map((value,index)=><g key={`${series.label}-${index}`} className={matchIds[index]&&onOpenMatch?"cursor-pointer":""} onMouseEnter={()=>setHoverIndex(index)} onMouseLeave={()=>setHoverIndex(null)} onClick={()=>{const id=matchIds[index];if(id&&onOpenMatch)onOpenMatch(id)}}><circle cx={x(index)} cy={lineY(value)} r="8" fill="transparent"/><circle cx={x(index)} cy={lineY(value)} r="4" fill="white" stroke={series.color} strokeWidth="2.5"/><title>{`${labels[index]} · ${series.label}: ${value.toFixed(percentage?1:0)}${percentage?"%":""}`}</title></g>))}{labels.map((label,index)=>index%labelStep===0||index===labels.length-1?<text key={`${label}-${index}`} x={x(index)} y={height-22} textAnchor="middle" fontSize="10" fill="#64748b">{String(label).slice(0,14)}</text>:null)}</svg></div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">{lines.map(series=><span key={series.label} className="flex items-center gap-1.5"><span className="h-0.5 w-4" style={{backgroundColor:series.color}}/>{series.label}</span>)}{bars.map(series=><span key={series.label} className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{backgroundColor:series.color}}/>{series.label}</span>)}</div></section>;
+  const hoverText=activeIndex===null?"Beweeg over of tik op een meetpunt voor de onderliggende acties.":lines.map(series=>`${series.label}: ${(series.values[activeIndex]??0).toFixed(percentage?1:0)}${percentage?"%":""}`).join(" · ");
+  const activeDetail=activeIndex===null?null:details[activeIndex];
+  const visibleItems=activeDetail?.items??[];
+  const cellWidth=plotWidth/Math.max(1,labels.length);
+  return <section className={`relative rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ${activeDetail?"z-[60]":""}`} onMouseLeave={scheduleClose}>
+    <div className="min-h-12"><h3 className="font-black text-slate-900">{title}</h3><p className="mt-0.5 text-xs text-slate-400">{subtitle??hoverText}</p></div>
+    {activeDetail&&activeIndex!==null?<div className={`absolute top-[68px] z-[75] w-[520px] max-w-[calc(100%-24px)] rounded-2xl border border-blue-100 bg-white/95 p-4 shadow-2xl backdrop-blur-xl ${activeIndex>labels.length/2?"right-3":"left-3"}`} onMouseEnter={clearClose} onMouseLeave={scheduleClose} onClick={event=>event.stopPropagation()}>
+      <div className="flex items-start justify-between gap-3"><div><div className="text-[10px] font-black uppercase tracking-[.13em] text-blue-600">Onderbouwing meetpunt</div><div className="mt-0.5 font-black text-slate-950">{activeDetail.title}</div><div className="text-xs text-slate-500">{activeDetail.subtitle}</div></div><button type="button" onClick={()=>{setPinnedIndex(null);setHoverIndex(null)}} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-lg text-slate-500 hover:bg-slate-50" aria-label="Details sluiten">×</button></div>
+      <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wide text-blue-600">Berekening</div><div className="mt-0.5 text-sm font-black text-slate-900">{activeDetail.calculation}</div></div>
+      <div className="mt-3 flex flex-wrap gap-2">{lines.map(series=><div key={series.label} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs"><span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{backgroundColor:series.color}}/><span className="text-slate-500">{series.label}</span><span className="ml-1 font-black text-slate-900">{(series.values[activeIndex]??0).toFixed(percentage?1:0)}{percentage?"%":""}</span></div>)}</div>
+      <div className="mt-3 max-h-[300px] overflow-y-auto rounded-xl border border-slate-200"><div className="sticky top-0 grid grid-cols-[48px_minmax(100px,.8fr)_minmax(150px,1.4fr)] gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-slate-400"><span>Tijd</span><span>Speler/team</span><span>Actie</span></div>{visibleItems.length?visibleItems.map((item,index)=><div key={`${item.time}-${item.player}-${index}`} className="grid grid-cols-[48px_minmax(100px,.8fr)_minmax(150px,1.4fr)] gap-2 border-b border-slate-100 px-3 py-2 text-xs last:border-0"><span className="font-black tabular-nums text-slate-500">{item.time}</span><span className={`font-bold ${item.team==="Korbis"?"text-blue-700":"text-[#e64928]"}`}>{item.player}</span><span className="text-slate-600">{item.description}</span></div>):<div className="px-3 py-4 text-center text-xs text-slate-500">Voor dit meetpunt zijn geen afzonderlijke acties opgeslagen.</div>}</div>
+      {activeDetail.note?<div className="mt-2 rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-800">{activeDetail.note}</div>:null}
+      {onOpenMatch&&matchIds[activeIndex]?<button type="button" onClick={()=>onOpenMatch(matchIds[activeIndex]!)} className="mt-3 w-full rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-700">Open deze wedstrijd →</button>:null}
+    </div>:null}
+    <div className="mt-2 overflow-x-auto"><svg viewBox={`0 0 ${width} ${height}`} className="h-[300px] min-w-[760px] w-full" role="img" aria-label={title}>{[0,.25,.5,.75,1].map(part=>{const value=lineMax*(1-part),y=top+plotHeight*part;return <g key={part}><line x1={left} x2={width-right} y1={y} y2={y} stroke="#e2e8f0"/><text x={left-7} y={y+4} textAnchor="end" fontSize="10" fill="#94a3b8">{percentage?`${value.toFixed(0)}%`:value.toFixed(lineMax<10?1:0)}</text></g>})}{bars.flatMap((series,seriesIndex)=>series.values.map((value,index)=>{const groupWidth=Math.min(34,plotWidth/Math.max(1,labels.length)*.55),single=groupWidth/Math.max(1,bars.length),h=barHeight(value),barX=x(index)-groupWidth/2+seriesIndex*single;return <rect key={`${series.label}-${index}`} x={barX} y={top+plotHeight-h} width={Math.max(2,single-1)} height={h} rx="2" fill={series.color} opacity=".72"><title>{`${labels[index]} · ${series.label}: ${value}`}</title></rect>}))}{lines.map(series=><path key={series.label} d={path(series.values)} fill="none" stroke={series.color} strokeWidth="2.5" strokeDasharray={series.dashed?"7 5":undefined} strokeLinecap="round" strokeLinejoin="round"/>)}{labels.map((label,index)=><g key={`target-${label}-${index}`} role="button" tabIndex={0} className="cursor-help outline-none" onMouseEnter={()=>showDetail(index)} onMouseLeave={scheduleClose} onFocus={()=>showDetail(index)} onBlur={scheduleClose} onClick={()=>toggleDetail(index)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();toggleDetail(index)}}}><rect x={Math.max(left,x(index)-cellWidth/2)} y={top} width={Math.min(cellWidth,width-right-Math.max(left,x(index)-cellWidth/2))} height={plotHeight} fill="transparent"/><title>{`${labels[index]} · tik voor onderliggende acties`}</title></g>)}{lines.flatMap(series=>series.values.map((value,index)=><g key={`${series.label}-${index}`} pointerEvents="none"><circle cx={x(index)} cy={lineY(value)} r={activeIndex===index?6:4} fill="white" stroke={series.color} strokeWidth={activeIndex===index?3:2.5}/></g>))}{activeIndex!==null?<line x1={x(activeIndex)} x2={x(activeIndex)} y1={top} y2={top+plotHeight} stroke="#175cff" strokeWidth="1" strokeDasharray="4 4" opacity=".38"/>:null}{labels.map((label,index)=>index%labelStep===0||index===labels.length-1?<text key={`${label}-${index}`} x={x(index)} y={height-22} textAnchor="middle" fontSize="10" fill="#64748b">{String(label).slice(0,14)}</text>:null)}</svg></div>
+    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">{lines.map(series=><span key={series.label} className="flex items-center gap-1.5"><span className="h-0.5 w-4" style={{backgroundColor:series.color}}/>{series.label}</span>)}{bars.map(series=><span key={series.label} className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{backgroundColor:series.color}}/>{series.label}</span>)}</div>
+  </section>;
 }
 
 type StatisticsDashboardView =
