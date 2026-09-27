@@ -61,6 +61,8 @@ const TEAM_LABELS: Record<"thuis" | "uit", string> = {
   uit: "Tegenstander",
 };
 
+const todayIsoDate = () => new Date().toLocaleDateString("sv-SE");
+
 type FieldEvent = {
   id: string;
   vak: VakSide;
@@ -385,6 +387,62 @@ type AppState = {
   matchLegacyId?: string;
 };
 
+type LiveActionSnapshot = Pick<
+  AppState,
+  | "aanval"
+  | "verdediging"
+  | "scoreThuis"
+  | "scoreUit"
+  | "log"
+  | "possessionOwner"
+  | "goalsSinceLastSwitch"
+  | "activeVak"
+  | "vak1Aanvallend"
+  | "attacks"
+  | "currentAttackId"
+  | "vakPeriods"
+  | "fieldEvents"
+  | "markerGroup"
+>;
+
+type LiveActionUndo = {
+  before: LiveActionSnapshot;
+  afterSignature: string;
+};
+
+const liveActionSnapshot = (state: AppState): LiveActionSnapshot => ({
+  aanval: state.aanval,
+  verdediging: state.verdediging,
+  scoreThuis: state.scoreThuis,
+  scoreUit: state.scoreUit,
+  log: state.log,
+  possessionOwner: state.possessionOwner,
+  goalsSinceLastSwitch: state.goalsSinceLastSwitch,
+  activeVak: state.activeVak,
+  vak1Aanvallend: state.vak1Aanvallend,
+  attacks: state.attacks,
+  currentAttackId: state.currentAttackId,
+  vakPeriods: state.vakPeriods,
+  fieldEvents: state.fieldEvents,
+  markerGroup: state.markerGroup,
+});
+
+const liveActionSignature = (state: AppState) => JSON.stringify({
+  score: [state.scoreThuis, state.scoreUit],
+  log: state.log.map((event) => event.id),
+  possessionOwner: state.possessionOwner,
+  goalsSinceLastSwitch: state.goalsSinceLastSwitch,
+  activeVak: state.activeVak,
+  vak1Aanvallend: state.vak1Aanvallend,
+  aanval: state.aanval,
+  verdediging: state.verdediging,
+  attacks: state.attacks.map((attack) => [attack.id, attack.endSeconden]),
+  currentAttackId: state.currentAttackId,
+  vakPeriods: state.vakPeriods.map((period) => [period.id, period.endSeconden]),
+  fieldEvents: state.fieldEvents.map((event) => [event.id, event.actie, event.resultaat]),
+  markerGroup: state.markerGroup,
+});
+
 const DEFAULT_STATE: AppState = {
   spelers: [],
   aanval: [null, null, null, null],
@@ -421,7 +479,7 @@ const DEFAULT_STATE: AppState = {
   matchTeamName: "",
   matchSeasonId: "",
   matchSeasonName: "",
-  matchDate: "",
+  matchDate: todayIsoDate(),
   matchLegacyId: "",
 };
 
@@ -1254,7 +1312,10 @@ function sanitizeState(raw: any): AppState {
       matchTeamName: typeof s.matchTeamName === "string" ? s.matchTeamName : "",
       matchSeasonId: typeof s.matchSeasonId === "string" ? s.matchSeasonId : "",
       matchSeasonName: typeof s.matchSeasonName === "string" ? s.matchSeasonName : "",
-      matchDate: typeof s.matchDate === "string" ? s.matchDate : "",
+      matchDate:
+        typeof s.matchDate === "string" && s.matchDate
+          ? s.matchDate
+          : todayIsoDate(),
       matchLegacyId: typeof s.matchLegacyId === "string" ? s.matchLegacyId : "",
     };
   }
@@ -2067,6 +2128,61 @@ export default function App() {
 
     return { ...DEFAULT_STATE };
   });
+
+  const previousLiveStateRef = useRef<AppState>(state);
+  const lastLiveActionUndoRef = useRef<LiveActionUndo | null>(null);
+  const [, setLiveActionUndoRevision] = useState(0);
+
+  useEffect(() => {
+    const previous = previousLiveStateRef.current;
+    const previousIds = new Set(previous.log.map((event) => event.id));
+    const addedEvents = state.log.filter((event) => !previousIds.has(event.id));
+    const addedMatchActions = addedEvents.filter((event) => event.soort !== "Wissel");
+
+    if (addedMatchActions.length > 0) {
+      const before = liveActionSnapshot(previous);
+
+      // Een veldklik maakt eerst een leeg markerpunt en vult dat na de popup aan.
+      // Bij ongedaan maken hoort ook dat bijbehorende punt te verdwijnen.
+      const completedMarkerIds = new Set(
+        state.fieldEvents
+          .filter((afterEvent) => {
+            const beforeEvent = previous.fieldEvents.find((event) => event.id === afterEvent.id);
+            return Boolean(beforeEvent && !beforeEvent.actie && afterEvent.actie);
+          })
+          .map((event) => event.id)
+      );
+      if (completedMarkerIds.size > 0) {
+        before.fieldEvents = before.fieldEvents.filter((event) => !completedMarkerIds.has(event.id));
+      }
+
+      lastLiveActionUndoRef.current = {
+        before,
+        afterSignature: liveActionSignature(state),
+      };
+      setLiveActionUndoRevision((revision) => revision + 1);
+    } else if (addedEvents.length > 0 || state.log.length < previous.log.length) {
+      // Na een wissel of reset is het niet meer veilig om een oudere actie terug te draaien.
+      lastLiveActionUndoRef.current = null;
+      setLiveActionUndoRevision((revision) => revision + 1);
+    }
+
+    previousLiveStateRef.current = state;
+  }, [state]);
+
+  const canUndoLastLiveAction = Boolean(
+    lastLiveActionUndoRef.current &&
+    lastLiveActionUndoRef.current.afterSignature === liveActionSignature(state)
+  );
+
+  const undoLastLiveAction = () => {
+    const undo = lastLiveActionUndoRef.current;
+    if (!undo || undo.afterSignature !== liveActionSignature(state)) return;
+
+    setState((current) => ({ ...current, ...undo.before }));
+    lastLiveActionUndoRef.current = null;
+    setLiveActionUndoRevision((revision) => revision + 1);
+  };
 
   type MatchSaveStatus = "idle" | "saving" | "saved" | "error";
   const [matchSaveStatus, setMatchSaveStatus] = useState<MatchSaveStatus>("idle");
@@ -4261,7 +4377,7 @@ const clearWedstrijd = (
     matchTeamName: activeTeamContext?.teamName ?? "",
     matchSeasonId: state.matchType === "Competitie" ? (activeTeamContext?.seasonId ?? "") : "",
     matchSeasonName: state.matchType === "Competitie" ? (activeTeamContext?.seasonName ?? "") : "",
-    matchDate: "",
+    matchDate: todayIsoDate(),
     matchLegacyId: "",
   }));
 };
@@ -4815,6 +4931,10 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           setHomeAway={(value) =>
           setState((s) => ({ ...s, homeAway: value }))
           }
+          matchDate={state.matchDate || todayIsoDate()}
+          setMatchDate={(value) =>
+            setState((s) => ({ ...s, matchDate: value }))
+          }
           season={state.season}
           competitionPeriodOptions={competitionPeriodOptions.map((c) => c.seasonName)}
           setSeason={(value) =>
@@ -4851,6 +4971,8 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           onEndMatch={eindeWedstrijd}
           onOpenSettings={() => setTab("vakken")}
           onCancelMatch={() => clearWedstrijd(undefined, false)}
+          canUndoLastAction={canUndoLastLiveAction}
+          onUndoLastAction={undoLastLiveAction}
         />
       )}
 
@@ -6065,6 +6187,8 @@ function VakindelingTab({
   setAanvalLinks,
   homeAway,
   setHomeAway,
+  matchDate,
+  setMatchDate,
   season,
   competitionPeriodOptions,
   setSeason,
@@ -6094,6 +6218,8 @@ function VakindelingTab({
   setAanvalLinks: (value: boolean) => void;
   homeAway: "" | "thuis" | "uit";
   setHomeAway: (value: "" | "thuis" | "uit") => void;
+  matchDate: string;
+  setMatchDate: (value: string) => void;
   season: string;
   competitionPeriodOptions: string[];
   setSeason: (value: string) => void;
@@ -6108,6 +6234,7 @@ function VakindelingTab({
   const wedstrijdgegevensCompleet =
     Boolean(opponentName.trim()) &&
     Boolean(homeAway) &&
+    Boolean(matchDate) &&
     (matchType !== "Competitie" || Boolean(season));
 
 
@@ -6127,7 +6254,7 @@ function VakindelingTab({
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-4">
+        <div className="grid gap-4 md:grid-cols-3">
           <div>
             <label className="block text-sm font-semibold mb-1">
               Naam tegenstander <span className="text-red-600">*</span>
@@ -6165,6 +6292,23 @@ function VakindelingTab({
               </label>
             </div>
             {!homeAway && <div className="text-xs text-amber-700 mt-1">Kies Thuis of Uit.</div>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold mb-1" htmlFor="match-date">
+              Wedstrijddatum
+            </label>
+            <input
+              id="match-date"
+              type="date"
+              required
+              className="w-full rounded-lg border bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              value={matchDate}
+              onChange={(event) => setMatchDate(event.target.value)}
+            />
+            <div className="mt-1 text-xs text-gray-500">
+              Vandaag is standaard ingevuld. Pas dit aan als je een eerdere wedstrijd vanaf video registreert.
+            </div>
           </div>
         </div>
       </div>
@@ -6979,6 +7123,8 @@ function WedstrijdTab({
   onEndMatch,
   onOpenSettings,
   onCancelMatch,
+  canUndoLastAction,
+  onUndoLastAction,
 }: {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
@@ -6998,6 +7144,8 @@ function WedstrijdTab({
   onEndMatch: () => void;
   onOpenSettings: () => void;
   onCancelMatch: () => void;
+  canUndoLastAction: boolean;
+  onUndoLastAction: () => void;
 }) {
   const handleVakClick = (vak: VakSide) => {
     // Klik op NIET-actief vak:
@@ -7506,6 +7654,7 @@ const attackUitPct =
     const errors: string[] = [];
     if (!state.opponentName.trim()) errors.push("Vul de naam van de tegenstander in.");
     if (!state.homeAway) errors.push("Kies de locatie: Thuis of Uit.");
+    if (!state.matchDate) errors.push("Kies de wedstrijddatum.");
     const legePosities = [...state.aanval, ...state.verdediging].filter((id) => !id).length;
     if (legePosities > 0) {
       errors.push(`De vakindeling is nog niet compleet: ${legePosities} positie${legePosities === 1 ? "" : "s"} staat nog op Kies speler.`);
@@ -8096,6 +8245,21 @@ const attackUitPct =
                         <span className="min-w-0 flex-1 truncate text-slate-600">{formatTime(latestActions[0].tijdSeconden)} · {latestActions[0].actie || latestActions[0].soort || "Actie"} · {latestActions[0].spelerId ? spelersMap.get(latestActions[0].spelerId)?.naam || "Onbekende speler" : latestActions[0].team === "uit" ? opponentName || "Tegenstander" : "Teamactie"}</span>
                       ) : (
                         <span className="min-w-0 flex-1 truncate text-slate-400">Nog geen acties geregistreerd</span>
+                      )}
+                      {canUndoLastAction && (
+                        <button
+                          type="button"
+                          data-no-pause
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onUndoLastAction();
+                          }}
+                          className="shrink-0 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-extrabold text-blue-700 transition hover:bg-blue-100"
+                          title="Verwijder de laatst geregistreerde actie en herstel de bijbehorende wedstrijdstand"
+                        >
+                          ↶ <span className="sm:hidden">Ongedaan</span><span className="hidden sm:inline">Laatste actie ongedaan</span>
+                        </button>
                       )}
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-500">{latestActions.length}/5</span>
                       <span className="text-slate-400 transition group-open:rotate-180">⌄</span>
