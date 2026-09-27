@@ -1303,13 +1303,27 @@ class InsightsErrorBoundary extends React.Component<
 
 function KorbIQLogo({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="flex items-center select-none">
-      <div className="leading-none">
-        <div className={`${compact ? "text-xl" : "text-3xl"} font-extrabold tracking-tight text-[#124a98]`}>
-          Korb<span className="text-blue-600">IQ</span>
+    <div className={`flex select-none items-center ${compact ? "justify-center" : "gap-2.5"}`} aria-label="KorbIQ">
+      <svg
+        viewBox="0 0 48 48"
+        className={`${compact ? "h-9 w-9" : "h-11 w-11"} shrink-0 drop-shadow-[0_5px_12px_rgba(23,92,255,.18)]`}
+        role="img"
+        aria-hidden="true"
+      >
+        <rect x="2" y="2" width="44" height="44" rx="13" fill="#175CFF" />
+        <circle cx="23" cy="23" r="11" fill="none" stroke="white" strokeWidth="5" />
+        <path d="M30.5 31 38 38.5" fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" />
+        <circle cx="34.5" cy="13.5" r="5.5" fill="#FF5A36" stroke="white" strokeWidth="2" />
+        <path d="M31.4 10.7c2 1.8 3.4 4.1 4.2 6.7M30.1 15.8c2.2-1.1 4.7-1.6 7.2-1.3" fill="none" stroke="#B92D16" strokeWidth="1" strokeLinecap="round" opacity=".9" />
+      </svg>
+      {!compact && (
+        <div className="leading-none">
+          <div className="text-[29px] font-black tracking-[-0.055em] text-[#101828]">
+            Korb<span className="text-[#175CFF]">IQ</span>
+          </div>
+          <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.16em] text-slate-500">Inzicht in elke actie</div>
         </div>
-        {!compact && <div className="mt-1 text-[10px] font-medium tracking-wide text-slate-500">Inzicht in elke actie</div>}
-      </div>
+      )}
     </div>
   );
 }
@@ -1443,9 +1457,9 @@ function MetricInsightCard({
       </div>
       <svg viewBox={`0 0 ${w} ${h}`} className="mt-2 h-[210px] w-full overflow-visible">
         {ticks.map((tick, i) => <g key={`tick-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-7} y={y(tick)+3} textAnchor="end" fontSize="9" fill="#94a3b8">{tick.toFixed(tick % 1 === 0 ? 0 : 1)}{series.suffix ?? ""}</text></g>)}
-        {comparisonPoints ? <polyline points={comparisonPoints} fill="none" stroke="#2563eb" strokeWidth="1.8" strokeDasharray="5 4"/> : null}
-        <polyline points={points} fill="none" stroke="#64748b" strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round"/>
-        {values.map((v, i) => <g key={`p-${i}`}><circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke="#475569" strokeWidth="2"><title>{`${detailLabels?.[i] ?? series.labels[i] ?? `W${i+1}`}: ${v.toFixed(v % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}${comparison?.[i] != null ? ` · ${series.comparisonLabel ?? "Vergelijking"}: ${comparison[i].toFixed(comparison[i] % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}` : ""}`}</title></circle><text x={x(i)} y={h-bottom+18} transform={`rotate(90 ${x(i)} ${h-bottom+18})`} textAnchor="start" fontSize="8.5" fill="#64748b">{series.labels[i] ?? `W${i+1}`}</text></g>)}
+        {comparisonPoints ? <polyline points={comparisonPoints} fill="none" stroke="#ff5a36" strokeWidth="1.8" strokeDasharray="5 4"/> : null}
+        <polyline points={points} fill="none" stroke="#175cff" strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round"/>
+        {values.map((v, i) => <g key={`p-${i}`}><circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke="#175cff" strokeWidth="2"><title>{`${detailLabels?.[i] ?? series.labels[i] ?? `W${i+1}`}: ${v.toFixed(v % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}${comparison?.[i] != null ? ` · ${series.comparisonLabel ?? "Vergelijking"}: ${comparison[i].toFixed(comparison[i] % 1 === 0 ? 0 : 1)}${series.suffix ?? ""}` : ""}`}</title></circle><text x={x(i)} y={h-bottom+18} transform={`rotate(90 ${x(i)} ${h-bottom+18})`} textAnchor="start" fontSize="8.5" fill="#64748b">{series.labels[i] ?? `W${i+1}`}</text></g>)}
       </svg>
       {comparison ? <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500"><span className="inline-block w-5 border-t-2 border-dashed border-blue-600"/><span>{series.comparisonLabel ?? "Vergelijking"}</span></div> : null}
       <div className="mt-2 text-[11px] text-slate-400">Desktop: 0,5 sec hover · mobiel: tik op het kaartje · hover op een punt voor de exacte wedstrijdwaarde.</div>
@@ -4323,7 +4337,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
       onClick={() => { setTab(id); setMobileMenuOpen(false); }}
       className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${
         tab === id
-          ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-100"
+          ? "korbiq-nav-active bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-100"
           : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
       }`}
     >
@@ -4360,7 +4374,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
             coaching: section === "coaching" ? !prev.coaching : false,
             beheer: section === "beheer" ? !prev.beheer : false,
           }))}
-          className={`flex w-full items-start justify-between rounded-xl px-3 text-left transition ${isActiveMatch ? "py-3" : "py-2"} ${open ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-inset ring-blue-200" : "text-slate-600 hover:bg-slate-50"}`}
+          className={`flex w-full items-start justify-between rounded-xl px-3 text-left transition ${isActiveMatch ? "py-3" : "py-2"} ${open ? "korbiq-nav-section-active bg-blue-50 text-blue-700 shadow-sm ring-1 ring-inset ring-blue-200" : "text-slate-600 hover:bg-slate-50"}`}
           aria-expanded={open}
         >
           <span className="min-w-0">
@@ -4405,19 +4419,22 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
     <div className="korbiq-app min-h-screen bg-[#f6f8fc] text-slate-900">
       <style>{`
         :root {
-          --kq-bg: #e9eef3;
-          --kq-bg-top: #f3f6f8;
+          --kq-bg: #eef3fb;
+          --kq-bg-top: #f8faff;
           --kq-surface: rgba(255,255,255,.76);
           --kq-surface-strong: rgba(255,255,255,.92);
           --kq-surface-soft: rgba(241,245,249,.68);
           --kq-border: rgba(100,116,139,.19);
           --kq-border-strong: rgba(100,116,139,.28);
-          --kq-primary: #526b82;
-          --kq-primary-hover: #425a70;
-          --kq-primary-dark: #34495e;
-          --kq-primary-soft: rgba(82,107,130,.11);
-          --kq-primary-softer: rgba(82,107,130,.065);
-          --kq-text: #1f2937;
+          --kq-primary: #175cff;
+          --kq-primary-hover: #0f4edf;
+          --kq-primary-dark: #0a369d;
+          --kq-primary-soft: rgba(23,92,255,.105);
+          --kq-primary-softer: rgba(23,92,255,.06);
+          --kq-accent: #ff5a36;
+          --kq-accent-hover: #e64928;
+          --kq-accent-soft: rgba(255,90,54,.105);
+          --kq-text: #101828;
           --kq-muted: #64748b;
         }
         html, body, #root { min-height: 100%; margin: 0; background: var(--kq-bg); }
@@ -4428,7 +4445,8 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           color: var(--kq-text);
           font-family: Roboto, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
           background:
-            radial-gradient(circle at 12% 0%, rgba(255,255,255,.9), transparent 34rem),
+            radial-gradient(circle at 12% 0%, rgba(255,255,255,.96), transparent 34rem),
+            radial-gradient(circle at 100% 8%, rgba(23,92,255,.055), transparent 28rem),
             linear-gradient(180deg, var(--kq-bg-top) 0%, var(--kq-bg) 100%);
           background-attachment: fixed;
         }
@@ -4463,7 +4481,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           box-shadow: 0 1px 2px rgba(15,23,42,.025);
           cursor: pointer;
         }
-        .korbiq-app select:not(:disabled):hover { border-color: rgba(82,107,130,.48); background-color: rgba(255,255,255,.9); }
+        .korbiq-app select:not(:disabled):hover { border-color: rgba(23,92,255,.48); background-color: rgba(255,255,255,.9); }
         .korbiq-main input:not([type]):not(:disabled):not([readonly]),
         .korbiq-main input[type="text"]:not(:disabled):not([readonly]),
         .korbiq-main input[type="search"]:not(:disabled):not([readonly]),
@@ -4476,27 +4494,31 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
         }
         .korbiq-app input[type="checkbox"], .korbiq-app input[type="radio"] { accent-color: var(--kq-primary); cursor: pointer; }
         .korbiq-main input:focus, .korbiq-main select:focus, .korbiq-main textarea:focus {
-          border-color: rgba(82,107,130,.58);
-          outline: 3px solid rgba(82,107,130,.14);
+          border-color: rgba(23,92,255,.58);
+          outline: 3px solid rgba(23,92,255,.14);
           outline-offset: 1px;
         }
         .korbiq-app .bg-blue-50 { background-color: var(--kq-primary-soft) !important; }
-        .korbiq-app .bg-blue-100 { background-color: rgba(82,107,130,.17) !important; }
-        .korbiq-app .bg-blue-200 { background-color: rgba(82,107,130,.26) !important; }
-        .korbiq-app .bg-blue-300 { background-color: #9aaebe !important; }
-        .korbiq-app .bg-blue-400 { background-color: #7f98ab !important; }
-        .korbiq-app .bg-blue-500 { background-color: #688398 !important; }
+        .korbiq-app .bg-blue-100 { background-color: rgba(23,92,255,.16) !important; }
+        .korbiq-app .bg-blue-200 { background-color: rgba(23,92,255,.25) !important; }
+        .korbiq-app .bg-blue-300 { background-color: #8fb1ff !important; }
+        .korbiq-app .bg-blue-400 { background-color: #5d8bff !important; }
+        .korbiq-app .bg-blue-500 { background-color: #316cff !important; }
         .korbiq-app .bg-blue-600 { background-color: var(--kq-primary) !important; }
         .korbiq-app .bg-blue-700 { background-color: var(--kq-primary-hover) !important; }
         .korbiq-app .bg-blue-800 { background-color: var(--kq-primary-dark) !important; }
-        .korbiq-app [class*="bg-blue-50/"] { background-color: rgba(82,107,130,.075) !important; }
-        .korbiq-app button[class*="bg-blue-600"] { background-color: rgba(82,107,130,.94) !important; }
-        .korbiq-app button[class*="bg-blue-700"] { background-color: rgba(66,90,112,.96) !important; }
-        .korbiq-app .text-blue-600 { color: #587188 !important; }
-        .korbiq-app .text-blue-700 { color: #465e74 !important; }
-        .korbiq-app .text-blue-800, .korbiq-app .text-blue-900, .korbiq-app .text-blue-950 { color: #34495e !important; }
-        .korbiq-app .border-blue-100, .korbiq-app .border-blue-200, .korbiq-app .border-blue-300 { border-color: rgba(82,107,130,.22) !important; }
-        .korbiq-app .ring-blue-100, .korbiq-app .ring-blue-200 { --tw-ring-color: rgba(82,107,130,.18) !important; }
+        .korbiq-app [class*="bg-blue-50/"] { background-color: rgba(23,92,255,.072) !important; }
+        .korbiq-app button[class*="bg-blue-600"] { background-color: rgba(23,92,255,.97) !important; }
+        .korbiq-app button[class*="bg-blue-700"] { background-color: rgba(15,78,223,.98) !important; }
+        .korbiq-app .text-blue-500 { color: #316cff !important; }
+        .korbiq-app .text-blue-600 { color: #175cff !important; }
+        .korbiq-app .text-blue-700 { color: #0f4edf !important; }
+        .korbiq-app .text-blue-800, .korbiq-app .text-blue-900, .korbiq-app .text-blue-950 { color: #0a369d !important; }
+        .korbiq-app .border-blue-100, .korbiq-app .border-blue-200, .korbiq-app .border-blue-300 { border-color: rgba(23,92,255,.23) !important; }
+        .korbiq-app .ring-blue-100, .korbiq-app .ring-blue-200 { --tw-ring-color: rgba(23,92,255,.17) !important; }
+        .korbiq-app .korbiq-nav-active,
+        .korbiq-app .korbiq-nav-section-active { box-shadow: inset 3px 0 0 var(--kq-accent), 0 1px 2px rgba(15,23,42,.05) !important; }
+        .korbiq-app ::selection { background: rgba(255,90,54,.23); color: var(--kq-text); }
         .korbiq-app button.bg-white,
         .korbiq-app button.bg-slate-50,
         .korbiq-app button[class*="bg-white/"] {
@@ -4517,12 +4539,12 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
         .korbiq-main [class*="bg-gradient"][class*="from-blue-900"],
         .korbiq-main [class*="bg-gradient"][class*="from-blue-950"] {
           background-image: none !important;
-          background-color: rgba(63,83,103,.94) !important;
+          background-color: rgba(10,54,157,.97) !important;
         }
-        .korbiq-app .bg-cyan-500 { background-color: #7894a8 !important; }
-        .korbiq-app .bg-indigo-500 { background-color: #607b92 !important; }
-        .korbiq-app .bg-purple-500 { background-color: #71869a !important; }
-        .korbiq-app .bg-pink-500 { background-color: #8b9dac !important; }
+        .korbiq-app .bg-cyan-500 { background-color: #38a3ff !important; }
+        .korbiq-app .bg-indigo-500 { background-color: #175cff !important; }
+        .korbiq-app .bg-purple-500 { background-color: #5d8bff !important; }
+        .korbiq-app .bg-pink-500 { background-color: #ff5a36 !important; }
         .korbiq-time-slider {
           height: 5px;
           border-radius: 999px;
@@ -4556,7 +4578,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           background: var(--kq-primary);
           box-shadow: 0 1px 4px rgba(15,23,42,.28);
         }
-        .korbiq-time-slider:focus-visible { outline: 3px solid rgba(82,107,130,.18); outline-offset: 5px; }
+        .korbiq-time-slider:focus-visible { outline: 3px solid rgba(23,92,255,.2); outline-offset: 5px; }
         .korbiq-timebar {
           position: relative;
           z-index: 80 !important;
@@ -7588,7 +7610,7 @@ const attackUitPct =
               <MatchInfoGlyph type="shirt" />
               <div className="min-w-0"><div className="truncate text-xs font-extrabold text-slate-800 sm:text-sm">{fixtureLabel}</div><div className="text-[9px] font-semibold text-slate-400 sm:text-[10px]">{state.currentHalf}e helft</div></div>
             </div>
-            <button type="button" onClick={openScoreEditor} className="group shrink-0 px-2 py-1.5 hover:bg-blue-50 sm:px-3" title="Stand aanpassen"><div className="rounded-lg bg-[#124a98] px-2.5 py-2 text-base font-extrabold text-white tabular-nums shadow-sm sm:text-lg">{state.scoreThuis}-{state.scoreUit}</div></button>
+            <button type="button" onClick={openScoreEditor} className="group shrink-0 px-2 py-1.5 hover:bg-blue-50 sm:px-3" title="Stand aanpassen"><div className="rounded-lg bg-[#175cff] px-2.5 py-2 text-base font-extrabold text-white tabular-nums shadow-sm sm:text-lg">{state.scoreThuis}-{state.scoreUit}</div></button>
 
             {wedstrijdGestart && !wedstrijdAfgelopen && (
               <div className="hidden min-w-0 flex-[2.4] items-center gap-3 px-3 py-2 lg:flex">
@@ -8737,11 +8759,11 @@ function StatisticsWorkspace({state,dbSheets,initialMatchId=null,onInitialReques
   };
   const teamRows=buckets.map(summarize);
   const selectedPlayers=basePlayers.filter(player=>selectedPlayerIds.has(player.id));
-  const playerColors=["#1d4ed8","#2563eb","#3b82f6","#60a5fa","#1e40af","#0f4c81","#0284c7","#64748b","#475569","#0369a1"];
+  const playerColors=["#175cff","#ff5a36","#5d8bff","#ff8a70","#0f4edf","#ff7657","#8fb1ff","#c53a1e","#0a369d","#ffad9b"];
   const playerValue=(bucket:UnifiedStatBucket,player:Player,metric:"chances"|"goals"|"score"|"directed"|"shots"|"runs"|"penalties")=>{const rows=bucket.events.filter(row=>isOwn(row,bucket.match)&&attempt(row)&&belongsToPlayer(row,player));const goals=rows.filter(row=>norm(row.uitkomst??row.resultaat)==="raak").length;if(metric==="chances")return rows.length;if(metric==="goals")return goals;if(metric==="score")return rows.length?goals/rows.length*100:0;if(metric==="directed")return rows.length?(goals+rows.filter(row=>norm(row.uitkomst??row.resultaat)==="korf").length)/rows.length*100:0;if(metric==="shots")return rows.filter(row=>norm(row.actie)==="schot").length;if(metric==="runs")return rows.filter(row=>norm(row.actie)==="doorloop").length;return rows.filter(row=>norm(row.actie)==="strafworp").length};
   const playerSeries=(metric:"chances"|"goals"|"score"|"directed"|"shots"|"runs"|"penalties"):UnifiedChartSeries[]=>selectedPlayers.map((player,index)=>({label:player.naam,color:playerColors[index%playerColors.length],values:buckets.map(bucket=>playerValue(bucket,player,metric))}));
-  const teamSeries=(ownKey:keyof ReturnType<typeof summarize>,opponentKey?:keyof ReturnType<typeof summarize>):UnifiedChartSeries[]=>[{label:"Korbis",color:"#2563eb",values:teamRows.map(row=>Number(row[ownKey])||0)},...(opponentKey?[{label:"Tegenstander",color:"#64748b",values:teamRows.map(row=>Number(row[opponentKey])||0),dashed:true}]:[])];
-  const genderBars=(womenKey:keyof ReturnType<typeof summarize>,menKey:keyof ReturnType<typeof summarize>):UnifiedChartBar[]=>[{label:"Dames Korbis",color:"#bfdbfe",values:teamRows.map(row=>Number(row[womenKey])||0)},{label:"Heren Korbis",color:"#93c5fd",values:teamRows.map(row=>Number(row[menKey])||0)}];
+  const teamSeries=(ownKey:keyof ReturnType<typeof summarize>,opponentKey?:keyof ReturnType<typeof summarize>):UnifiedChartSeries[]=>[{label:"Korbis",color:"#175cff",values:teamRows.map(row=>Number(row[ownKey])||0)},...(opponentKey?[{label:"Tegenstander",color:"#ff5a36",values:teamRows.map(row=>Number(row[opponentKey])||0),dashed:true}]:[])];
+  const genderBars=(womenKey:keyof ReturnType<typeof summarize>,menKey:keyof ReturnType<typeof summarize>):UnifiedChartBar[]=>[{label:"Dames Korbis",color:"#b9cdff",values:teamRows.map(row=>Number(row[womenKey])||0)},{label:"Heren Korbis",color:"#75a0ff",values:teamRows.map(row=>Number(row[menKey])||0)}];
   const isPlayers=level==="players";
   const charts:Array<{title:string;subtitle?:string;percentage?:boolean;lines:UnifiedChartSeries[];bars?:UnifiedChartBar[]}>= [
     {title:"Kansen Korbis en tegenstander",lines:isPlayers?playerSeries("chances"):teamSeries("chances","chancesAgainst"),bars:isPlayers?undefined:genderBars("womenChances","menChances")},
@@ -8919,10 +8941,10 @@ export function StatisticsDashboard({
   const scorePct = totals.chancesFor ? totals.goalsFor / totals.chancesFor * 100 : 0;
   const hoveredRow = rows.find(row => row.id === hoveredMatchId) ?? rows[rows.length-1];
   const series = metric === "goals"
-    ? [{key:"primary",label:"Doelpunten Korbis",color:"#2563eb",values:rows.map(row=>row.goalsFor)},{key:"secondary",label:"Doelpunten tegenstander",color:"#94a3b8",values:rows.map(row=>row.goalsAgainst)}]
+    ? [{key:"primary",label:"Doelpunten Korbis",color:"#175cff",values:rows.map(row=>row.goalsFor)},{key:"secondary",label:"Doelpunten tegenstander",color:"#ff5a36",values:rows.map(row=>row.goalsAgainst)}]
     : metric === "chances"
-    ? [{key:"primary",label:"Kansen Korbis",color:"#2563eb",values:rows.map(row=>row.chancesFor)},{key:"secondary",label:"Kansen tegenstander",color:"#94a3b8",values:rows.map(row=>row.chancesAgainst)}]
-    : [{key:"primary",label:"Kansen raak Korbis",color:"#2563eb",values:rows.map(row=>row.scorePct)},{key:"secondary",label:"Kansen raak tegenstander",color:"#94a3b8",values:rows.map(row=>row.opponentScorePct)}];
+    ? [{key:"primary",label:"Kansen Korbis",color:"#175cff",values:rows.map(row=>row.chancesFor)},{key:"secondary",label:"Kansen tegenstander",color:"#ff5a36",values:rows.map(row=>row.chancesAgainst)}]
+    : [{key:"primary",label:"Kansen raak Korbis",color:"#175cff",values:rows.map(row=>row.scorePct)},{key:"secondary",label:"Kansen raak tegenstander",color:"#ff5a36",values:rows.map(row=>row.opponentScorePct)}];
 
   return <div className="space-y-5">
     <div className="rounded-3xl border border-blue-100 bg-gradient-to-r from-blue-50/80 via-white to-blue-50/60 p-5 shadow-sm">
@@ -10765,7 +10787,7 @@ function InsightsTab({
         if (benchmark == null || !Number.isFinite(benchmark)) return v>=avg;
         return inverseComparison ? v<=benchmark : v>=benchmark;
       };
-      return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{values.length?`Laatste: ${values[values.length-1].toFixed(isPercent?1:values[values.length-1] % 1 === 0 ? 0 : 1)}${suffix}${latestComparison!=null?` · ${comparisonLabel}: ${latestComparison.toFixed(isPercent?1:latestComparison % 1 === 0 ? 0 : 1)}${suffix}`:` · Gemiddeld: ${avg.toFixed(isPercent?1:avg % 1 === 0 ? 0 : 1)}${suffix}`}`:"Geen data"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[225px]">{ticks.map((tick,i)=><g key={`yt-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-8} y={y(tick)+4} textAnchor="end" fontSize="10" fill="#6b7280">{isPercent?`${tick.toFixed(0)}%`:tick.toFixed(tick%1===0?0:1)}</text></g>)}{comparisonValues&&comparisonValues.length===values.length&&<polyline points={comparisonPts} fill="none" stroke="#2563eb" strokeWidth="2" strokeDasharray="6 5" strokeLinejoin="round" strokeLinecap="round"/>}{!comparisonValues&&values.length>0&&<line x1={left} y1={y(avg)} x2={w-right} y2={y(avg)} stroke="#94a3b8" strokeDasharray="5 5"/>}<line x1={left} y1={top} x2={left} y2={h-bottom} stroke="#d1d5db"/><polyline points={pts} fill="none" stroke="#64748b" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>{values.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="5" fill={pointIsGood(v,i)?"#16a34a":"#dc2626"} stroke="white" strokeWidth="1.5"/><text x={x(i)} y={h-bottom+10} textAnchor="end" fontSize="9" fill="#6b7280" transform={`rotate(-90 ${x(i)} ${h-bottom+10})`}>{labels?.[i] ?? `W${i+1}`}</text></g>)}</svg>{comparisonValues&&<div className="mt-1 flex items-center gap-2 text-xs text-gray-500"><span className="inline-block w-6 border-t-2 border-dashed border-blue-600"></span><span>{comparisonLabel}</span></div>}</div>
+      return <div className="border rounded-2xl p-4 bg-white"><div className="font-bold">{title}</div><div className="text-xs text-gray-500 mb-2">{values.length?`Laatste: ${values[values.length-1].toFixed(isPercent?1:values[values.length-1] % 1 === 0 ? 0 : 1)}${suffix}${latestComparison!=null?` · ${comparisonLabel}: ${latestComparison.toFixed(isPercent?1:latestComparison % 1 === 0 ? 0 : 1)}${suffix}`:` · Gemiddeld: ${avg.toFixed(isPercent?1:avg % 1 === 0 ? 0 : 1)}${suffix}`}`:"Geen data"}</div><svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[225px]">{ticks.map((tick,i)=><g key={`yt-${i}`}><line x1={left} y1={y(tick)} x2={w-right} y2={y(tick)} stroke="#e5e7eb"/><text x={left-8} y={y(tick)+4} textAnchor="end" fontSize="10" fill="#6b7280">{isPercent?`${tick.toFixed(0)}%`:tick.toFixed(tick%1===0?0:1)}</text></g>)}{comparisonValues&&comparisonValues.length===values.length&&<polyline points={comparisonPts} fill="none" stroke="#ff5a36" strokeWidth="2" strokeDasharray="6 5" strokeLinejoin="round" strokeLinecap="round"/>}{!comparisonValues&&values.length>0&&<line x1={left} y1={y(avg)} x2={w-right} y2={y(avg)} stroke="#94a3b8" strokeDasharray="5 5"/>}<line x1={left} y1={top} x2={left} y2={h-bottom} stroke="#d1d5db"/><polyline points={pts} fill="none" stroke="#175cff" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>{values.map((v,i)=><g key={i}><circle cx={x(i)} cy={y(v)} r="5" fill={pointIsGood(v,i)?"#16a34a":"#dc2626"} stroke="white" strokeWidth="1.5"/><text x={x(i)} y={h-bottom+10} textAnchor="end" fontSize="9" fill="#6b7280" transform={`rotate(-90 ${x(i)} ${h-bottom+10})`}>{labels?.[i] ?? `W${i+1}`}</text></g>)}</svg>{comparisonValues&&<div className="mt-1 flex items-center gap-2 text-xs text-gray-500"><span className="inline-block w-6 border-t-2 border-dashed border-blue-600"></span><span>{comparisonLabel}</span></div>}</div>
     };
     const average = (values:number[]) => values.length ? values.reduce((sum,v)=>sum+v,0)/values.length : 0;
     const metricTone = (value:number, avg:number, inverse=false) => {
@@ -11360,7 +11382,7 @@ function InsightsTab({
   const markerBorder = (ev: FieldEvent) => {
     if (ev.resultaat === "raak") return "#16a34a";
     if (ev.resultaat === "mis") return "#dc2626";
-    if (ev.resultaat === "korf") return "#2563eb";
+    if (ev.resultaat === "korf") return "#175cff";
     if (ev.resultaat === "verdedigd") return "#f59e0b";
     return "#111827";
   };
@@ -11549,14 +11571,14 @@ function InsightsTab({
       label: spelersMap.get(spelerId)?.naam ?? spelerId,
       value,
       color: [
-        "#1d4ed8",
-        "#2563eb",
-        "#3b82f6",
-        "#60a5fa",
-        "#93c5fd",
-        "#1e40af",
-        "#1e3a8a",
-        "#bfdbfe",
+        "#175cff",
+        "#ff5a36",
+        "#5d8bff",
+        "#ff8a70",
+        "#0f4edf",
+        "#ff7657",
+        "#8fb1ff",
+        "#c53a1e",
       ][index % 8],
     })
   );

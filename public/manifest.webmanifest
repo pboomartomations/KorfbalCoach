@@ -8,9 +8,8 @@
   "scope": "/",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
-  "orientation": "landscape",
-  "background_color": "#f6f8fc",
-  "theme_color": "#124A98",
+  "background_color": "#F5F7FB",
+  "theme_color": "#175CFF",
   "icons": [
     {
       "src": "/pwa-192x192.png",

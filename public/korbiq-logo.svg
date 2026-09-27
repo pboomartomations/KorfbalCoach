@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 310 72" role="img" aria-labelledby="title description">
+  <title id="title">KorbIQ</title>
+  <desc id="description">KorbIQ woordmerk met gestileerde Q en korfbal</desc>
+  <rect x="4" y="4" width="64" height="64" rx="19" fill="#175CFF"/>
+  <circle cx="35" cy="35" r="21" fill="none" stroke="#fff" stroke-width="8"/>
+  <path d="m49 50 11 11" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="56" cy="19" r="9" fill="#FF5A36" stroke="#fff" stroke-width="3"/>
+  <path d="M51.2 14.7c3.1 2.8 5.2 6.3 6.4 10.4M49.3 22.4c3.5-1.7 7.4-2.4 11.3-2" fill="none" stroke="#B92D16" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="82" y="46" fill="#101828" font-family="Inter, Manrope, Arial, sans-serif" font-size="42" font-weight="850" letter-spacing="-2.3">Korb<tspan fill="#175CFF">IQ</tspan></text>
+  <text x="84" y="62" fill="#64748B" font-family="Inter, Manrope, Arial, sans-serif" font-size="8.5" font-weight="700" letter-spacing="2.1">INZICHT IN ELKE ACTIE</text>
+</svg>
