@@ -8854,7 +8854,7 @@ function StatisticsWorkspace({state,dbSheets,initialMatchId=null,onInitialReques
       {level==="match"&&selectedMatch&&<div className="flex items-center gap-2 text-sm"><button type="button" onClick={()=>{setLevel("matches");setSelectedMatchId(null)}} className="font-bold text-blue-700">Alle wedstrijden</button><span className="text-slate-300">›</span><span className="font-black text-slate-800">{formatImportedDate(selectedMatch.datum)} · {safeDisplayText(selectedMatch.tegenstander??selectedMatch.wedstrijd_naam,"Onbekend")}</span></div>}
     </div>
     {level==="players"&&<div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center gap-2"><span className="mr-1 text-xs font-bold text-slate-500">Vergelijk spelers:</span>{basePlayers.map(player=><button type="button" key={player.id} onClick={()=>togglePlayer(player.id)} className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${selectedPlayerIds.has(player.id)?"border-blue-300 bg-blue-50 text-blue-700":"border-slate-200 bg-white text-slate-400"}`}>{player.naam}</button>)}<button type="button" onClick={()=>setSelectedPlayerIds(new Set(basePlayers.map(player=>player.id)))} className="ml-auto text-xs font-bold text-blue-700">Alles</button><button type="button" onClick={()=>setSelectedPlayerIds(new Set<string>())} className="text-xs font-bold text-slate-500">Geen</button></div></div>}
-    {!buckets.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Geen wedstrijden binnen de gekozen filters.</div>:isPlayers&&!selectedPlayers.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Selecteer één of meer spelers om de grafieken te vullen.</div>:<div className="grid gap-4 2xl:grid-cols-2">{charts.map(chart=><UnifiedStatisticsChart key={chart.title} title={chart.title} subtitle={chart.subtitle} labels={buckets.map(bucket=>bucket.label)} matchIds={buckets.map(bucket=>bucket.matchId)} lines={chart.lines} bars={chart.bars} details={chart.details} percentage={chart.percentage} onOpenMatch={level==="matches"?openMatch:undefined}/>)}</div>}
+    {!buckets.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Geen wedstrijden binnen de gekozen filters.</div>:isPlayers&&!selectedPlayers.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Selecteer één of meer spelers om de grafieken te vullen.</div>:<div className="grid min-w-0 max-w-full gap-4 2xl:grid-cols-2">{charts.map(chart=><UnifiedStatisticsChart key={chart.title} title={chart.title} subtitle={chart.subtitle} labels={buckets.map(bucket=>bucket.label)} matchIds={buckets.map(bucket=>bucket.matchId)} lines={chart.lines} bars={chart.bars} details={chart.details} percentage={chart.percentage} onOpenMatch={level==="matches"?openMatch:undefined}/>)}</div>}
   </div>;
 }
 
@@ -8864,23 +8864,23 @@ function UnifiedStatisticsChart({title,subtitle,labels,matchIds,lines,bars=[],de
   const openTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
   const closeTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
   const chartContainerRef=useRef<HTMLDivElement|null>(null);
-  const [chartContainerWidth,setChartContainerWidth]=useState(760);
+  const [chartContainerWidth,setChartContainerWidth]=useState(()=>Math.max(180,Math.min(760,window.innerWidth-64)));
   const activeIndex=hoverIndex??pinnedIndex;
   const clearOpen=()=>{if(openTimer.current)clearTimeout(openTimer.current);openTimer.current=null};
   const clearClose=()=>{if(closeTimer.current)clearTimeout(closeTimer.current);closeTimer.current=null};
   const scheduleDetail=(index:number)=>{clearOpen();clearClose();if(hoverIndex!==index)setHoverIndex(null);if(pinnedIndex!==null&&pinnedIndex!==index)setPinnedIndex(null);openTimer.current=setTimeout(()=>{setHoverIndex(index);openTimer.current=null},600)};
-  const scheduleClose=()=>{clearOpen();clearClose();closeTimer.current=setTimeout(()=>{setHoverIndex(null);closeTimer.current=null},140)};
+  const scheduleClose=()=>{clearOpen();clearClose();closeTimer.current=setTimeout(()=>{setHoverIndex(null);closeTimer.current=null},260)};
   const toggleDetail=(index:number)=>{clearOpen();clearClose();setHoverIndex(null);setPinnedIndex(current=>current===index?null:index)};
   useEffect(()=>()=>{clearOpen();clearClose()},[]);
   useEffect(()=>{
     const element=chartContainerRef.current;if(!element)return;
-    const update=()=>setChartContainerWidth(Math.max(280,Math.floor(element.clientWidth)));
+    const update=()=>setChartContainerWidth(Math.max(180,Math.floor(element.getBoundingClientRect().width)));
     update();
     if(typeof ResizeObserver==="undefined"){window.addEventListener("resize",update);return()=>window.removeEventListener("resize",update)}
     const observer=new ResizeObserver(update);observer.observe(element);return()=>observer.disconnect();
   },[]);
   const compact=chartContainerWidth<640;
-  const width=compact?Math.max(280,chartContainerWidth):Math.max(760,labels.length*82),height=compact?238:300,left=compact?34:42,right=compact?8:18,top=compact?12:18,bottom=compact?42:52,plotWidth=width-left-right,plotHeight=height-top-bottom;
+  const width=compact?chartContainerWidth:Math.max(760,labels.length*82),height=compact?238:300,left=compact?32:42,right=compact?6:18,top=compact?12:18,bottom=compact?42:52,plotWidth=width-left-right,plotHeight=height-top-bottom;
   const allLineValues=lines.flatMap(series=>series.values),allBarValues=bars.flatMap(series=>series.values);
   const lineMax=percentage?100:Math.max(1,...allLineValues,...allBarValues),barMax=Math.max(1,...allBarValues);
   const x=(index:number)=>labels.length<=1?left+plotWidth/2:left+index/(labels.length-1)*plotWidth;
@@ -8891,9 +8891,9 @@ function UnifiedStatisticsChart({title,subtitle,labels,matchIds,lines,bars=[],de
   const hoverText=activeIndex===null?"Houd de muis kort bij een meetpunt of tik erop voor de onderliggende acties.":lines.map(series=>`${series.label}: ${(series.values[activeIndex]??0).toFixed(percentage?1:0)}${percentage?"%":""}`).join(" · ");
   const activeDetail=activeIndex===null?null:details[activeIndex];
   const visibleItems=activeDetail?.items??[];
-  return <section className={`relative rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 ${activeDetail?"korbiq-chart-open z-[60]":""}`} onMouseLeave={scheduleClose}>
+  return <section className={`relative min-w-0 max-w-full rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 ${activeDetail?"korbiq-chart-open z-[60]":""}`} onMouseLeave={scheduleClose}>
     <div className="min-h-12"><h3 className="font-black text-slate-900">{title}</h3><p className="mt-0.5 text-xs text-slate-400">{subtitle??hoverText}</p></div>
-    {activeDetail&&activeIndex!==null?<><button type="button" className="fixed inset-0 z-[70] bg-slate-950/25 backdrop-blur-[1px] sm:hidden" onClick={()=>{setPinnedIndex(null);setHoverIndex(null)}} aria-label="Details sluiten"/><div className={`fixed inset-x-3 top-[10vh] z-[75] max-h-[80vh] w-auto overflow-hidden rounded-2xl border border-blue-100 bg-white/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:top-[68px] sm:max-h-none sm:w-[520px] sm:max-w-[calc(100%-24px)] sm:p-4 ${activeIndex>labels.length/2?"sm:right-3":"sm:left-3"} ${pinnedIndex===activeIndex?"sm:pointer-events-auto":"sm:pointer-events-none"}`} onMouseEnter={clearClose} onMouseLeave={scheduleClose} onClick={event=>event.stopPropagation()}>
+    {activeDetail&&activeIndex!==null?<><button type="button" className="fixed inset-0 z-[70] bg-slate-950/25 backdrop-blur-[1px] sm:hidden" onClick={()=>{setPinnedIndex(null);setHoverIndex(null)}} aria-label="Details sluiten"/><div className={`fixed inset-x-3 top-[10vh] z-[75] max-h-[80vh] w-auto overflow-hidden rounded-2xl border border-blue-100 bg-white/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:top-[68px] sm:max-h-none sm:w-[520px] sm:max-w-[calc(100%-24px)] sm:p-4 ${activeIndex>labels.length/2?"sm:right-3":"sm:left-3"}`} onMouseEnter={()=>{clearOpen();clearClose()}} onMouseLeave={scheduleClose} onClick={event=>event.stopPropagation()}>
       <div className="flex items-start justify-between gap-3"><div><div className="text-[10px] font-black uppercase tracking-[.13em] text-blue-600">Onderbouwing meetpunt</div><div className="mt-0.5 font-black text-slate-950">{activeDetail.title}</div><div className="text-xs text-slate-500">{activeDetail.subtitle}</div></div><button type="button" onClick={()=>{setPinnedIndex(null);setHoverIndex(null)}} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-lg text-slate-500 hover:bg-slate-50" aria-label="Details sluiten">×</button></div>
       <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wide text-blue-600">Berekening</div><div className="mt-0.5 text-sm font-black text-slate-900">{activeDetail.calculation}</div></div>
       <div className="mt-3 flex flex-wrap gap-2">{lines.map(series=><div key={series.label} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs"><span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{backgroundColor:series.color}}/><span className="text-slate-500">{series.label}</span><span className="ml-1 font-black text-slate-900">{(series.values[activeIndex]??0).toFixed(percentage?1:0)}{percentage?"%":""}</span></div>)}</div>
