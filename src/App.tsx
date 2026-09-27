@@ -2685,9 +2685,9 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
     };
   }, [activeTeamHistoryDbSheets]);
 
-  type AnalysisPeriodFilter = "all" | "veld_najaar" | "zaal" | "veld_voorjaar";
   const [analysisCompetitionYear, setAnalysisCompetitionYear] = useState("");
-  const [analysisPeriod, setAnalysisPeriod] = useState<AnalysisPeriodFilter>("all");
+  const [analysisOpponentFilter, setAnalysisOpponentFilter] = useState("");
+  const [analysisMatchTypeFilter, setAnalysisMatchTypeFilter] = useState("");
 
   const competitionYearFromSeasonName = (value: unknown) => {
     const name = String(value ?? "").trim();
@@ -2733,22 +2733,35 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
     }
   }, [analysisCompetitionYears, analysisCompetitionYear]);
 
-  const analysisDbSheets = useMemo<DatabaseSheetsData | null>(() => {
+  const analysisBaseMatches = useMemo(() => {
     if (!activeTeamDbSheets) return null;
-    if (!analysisCompetitionYear) return activeTeamDbSheets;
-
-    const matches = (activeTeamDbSheets.matches ?? []).filter((m: any) => {
+    return (activeTeamDbSheets.matches ?? []).filter((m: any) => {
+      if (!analysisCompetitionYear) return true;
       const seasonName = String(
         m.team_seizoen_naam ?? m.seizoen ?? ""
       ).trim();
-      if (competitionYearFromSeasonName(seasonName) !== analysisCompetitionYear) {
-        return false;
-      }
+      return competitionYearFromSeasonName(seasonName) === analysisCompetitionYear;
+    });
+  }, [activeTeamDbSheets, analysisCompetitionYear]);
 
-      if (analysisPeriod === "all") return true;
-      if (analysisPeriod === "veld_najaar") return /veld\s*najaar/i.test(seasonName);
-      if (analysisPeriod === "zaal") return /zaal/i.test(seasonName);
-      return /veld\s*voorjaar/i.test(seasonName);
+  const analysisOpponentOptions = useMemo(() => Array.from(new Set((analysisBaseMatches ?? [])
+    .map((match:any)=>safeDisplayText(match.tegenstander ?? match.wedstrijd_naam, "").trim())
+    .filter(Boolean))).sort((a,b)=>a.localeCompare(b,"nl-NL")), [analysisBaseMatches]);
+  const analysisMatchTypeOptions = useMemo(() => Array.from(new Set((analysisBaseMatches ?? [])
+    .map((match:any)=>safeDisplayText(match.wedstrijdtype, "Competitie").trim())
+    .filter(Boolean))).sort((a,b)=>a.localeCompare(b,"nl-NL")), [analysisBaseMatches]);
+
+  useEffect(()=>{
+    if (analysisOpponentFilter && !analysisOpponentOptions.includes(analysisOpponentFilter)) setAnalysisOpponentFilter("");
+    if (analysisMatchTypeFilter && !analysisMatchTypeOptions.includes(analysisMatchTypeFilter)) setAnalysisMatchTypeFilter("");
+  },[analysisOpponentOptions,analysisMatchTypeOptions,analysisOpponentFilter,analysisMatchTypeFilter]);
+
+  const analysisDbSheets = useMemo<DatabaseSheetsData | null>(() => {
+    if (!activeTeamDbSheets || !analysisBaseMatches) return null;
+    const matches = analysisBaseMatches.filter((match:any)=>{
+      const opponent=safeDisplayText(match.tegenstander??match.wedstrijd_naam,"").trim();
+      const matchType=safeDisplayText(match.wedstrijdtype,"Competitie").trim();
+      return (!analysisOpponentFilter||opponent===analysisOpponentFilter)&&(!analysisMatchTypeFilter||matchType===analysisMatchTypeFilter);
     });
 
     const matchIds = new Set(
@@ -2765,7 +2778,7 @@ const [stealPopup, setStealPopup] = useState<null | {}>(null);
       wissels: (activeTeamDbSheets.wissels ?? []).filter(belongsToSelectedMatches),
       vakperiodes: (activeTeamDbSheets.vakperiodes ?? []).filter(belongsToSelectedMatches),
     };
-  }, [activeTeamDbSheets, analysisCompetitionYear, analysisPeriod]);
+  }, [activeTeamDbSheets, analysisBaseMatches, analysisOpponentFilter, analysisMatchTypeFilter]);
 
   const analysisTabs: Array<typeof tab> = ["dashboard"];
 
@@ -4245,8 +4258,6 @@ const spelersVerdediging = state.verdediging.map((id) => (id ? spelersMap.get(id
 const databaseMatches = dbSheets?.matches ?? [];
 const latestShareableDatabaseMatch = (activeTeamDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.supabase_match_id)&&!Boolean(m.gearchiveerd)&&String(m.wedstrijd_afgesloten??"").toLowerCase()==="ja").slice().sort((a:any,b:any)=>String(b.datum??"").localeCompare(String(a.datum??"")))[0] ?? null;
 const savedReportDatabaseMatch = (activeTeamDbSheets?.matches ?? []).find((m:any)=>String(m.wedstrijd_id??"")===String(state.matchLegacyId??"")) ?? latestShareableDatabaseMatch;
-const archivedHistoryCount = (activeTeamHistoryDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.gearchiveerd)).length;
-const activeSupabaseHistoryCount = (activeTeamDbSheets?.matches ?? []).filter((m:any)=>Boolean(m.supabase_match_id)).length;
 const historySourceLabel = !databaseReady || supabaseHistoryStatus === "loading"
   ? "● Supabase-historie laden…"
   : supabaseHistoryStatus === "ready"
@@ -4301,7 +4312,8 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
 
   const openOpponentAnalysis = (opponentName: string) => {
     setRequestedAnalysisMatchId(null);
-    setRequestedAnalysisOpponent(opponentName.trim() || null);
+    setRequestedAnalysisOpponent(null);
+    setAnalysisOpponentFilter(opponentName.trim());
     setTab("dashboard");
     setMobileMenuOpen(false);
   };
@@ -4694,41 +4706,16 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
       {(teamRosterLoading || teamRosterError) && <div className={`mb-4 rounded-xl border px-3 py-2 text-xs font-semibold ${teamRosterError?"border-red-200 bg-red-50 text-red-700":"border-blue-100 bg-blue-50 text-blue-700"}`}>{teamRosterError?`Teamselectie kon niet uit Supabase worden geladen: ${teamRosterError}`:"Teamselectie uit Supabase laden…"}</div>}
       {supabaseHistoryStatus === "error" && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"><span>{supabaseHistoryMessage} De lokaal bewaarde historie blijft beschikbaar.</span><button type="button" onClick={()=>setHistoryRefreshVersion(version=>version+1)} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold">Opnieuw proberen</button></div>}
       {analysisTabs.includes(tab) && (
-        <div className="mb-5 rounded-2xl border border-blue-100 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="text-[10px] font-extrabold uppercase tracking-[.14em] text-blue-700">Statistiekfilters</div>
-              <div className="mt-0.5 text-sm font-black text-slate-900">{activeTeamContext?.teamName ?? "Actief team"}</div>
-              <div className="mt-1 text-xs text-slate-500">Alle wedstrijden van het gekozen team binnen het competitiejaar en de geselecteerde periode worden meegenomen.</div>
-              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-extrabold uppercase tracking-wide">
-                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">Supabase actief: {activeSupabaseHistoryCount}</span>
-                {archivedHistoryCount>0&&<span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">Gearchiveerd: {archivedHistoryCount}</span>}
-                <span className={`rounded-full px-2.5 py-1 ${localOnlyHistoryCount ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500"}`}>Alleen lokaal: {localOnlyHistoryCount}</span>
-              </div>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[520px]">
-              <label className="text-xs font-bold text-slate-600">Competitiejaar
-                <select value={analysisCompetitionYear} onChange={e=>setAnalysisCompetitionYear(e.target.value)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-800">
-                  {analysisCompetitionYears.length ? analysisCompetitionYears.map(year=><option key={year} value={year}>{year}</option>) : <option value="">Geen competitiejaar</option>}
-                </select>
-              </label>
-              <label className="text-xs font-bold text-slate-600">Periode
-                <select value={analysisPeriod} onChange={e=>setAnalysisPeriod(e.target.value as AnalysisPeriodFilter)} className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-800">
-                  <option value="all">Hele competitiejaar</option>
-                  <option value="veld_najaar">Veld najaar</option>
-                  <option value="zaal">Zaal</option>
-                  <option value="veld_voorjaar">Veld voorjaar</option>
-                </select>
-              </label>
-            </div>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span className="rounded-full bg-blue-50 px-2.5 py-1 font-bold text-blue-700">{analysisDbSheets?.matches.length ?? 0} competitiewedstrijd{(analysisDbSheets?.matches.length ?? 0)===1?"":"en"}</span>
-            <span>{analysisCompetitionYear || "—"} · {analysisPeriod==="all"?"hele competitiejaar":analysisPeriod==="veld_najaar"?"veld najaar":analysisPeriod==="zaal"?"zaal":"veld voorjaar"}</span>
+        <div className="mb-5 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm backdrop-blur">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(150px,.55fr)_repeat(3,minmax(170px,1fr))] xl:items-end">
+            <div className="px-1 py-1"><div className="text-xl font-black text-slate-950">Statistieken</div><div className="text-xs text-slate-400">{activeTeamContext?.teamName ?? "Actief team"}</div></div>
+            <label className="text-[11px] font-bold text-slate-500">Competitiejaar<select value={analysisCompetitionYear} onChange={e=>setAnalysisCompetitionYear(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100">{analysisCompetitionYears.length ? analysisCompetitionYears.map(year=><option key={year} value={year}>{year}</option>) : <option value="">Alle jaren</option>}</select></label>
+            <label className="text-[11px] font-bold text-slate-500">Tegenstander<select value={analysisOpponentFilter} onChange={e=>setAnalysisOpponentFilter(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"><option value="">Alle tegenstanders</option>{analysisOpponentOptions.map(opponent=><option key={opponent} value={opponent}>{opponent}</option>)}</select></label>
+            <label className="text-[11px] font-bold text-slate-500">Wedstrijdtype<select value={analysisMatchTypeFilter} onChange={e=>setAnalysisMatchTypeFilter(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"><option value="">Alle wedstrijdtypen</option>{analysisMatchTypeOptions.map(matchType=><option key={matchType} value={matchType}>{matchType}</option>)}</select></label>
           </div>
         </div>
       )}
-      {legacyUnlinkedMatchCount > 0 && ["dashboard","wedstrijdinzichten","spelersanalyse","teamanalyse","combinaties","opstelling","wisseladvies","doelen","voorbereiding"].includes(tab) && (
+      {legacyUnlinkedMatchCount > 0 && ["wedstrijdinzichten","spelersanalyse","teamanalyse","combinaties","opstelling","wisseladvies","doelen","voorbereiding"].includes(tab) && (
         <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <b>Oude wedstrijddata:</b> {legacyUnlinkedMatchCount} wedstrijd{legacyUnlinkedMatchCount === 1 ? "" : "en"} zonder teamkoppeling {legacyUnlinkedMatchCount === 1 ? "wordt" : "worden"} niet meegenomen in de analyse van <b>{activeTeamContext?.teamName ?? "het actieve team"}</b>. Deze data kunnen we later éénmalig aan het juiste team koppelen.
         </div>
@@ -4870,12 +4857,10 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
       )}
 
       {tab === "dashboard" && (
-        <StatisticsDashboard
+        <StatisticsWorkspace
           state={analysisState}
-          spelersMap={analysisSpelersMap}
           dbSheets={analysisDbSheets}
           initialMatchId={requestedAnalysisMatchId}
-          initialOpponent={requestedAnalysisOpponent}
           onInitialRequestHandled={()=>{setRequestedAnalysisMatchId(null);setRequestedAnalysisOpponent(null)}}
         />
       )}
@@ -8686,6 +8671,115 @@ function VakcombinatiesDashboard({ dbSheets, spelers = [] }: { dbSheets: Databas
   </div>;
 }
 
+type UnifiedChartSeries = { label:string; color:string; values:number[]; dashed?:boolean };
+type UnifiedChartBar = { label:string; color:string; values:number[] };
+type UnifiedStatBucket = { key:string; label:string; matchId?:string; match:any; events:any[]; attacks:any[] };
+
+function StatisticsWorkspace({state,dbSheets,initialMatchId=null,onInitialRequestHandled}:{state:AppState;dbSheets:DatabaseSheetsData|null;initialMatchId?:string|null;onInitialRequestHandled?:()=>void}) {
+  const matches=useMemo(()=>[...(dbSheets?.matches??[])].sort((a:any,b:any)=>String(a.datum??"").localeCompare(String(b.datum??""))),[dbSheets]);
+  const basePlayers=useMemo(()=>state.spelers.filter(player=>player.actief&&!isGuestPlayer(player)),[state.spelers]);
+  const [level,setLevel]=useState<"matches"|"match"|"players">("matches");
+  const [selectedMatchId,setSelectedMatchId]=useState<string|null>(null);
+  const [selectedPlayerIds,setSelectedPlayerIds]=useState<Set<string>>(()=>new Set(basePlayers.map(player=>player.id)));
+  const norm=(value:any)=>String(value??"").trim().toLocaleLowerCase("nl-NL");
+  const parseSeconds=(value:any)=>{const raw=String(value??"").trim();const parts=raw.split(":").map(Number);if(parts.length===2&&parts.every(Number.isFinite))return parts[0]*60+parts[1];const numeric=Number(value);return Number.isFinite(numeric)?numeric:0};
+  const eventSeconds=(row:any)=>parseSeconds(row.tijd_verstreken)||Math.max(0,Number(row.wedstrijd_minuut??0)*60);
+  const attackSeconds=(row:any)=>parseSeconds(row.aanval_start??row.starttijd??row.startSeconden??row.tijd_verstreken);
+  const attempt=(row:any)=>["schot","doorloop","vrijebal","vrije bal","strafworp"].includes(norm(row.actie));
+  const playerFor=(row:any)=>{const id=String(row.spelerId??row.speler_id??"").trim();const name=norm(row.spelerNaam??row.speler_naam);return basePlayers.find(player=>player.id===id||norm(player.naam)===name)};
+  const belongsToPlayer=(row:any,player:Player)=>String(row.spelerId??row.speler_id??"").trim()===player.id||norm(row.spelerNaam??row.speler_naam)===norm(player.naam);
+  const isOwn=(row:any,match:any)=>{const team=norm(row.team);const teamName=norm(match?.team_naam);return ["korbis","thuis",teamName].filter(Boolean).includes(team)};
+
+  useEffect(()=>{
+    if(initialMatchId&&matches.some((match:any)=>String(match.wedstrijd_id??"")===initialMatchId)){setSelectedMatchId(initialMatchId);setLevel("match");onInitialRequestHandled?.()}
+  },[initialMatchId,matches]);
+  useEffect(()=>setSelectedPlayerIds(current=>{const valid=new Set(Array.from(current).filter(id=>basePlayers.some(player=>player.id===id)));return valid.size||!basePlayers.length?valid:new Set(basePlayers.map(player=>player.id))}),[basePlayers]);
+
+  const openMatch=(matchId:string)=>{setSelectedMatchId(matchId);setLevel("match");window.scrollTo({top:0,behavior:"smooth"})};
+  const selectedMatch=matches.find((match:any)=>String(match.wedstrijd_id??"")===selectedMatchId)??null;
+  const allBuckets=useMemo<UnifiedStatBucket[]>(()=>matches.map((match:any)=>{const matchId=String(match.wedstrijd_id??"");return{key:matchId,label:formatImportedDate(match.datum),matchId,match,events:(dbSheets?.events??[]).filter((row:any)=>String(row.wedstrijd_id??"")===matchId),attacks:(dbSheets?.attacks??[]).filter((row:any)=>String(row.wedstrijd_id??"")===matchId)}}),[matches,dbSheets]);
+  const matchBuckets=useMemo<UnifiedStatBucket[]>(()=>{
+    if(!selectedMatch)return[];
+    const matchId=String(selectedMatch.wedstrijd_id??"");
+    const events=(dbSheets?.events??[]).filter((row:any)=>String(row.wedstrijd_id??"")===matchId);
+    const attacks=(dbSheets?.attacks??[]).filter((row:any)=>String(row.wedstrijd_id??"")===matchId);
+    const maximum=Math.max(2400,...events.map(eventSeconds),...attacks.map(attackSeconds));
+    return Array.from({length:Math.max(8,Math.ceil(maximum/300))},(_,index)=>({key:`${matchId}-${index}`,label:`${index*5}–${index*5+5}'`,match:selectedMatch,events:events.filter((row:any)=>Math.floor(eventSeconds(row)/300)===index),attacks:attacks.filter((row:any)=>Math.floor(attackSeconds(row)/300)===index)}));
+  },[selectedMatch,dbSheets]);
+  const buckets=level==="match"?matchBuckets:allBuckets;
+
+  const summarize=(bucket:UnifiedStatBucket)=>{
+    const ownAttempts=bucket.events.filter(row=>isOwn(row,bucket.match)&&attempt(row));
+    const opponentAttempts=bucket.events.filter(row=>!isOwn(row,bucket.match)&&attempt(row));
+    const result=(row:any)=>norm(row.uitkomst??row.resultaat);
+    const wholeMatch=level!=="match";
+    const scoreFor=Number(bucket.match?.score_korbis??0)||0,scoreAgainst=Number(bucket.match?.score_tegenstander??0)||0;
+    const recordedGoals=ownAttempts.filter(row=>result(row)==="raak").length,recordedGoalsAgainst=opponentAttempts.filter(row=>result(row)==="raak").length;
+    const goals=wholeMatch?Math.max(recordedGoals,scoreFor):recordedGoals;
+    const goalsAgainst=wholeMatch?Math.max(recordedGoalsAgainst,scoreAgainst):recordedGoalsAgainst;
+    const chances=wholeMatch?Math.max(ownAttempts.length,goals):ownAttempts.length;
+    const chancesAgainst=wholeMatch?Math.max(opponentAttempts.length,goalsAgainst):opponentAttempts.length;
+    const genderCount=(rows:any[],gender:Geslacht)=>rows.filter(row=>playerFor(row)?.geslacht===gender).length;
+    const weight=(row:any)=>{const duration=parseSeconds(row.aanval_duur??row.duur);if(duration>0)return duration;const start=parseSeconds(row.aanval_start??row.starttijd??row.startSeconden);const end=parseSeconds(row.aanval_einde??row.eindtijd??row.endSeconden);return end>start?end-start:1};
+    const ownPossession=bucket.attacks.filter(row=>isOwn(row,bucket.match)).reduce((sum,row)=>sum+weight(row),0);
+    const opponentPossession=bucket.attacks.filter(row=>!isOwn(row,bucket.match)).reduce((sum,row)=>sum+weight(row),0);
+    const possessionTotal=ownPossession+opponentPossession;
+    return {ownAttempts,opponentAttempts,chances,chancesAgainst,goals,goalsAgainst,
+      scorePct:chances?goals/chances*100:0,opponentScorePct:chancesAgainst?goalsAgainst/chancesAgainst*100:0,
+      directedPct:chances?Math.min(100,(goals+ownAttempts.filter(row=>result(row)==="korf").length)/chances*100):0,
+      shots:ownAttempts.filter(row=>norm(row.actie)==="schot").length,shotsAgainst:opponentAttempts.filter(row=>norm(row.actie)==="schot").length,
+      runs:ownAttempts.filter(row=>norm(row.actie)==="doorloop").length,runsAgainst:opponentAttempts.filter(row=>norm(row.actie)==="doorloop").length,
+      penalties:ownAttempts.filter(row=>norm(row.actie)==="strafworp").length,penaltiesAgainst:opponentAttempts.filter(row=>norm(row.actie)==="strafworp").length,
+      possessionPct:possessionTotal?ownPossession/possessionTotal*100:0,opponentPossessionPct:possessionTotal?opponentPossession/possessionTotal*100:0,
+      womenChances:genderCount(ownAttempts,"Dame"),menChances:genderCount(ownAttempts,"Heer"),
+      womenGoals:genderCount(ownAttempts.filter(row=>result(row)==="raak"),"Dame"),menGoals:genderCount(ownAttempts.filter(row=>result(row)==="raak"),"Heer"),
+      womenShots:genderCount(ownAttempts.filter(row=>norm(row.actie)==="schot"),"Dame"),menShots:genderCount(ownAttempts.filter(row=>norm(row.actie)==="schot"),"Heer")};
+  };
+  const teamRows=buckets.map(summarize);
+  const selectedPlayers=basePlayers.filter(player=>selectedPlayerIds.has(player.id));
+  const playerColors=["#1d4ed8","#2563eb","#3b82f6","#60a5fa","#1e40af","#0f4c81","#0284c7","#64748b","#475569","#0369a1"];
+  const playerValue=(bucket:UnifiedStatBucket,player:Player,metric:"chances"|"goals"|"score"|"directed"|"shots"|"runs"|"penalties")=>{const rows=bucket.events.filter(row=>isOwn(row,bucket.match)&&attempt(row)&&belongsToPlayer(row,player));const goals=rows.filter(row=>norm(row.uitkomst??row.resultaat)==="raak").length;if(metric==="chances")return rows.length;if(metric==="goals")return goals;if(metric==="score")return rows.length?goals/rows.length*100:0;if(metric==="directed")return rows.length?(goals+rows.filter(row=>norm(row.uitkomst??row.resultaat)==="korf").length)/rows.length*100:0;if(metric==="shots")return rows.filter(row=>norm(row.actie)==="schot").length;if(metric==="runs")return rows.filter(row=>norm(row.actie)==="doorloop").length;return rows.filter(row=>norm(row.actie)==="strafworp").length};
+  const playerSeries=(metric:"chances"|"goals"|"score"|"directed"|"shots"|"runs"|"penalties"):UnifiedChartSeries[]=>selectedPlayers.map((player,index)=>({label:player.naam,color:playerColors[index%playerColors.length],values:buckets.map(bucket=>playerValue(bucket,player,metric))}));
+  const teamSeries=(ownKey:keyof ReturnType<typeof summarize>,opponentKey?:keyof ReturnType<typeof summarize>):UnifiedChartSeries[]=>[{label:"Korbis",color:"#2563eb",values:teamRows.map(row=>Number(row[ownKey])||0)},...(opponentKey?[{label:"Tegenstander",color:"#64748b",values:teamRows.map(row=>Number(row[opponentKey])||0),dashed:true}]:[])];
+  const genderBars=(womenKey:keyof ReturnType<typeof summarize>,menKey:keyof ReturnType<typeof summarize>):UnifiedChartBar[]=>[{label:"Dames Korbis",color:"#bfdbfe",values:teamRows.map(row=>Number(row[womenKey])||0)},{label:"Heren Korbis",color:"#93c5fd",values:teamRows.map(row=>Number(row[menKey])||0)}];
+  const isPlayers=level==="players";
+  const charts:Array<{title:string;subtitle?:string;percentage?:boolean;lines:UnifiedChartSeries[];bars?:UnifiedChartBar[]}>= [
+    {title:"Kansen Korbis en tegenstander",lines:isPlayers?playerSeries("chances"):teamSeries("chances","chancesAgainst"),bars:isPlayers?undefined:genderBars("womenChances","menChances")},
+    {title:"Doelpunten Korbis en tegenstander",lines:isPlayers?playerSeries("goals"):teamSeries("goals","goalsAgainst"),bars:isPlayers?undefined:genderBars("womenGoals","menGoals")},
+    {title:"Percentage kansen raak",percentage:true,lines:isPlayers?playerSeries("score"):teamSeries("scorePct","opponentScorePct"),bars:isPlayers?undefined:genderBars("womenChances","menChances")},
+    {title:"Percentage korf geraakt van kansen",percentage:true,lines:isPlayers?playerSeries("directed"):teamSeries("directedPct")},
+    {title:"Schoten Korbis en tegenstander",lines:isPlayers?playerSeries("shots"):teamSeries("shots","shotsAgainst"),bars:isPlayers?undefined:genderBars("womenShots","menShots")},
+    {title:"Doorloopballen Korbis en tegenstander",lines:isPlayers?playerSeries("runs"):teamSeries("runs","runsAgainst")},
+    {title:"Balbezit Korbis en tegenstander",subtitle:isPlayers?"Balbezit is teamdata en kan niet betrouwbaar aan één speler worden toegewezen.":undefined,percentage:true,lines:teamSeries("possessionPct","opponentPossessionPct")},
+    {title:"Strafworpen Korbis en tegenstander",lines:isPlayers?playerSeries("penalties"):teamSeries("penalties","penaltiesAgainst")},
+  ];
+  const togglePlayer=(id:string)=>setSelectedPlayerIds(current=>{const next=new Set(current);if(next.has(id))next.delete(id);else next.add(id);return next});
+
+  if(!dbSheets)return <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">Nog geen wedstrijdgegevens beschikbaar.</div>;
+  return <div className="space-y-4">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex rounded-xl bg-slate-100 p-1"><button type="button" onClick={()=>{setLevel("matches");setSelectedMatchId(null)}} className={`rounded-lg px-3 py-2 text-sm font-bold ${level==="matches"?"bg-white text-blue-700 shadow-sm":"text-slate-500"}`}>Alle wedstrijden</button><button type="button" onClick={()=>{setLevel("players");setSelectedMatchId(null)}} className={`rounded-lg px-3 py-2 text-sm font-bold ${level==="players"?"bg-white text-blue-700 shadow-sm":"text-slate-500"}`}>Spelers</button></div>
+      {level==="match"&&selectedMatch&&<div className="flex items-center gap-2 text-sm"><button type="button" onClick={()=>{setLevel("matches");setSelectedMatchId(null)}} className="font-bold text-blue-700">Alle wedstrijden</button><span className="text-slate-300">›</span><span className="font-black text-slate-800">{formatImportedDate(selectedMatch.datum)} · {safeDisplayText(selectedMatch.tegenstander??selectedMatch.wedstrijd_naam,"Onbekend")}</span></div>}
+    </div>
+    {level==="players"&&<div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center gap-2"><span className="mr-1 text-xs font-bold text-slate-500">Vergelijk spelers:</span>{basePlayers.map(player=><button type="button" key={player.id} onClick={()=>togglePlayer(player.id)} className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${selectedPlayerIds.has(player.id)?"border-blue-300 bg-blue-50 text-blue-700":"border-slate-200 bg-white text-slate-400"}`}>{player.naam}</button>)}<button type="button" onClick={()=>setSelectedPlayerIds(new Set(basePlayers.map(player=>player.id)))} className="ml-auto text-xs font-bold text-blue-700">Alles</button><button type="button" onClick={()=>setSelectedPlayerIds(new Set<string>())} className="text-xs font-bold text-slate-500">Geen</button></div></div>}
+    {!buckets.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Geen wedstrijden binnen de gekozen filters.</div>:isPlayers&&!selectedPlayers.length?<div className="rounded-2xl border bg-white p-8 text-center text-sm text-slate-500">Selecteer één of meer spelers om de grafieken te vullen.</div>:<div className="grid gap-4 2xl:grid-cols-2">{charts.map(chart=><UnifiedStatisticsChart key={chart.title} title={chart.title} subtitle={chart.subtitle} labels={buckets.map(bucket=>bucket.label)} matchIds={buckets.map(bucket=>bucket.matchId)} lines={chart.lines} bars={chart.bars} percentage={chart.percentage} onOpenMatch={level==="matches"?openMatch:undefined}/>)}</div>}
+  </div>;
+}
+
+function UnifiedStatisticsChart({title,subtitle,labels,matchIds,lines,bars=[],percentage=false,onOpenMatch}:{title:string;subtitle?:string;labels:string[];matchIds:Array<string|undefined>;lines:UnifiedChartSeries[];bars?:UnifiedChartBar[];percentage?:boolean;onOpenMatch?:(matchId:string)=>void}) {
+  const [hoverIndex,setHoverIndex]=useState<number|null>(null);
+  const width=Math.max(760,labels.length*82),height=300,left=42,right=18,top=18,bottom=52,plotWidth=width-left-right,plotHeight=height-top-bottom;
+  const allLineValues=lines.flatMap(series=>series.values),allBarValues=bars.flatMap(series=>series.values);
+  const lineMax=percentage?100:Math.max(1,...allLineValues,...allBarValues),barMax=Math.max(1,...allBarValues);
+  const x=(index:number)=>labels.length<=1?left+plotWidth/2:left+index/(labels.length-1)*plotWidth;
+  const lineY=(value:number)=>top+(1-Math.max(0,Math.min(lineMax,value))/lineMax)*plotHeight;
+  const barHeight=(value:number)=>value/barMax*plotHeight*.72;
+  const path=(values:number[])=>values.map((value,index)=>`${index?"L":"M"} ${x(index).toFixed(1)} ${lineY(value).toFixed(1)}`).join(" ");
+  const labelStep=Math.max(1,Math.ceil(labels.length/7));
+  const hoverText=hoverIndex===null?"Beweeg over een meetpunt voor details.":lines.map(series=>`${series.label}: ${(series.values[hoverIndex]??0).toFixed(percentage?1:0)}${percentage?"%":""}`).join(" · ");
+  return <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="min-h-12"><h3 className="font-black text-slate-900">{title}</h3><p className="mt-0.5 text-xs text-slate-400">{subtitle??hoverText}</p></div><div className="mt-2 overflow-x-auto"><svg viewBox={`0 0 ${width} ${height}`} className="h-[300px] min-w-[760px] w-full" role="img" aria-label={title}>{[0,.25,.5,.75,1].map(part=>{const value=lineMax*(1-part),y=top+plotHeight*part;return <g key={part}><line x1={left} x2={width-right} y1={y} y2={y} stroke="#e2e8f0"/><text x={left-7} y={y+4} textAnchor="end" fontSize="10" fill="#94a3b8">{percentage?`${value.toFixed(0)}%`:value.toFixed(lineMax<10?1:0)}</text></g>})}{bars.flatMap((series,seriesIndex)=>series.values.map((value,index)=>{const groupWidth=Math.min(34,plotWidth/Math.max(1,labels.length)*.55),single=groupWidth/Math.max(1,bars.length),h=barHeight(value),barX=x(index)-groupWidth/2+seriesIndex*single;return <rect key={`${series.label}-${index}`} x={barX} y={top+plotHeight-h} width={Math.max(2,single-1)} height={h} rx="2" fill={series.color} opacity=".72"><title>{`${labels[index]} · ${series.label}: ${value}`}</title></rect>}))}{lines.map(series=><path key={series.label} d={path(series.values)} fill="none" stroke={series.color} strokeWidth="2.5" strokeDasharray={series.dashed?"7 5":undefined} strokeLinecap="round" strokeLinejoin="round"/>)}{lines.flatMap(series=>series.values.map((value,index)=><g key={`${series.label}-${index}`} className={matchIds[index]&&onOpenMatch?"cursor-pointer":""} onMouseEnter={()=>setHoverIndex(index)} onMouseLeave={()=>setHoverIndex(null)} onClick={()=>{const id=matchIds[index];if(id&&onOpenMatch)onOpenMatch(id)}}><circle cx={x(index)} cy={lineY(value)} r="8" fill="transparent"/><circle cx={x(index)} cy={lineY(value)} r="4" fill="white" stroke={series.color} strokeWidth="2.5"/><title>{`${labels[index]} · ${series.label}: ${value.toFixed(percentage?1:0)}${percentage?"%":""}`}</title></g>))}{labels.map((label,index)=>index%labelStep===0||index===labels.length-1?<text key={`${label}-${index}`} x={x(index)} y={height-22} textAnchor="middle" fontSize="10" fill="#64748b">{String(label).slice(0,14)}</text>:null)}</svg></div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">{lines.map(series=><span key={series.label} className="flex items-center gap-1.5"><span className="h-0.5 w-4" style={{backgroundColor:series.color}}/>{series.label}</span>)}{bars.map(series=><span key={series.label} className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{backgroundColor:series.color}}/>{series.label}</span>)}</div></section>;
+}
+
 type StatisticsDashboardView =
   | { kind: "overview" }
   | { kind: "match"; matchId: string }
@@ -8694,7 +8788,7 @@ type StatisticsDashboardView =
 
 type StatisticsTrendMetric = "goals" | "chances" | "efficiency";
 
-function StatisticsDashboard({
+export function StatisticsDashboard({
   state,
   spelersMap,
   dbSheets,
