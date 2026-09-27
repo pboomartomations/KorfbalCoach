@@ -4863,7 +4863,7 @@ const verifiedPortalPlayer = portalPlayerFromSupabase?.id === authProfile?.spele
           opponentName={state.opponentName}
           onEndMatch={eindeWedstrijd}
           onOpenSettings={() => setTab("vakken")}
-          onCancelMatch={() => clearWedstrijd("Wedstrijd annuleren? Alle gegevens van de huidige wedstrijd worden verwijderd en NIET aan de seizoensdatabase toegevoegd. Deze actie kan niet ongedaan worden gemaakt.")}
+          onCancelMatch={() => clearWedstrijd(undefined, false)}
         />
       )}
 
@@ -7057,6 +7057,7 @@ function WedstrijdTab({
 
 
   const [scoreEditorOpen, setScoreEditorOpen] = useState(false);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [draftScoreThuis, setDraftScoreThuis] = useState(state.scoreThuis);
   const [draftScoreUit, setDraftScoreUit] = useState(state.scoreUit);
   const matchActionsRef = useRef<HTMLDetailsElement>(null);
@@ -7716,7 +7717,7 @@ const attackUitPct =
                   Naar 2e helft
                 </button>
                 <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); onEndMatch(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-red-700 hover:bg-red-50">Einde wedstrijd</button>
-                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); onCancelMatch(); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-600 hover:bg-slate-50">Wedstrijd annuleren</button>
+                <button type="button" onClick={() => { matchActionsRef.current?.removeAttribute("open"); setCancelConfirmOpen(true); }} className="w-full rounded-lg px-3 py-2.5 text-left font-bold text-slate-600 hover:bg-slate-50">Wedstrijd annuleren</button>
               </div>
             </details>
           </div>
@@ -7743,6 +7744,35 @@ const attackUitPct =
         </div>
       )}
 
+      {cancelConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[250] flex items-center justify-center overflow-y-auto overscroll-contain bg-slate-950/65 p-3 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cancel-match-title"
+          data-no-pause
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCancelConfirmOpen(false);
+          }}
+        >
+          <div className="my-auto w-full max-w-md rounded-3xl border border-white/70 bg-white p-5 shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs font-black uppercase tracking-[0.16em] text-red-600">Let op</div>
+                <h2 id="cancel-match-title" className="mt-1 text-xl font-black text-slate-950">Wedstrijd annuleren?</h2>
+              </div>
+              <button type="button" onClick={() => setCancelConfirmOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl font-bold text-slate-500" aria-label="Sluiten">×</button>
+            </div>
+            <p className="mt-4 text-sm leading-6 text-slate-600">Alle gegevens van de huidige wedstrijd worden verwijderd en niet aan de seizoensdatabase toegevoegd.</p>
+            <p className="mt-2 text-sm font-bold text-red-700">Deze actie kan niet ongedaan worden gemaakt.</p>
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <button type="button" onClick={() => setCancelConfirmOpen(false)} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50">Terug</button>
+              <button type="button" onClick={() => { setCancelConfirmOpen(false); onCancelMatch(); }} className="rounded-xl bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700">Wedstrijd annuleren</button>
+            </div>
+          </div>
+        </div>
+      )}
+
           {/* Alles hieronder wordt grijs + niet klikbaar zolang wedstrijdNietGestart */}
           <div
             className={
@@ -7755,6 +7785,16 @@ const attackUitPct =
             <div className="relative mt-4" data-no-pause>
               <div className="mb-4">
                 {/* Liggend: beide velden. Staand: alleen het actieve veld. */}
+                {isPortrait && (
+                  <button
+                    type="button"
+                    onClick={() => setState((s) => startAttackForVak(s, s.activeVak === "aanvallend" ? "verdedigend" : "aanvallend"))}
+                    className="mb-3 flex w-full items-center justify-center gap-3 rounded-2xl border-2 border-blue-200 bg-blue-600 px-4 py-3 text-base font-extrabold text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.99]"
+                  >
+                    <span className="text-xl" aria-hidden="true">⇄</span>
+                    <span>{state.activeVak === "aanvallend" ? "Wissel naar verdediging" : "Wissel naar aanval"}</span>
+                  </button>
+                )}
                 <div className={`relative grid min-w-0 gap-3 xl:gap-5 ${isPortrait ? "grid-cols-1" : "grid-cols-2"}`}>
                 {state.aanvalLinks ? (
                   <>
@@ -7842,17 +7882,6 @@ const attackUitPct =
                     ⇄
                   </button>
                 </div>
-
-                {isPortrait && (
-                  <button
-                    type="button"
-                    onClick={() => setState((s) => startAttackForVak(s, s.activeVak === "aanvallend" ? "verdedigend" : "aanvallend"))}
-                    className="mt-3 flex w-full items-center justify-center gap-3 rounded-2xl border-2 border-blue-200 bg-blue-600 px-4 py-3 text-base font-extrabold text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.99]"
-                  >
-                    <span className="text-xl" aria-hidden="true">⇄</span>
-                    <span>{state.activeVak === "aanvallend" ? "Maak verdediging actief" : "Maak aanval actief"}</span>
-                  </button>
-                )}
 
               </div>
 
