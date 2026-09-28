@@ -14125,6 +14125,7 @@ function HitMissBarChart({
             </div>
           );
         })}
+        
       </div>
     </div>
   );
